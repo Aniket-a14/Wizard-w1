@@ -5,14 +5,16 @@ from .pandas_operations import PANDAS_EXAMPLES
 from .numpy_operations import NUMPY_EXAMPLES
 from .matplotlib_operations import MATPLOTLIB_EXAMPLES
 from .seaborn_operations import SEABORN_EXAMPLES
+from .seaborn_operations import SEABORN_EXAMPLES
 from .advanced_analytics import ADVANCED_EXAMPLES
+from .multi_step_operations import MULTI_STEP_EXAMPLES
 
 @lru_cache(maxsize=None)
 def get_examples():
     """Get all examples including learned ones (cached)"""
     return (BASIC_EXAMPLES + STATISTICAL_EXAMPLES + PANDAS_EXAMPLES + 
             NUMPY_EXAMPLES + MATPLOTLIB_EXAMPLES + SEABORN_EXAMPLES + 
-            ADVANCED_EXAMPLES)
+            ADVANCED_EXAMPLES + MULTI_STEP_EXAMPLES)
 
 def create_prompt(instruction: str, columns: list) -> str:
     """Creates a prompt combining examples and current instruction"""
@@ -52,6 +54,9 @@ Here are some example tasks and their code:
 {format_examples([ex for ex in examples if any(op in ex['task'].lower() for op in 
     ['correlation', 'regression', 'predict', 'analyze'])])}
 
+# Multi-Step Operations
+{format_examples(MULTI_STEP_EXAMPLES)}
+
 # Learned from Experience
 {format_examples(successful_examples)}
 
@@ -60,7 +65,11 @@ Now generate ONLY the code for this task: {instruction}
     return prompt
 
 def format_examples(examples):
-    return '\n'.join(f"Task: {ex['task']}\nCode: {ex['code']}\n" for ex in examples) 
+    return '\n'.join(f"Task: {ex['task']}\nCode: {ex['code']}\n" for ex in examples)
+
+def create_simple_prompt(instruction: str, columns: list) -> str:
+    """Creates a simple prompt for smaller models"""
+    return f"Instruction: {instruction}\nCode:" 
 
 
 #this code is for the prompt to be used in the agent

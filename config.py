@@ -1,7 +1,10 @@
 from pathlib import Path
 
 # Model configuration
-MODEL_NAME = "deepseek-r1"
+# Model configuration
+MODEL_TYPE = "hybrid"  # Options: "ollama", "local", "hybrid"
+MODEL_NAME = "deepseek-r1" # Used if MODEL_TYPE is "ollama" or "hybrid" (complex)
+MODEL_PATH = "./fine_tuned_model" # Used if MODEL_TYPE is "local" or "hybrid" (simple)
 TEMPERATURE = 0.7
 MAX_TOKENS = 2000
 

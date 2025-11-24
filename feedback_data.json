@@ -73,6 +73,14 @@
     {
       "task": "give sum of first 10 rows of the column total_bill",
       "code": "df['total_bill'].iloc[:10].sum()"
+    },
+    {
+      "task": "show first 5 rows",
+      "code": "print(df.head(5))"
+    },
+    {
+      "task": "show first 5 rows and describe the dataset",
+      "code": "print(df.head(5))\nprint(\"\\nDataset Summary:\")\nprint(df.info())"
     }
   ],
   "failed_examples": [
