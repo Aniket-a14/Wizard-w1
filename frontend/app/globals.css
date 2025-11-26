@@ -31,3 +31,7 @@ body {
   font-family: 'Inter', sans-serif;
   min-height: 100vh;
 }
+
+::-webkit-scrollbar{
+  display: none;
+}
