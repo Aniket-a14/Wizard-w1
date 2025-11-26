@@ -33,7 +33,7 @@ def main():
                 continue
             
             print("\nProcessing your request...")
-            result, code = interpret_and_execute(instruction, df)
+            result, code, image = interpret_and_execute(instruction, df)
             print("\nResult:", result)
             
             while True:

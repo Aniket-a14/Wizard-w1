@@ -12,6 +12,8 @@ from config import MODEL_NAME, MODEL_TYPE, MODEL_PATH
 from prompts import create_prompt, create_simple_prompt
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM 
 import ast 
+import io
+import base64
 
 if MODEL_TYPE == 'ollama':
     llm = ChatOllama(model=MODEL_NAME)
@@ -72,7 +74,7 @@ def is_complex_task(instruction: str) -> bool:
         
     return False
 
-def interpret_and_execute(instruction: str, df: pd.DataFrame) -> tuple[str, str]:
+def interpret_and_execute(instruction: str, df: pd.DataFrame) -> tuple[str, str, str | None]:
     """Uses deepseek-r1 or local model to generate code"""
     global local_generator, llm
     
@@ -129,7 +131,7 @@ def interpret_and_execute(instruction: str, df: pd.DataFrame) -> tuple[str, str]
 
     return process_code(code, df, instruction)
 
-def process_code(code: str, df: pd.DataFrame, instruction: str = "") -> tuple[str, str]:
+def process_code(code: str, df: pd.DataFrame, instruction: str = "") -> tuple[str, str, str | None]:
     """Process and execute the generated code"""
     try:
         if instruction and instruction.lower().strip() in ['show full dataset', 'show all data', 'display full dataset', 'show data']:
@@ -137,7 +139,7 @@ def process_code(code: str, df: pd.DataFrame, instruction: str = "") -> tuple[st
             pd.set_option('display.max_columns', None)
             pd.set_option('display.width', None)
             pd.set_option('display.max_colwidth', None)
-            return df.to_string(), "df.to_string()"
+            return df.to_string(), "df.to_string()", None
         
         code_lines = []
         for line in code.split('\n'):
@@ -155,7 +157,7 @@ def process_code(code: str, df: pd.DataFrame, instruction: str = "") -> tuple[st
         code = '\n'.join(code_lines).strip()
         
         if not code:
-            return "No valid code generated.", ""
+            return "No valid code generated.", "", None
             
         # Fix column names and special characters
         for col in df.columns:
@@ -167,9 +169,9 @@ def process_code(code: str, df: pd.DataFrame, instruction: str = "") -> tuple[st
         return process_and_execute(code, df)
         
     except Exception as e:
-        return f"Error processing code: {str(e)}", code
+        return f"Error processing code: {str(e)}", code, None
 
-def process_and_execute(code: str, df: pd.DataFrame) -> tuple[str, str]:
+def process_and_execute(code: str, df: pd.DataFrame) -> tuple[str, str, str | None]:
     """Helper function to execute the processed code"""
     print("\n--- Generated Code ---")
     print(code)
@@ -196,22 +198,22 @@ def process_and_execute(code: str, df: pd.DataFrame) -> tuple[str, str]:
         
         if 'plt.' in code or 'sns.' in code:
             exec(code, exec_globals)
-            plt.show()
+            # Capture plot
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            image_base64 = base64.b64encode(buf.read()).decode('utf-8')
             plt.close()
-            return "Plot generated successfully.", code
-        if 'plt.' in code or 'sns.' in code:
-            exec(code, exec_globals)
-            plt.show()
-            plt.close()
-            return "Plot generated successfully.", code
+            return "Plot generated successfully.", code, image_base64
+            
         elif code.strip().startswith('print') and '\n' not in code.strip():
             # Only optimize single-line print statements
             print_content = code.strip()[6:-1]  
             if print_content == 'df':
-                return df.to_string(), code
+                return df.to_string(), code, None
             else:
                 result = eval(print_content, exec_globals)
-                return str(result), code
+                return str(result), code, None
         else:
             # For multi-line code or non-print statements, use exec
             # Capture stdout to return it
@@ -255,13 +257,13 @@ def process_and_execute(code: str, df: pd.DataFrame) -> tuple[str, str]:
                 sys.stdout = original_stdout
                 
             if not output:
-                return "Code executed successfully (no output).", code
+                return "Code executed successfully (no output).", code, None
                 
-            return output, code
+            return output, code, None
     except Exception as e:
         if 'plt.' in code:
             plt.close()
-        return f"Error executing code: {str(e)}", code
+        return f"Error executing code: {str(e)}", code, None
 
 def create_agent(df):
     """
