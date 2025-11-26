@@ -1,98 +1,101 @@
-# Wizard-w1
+# Wizard-w1 🧙‍♂️
 
-Wizard-w1 is a AI Data Analyst which is a Python-based project that leverages an AI agent to interpret natural language data analysis tasks and execute them on a CSV dataset. The project uses LangChain alongside Ollama’s ChatOllama interface (with the deepseek‑r1 model by default) to dynamically generate and run Python code for data analysis. User feedback is collected to help improve the system over time.
+**Wizard-w1** is an advanced AI Data Analyst that empowers you to unlock insights from your data using plain English. It combines a powerful **FastAPI** backend powered by **Ollama (DeepSeek-R1)** with a premium **Next.js** frontend to create a seamless, interactive data analysis experience.
 
-## Features
+## ✨ Features
 
-- **Natural Language Interface:** Describe your data analysis tasks in plain English.
-- **Dynamic Code Generation:** Converts user instructions into executable Python code.
-- **Integrated Execution:** Runs generated code on your dataset and displays results (including visualizations).
-- **Feedback Loop:** Collects feedback on the generated code to store examples of successes and failures.
-- **Modular Structure:** Separate modules for dataset loading, code generation, execution, and feedback management.
+-   **Natural Language Interface**: Ask questions about your data in plain English (e.g., "Show me the correlation between tip and total_bill").
+-   **Dynamic Visualizations**: Automatically generates and displays interactive plots (Matplotlib/Seaborn) directly in the chat.
+-   **Premium UI**: A modern, dark-themed interface with glassmorphism effects, smooth animations, and a responsive design.
+-   **Hybrid Intelligence**: Uses a hybrid approach with local LLMs (DeepSeek-R1 via Ollama) for privacy and cost-efficiency.
+-   **Dual Modes**:
+    -   **Web App**: Full-featured React/Next.js interface.
+    -   **CLI**: Robust command-line interface for quick tasks.
 
-## Repository Structure
+## 🏗 Tech Stack
 
-Below is a breakdown of the repository's structure:
+### Frontend
+-   **Framework**: Next.js 15 (React 19)
+-   **Styling**: Tailwind CSS v4, Lucide React
+-   **Features**: Glassmorphism, Custom Animations, Responsive Layout
+
+### Backend
+-   **Framework**: FastAPI
+-   **AI Engine**: LangChain + Ollama (DeepSeek-R1)
+-   **Data Processing**: Pandas, NumPy
+-   **Visualization**: Matplotlib, Seaborn
+
+## 🚀 Getting Started
+
+### Prerequisites
+-   **Python 3.10+**
+-   **Node.js 18+**
+-   **Ollama**: Installed and running with the `deepseek-r1` model.
+
+### 1. Setup Ollama (AI Engine)
+Ensure Ollama is installed and the model is pulled:
+```bash
+ollama pull deepseek-r1
+```
+Start the Ollama server (if you have a low-VRAM GPU, force CPU mode):
+```powershell
+# Windows PowerShell
+$env:OLLAMA_NUM_GPU=0; ollama serve
+```
+
+### 2. Setup Backend
+Navigate to the backend directory and install dependencies:
+```bash
+cd backend
+pip install -r requirements.txt
+```
+Start the API server:
+```bash
+uvicorn api:app --reload --port 8000
+```
+*The backend will run at `http://localhost:8000`*
+
+### 3. Setup Frontend
+Navigate to the frontend directory and install dependencies:
+```bash
+cd frontend
+npm install
+```
+Start the development server:
+```bash
+npm run dev
+```
+*The frontend will run at `http://localhost:3000`*
+
+## 📖 Usage
+
+1.  Open **http://localhost:3000** in your browser.
+2.  Upload a CSV file (e.g., `backend/dataset/tips.csv`).
+3.  Start chatting! Try asking:
+    -   *"Show the first 5 rows"*
+    -   *"Plot a histogram of total_bill"*
+    -   *"What is the average tip by gender?"*
+
+## 📂 Project Structure
 
 ```plaintext
 Wizard-w1/
-├── __pycache__/                # Cached Python files
-├── dataset/                   # Folder containing sample or generated datasets
-├── prompts/                   # Contains prompt templates for the AI model
-├── .gitignore                 # Specifies intentionally untracked files to ignore
-├── agent.py                   # Implements the AI agent for code generation and execution
-├── config.py                  # Configuration file (default model settings)
-├── data_tools.py              # Utilities for loading and processing datasets
-├── dataset_generator.py       # Optional: Script for generating sample datasets
-├── feedback_data.json         # JSON file for storing user feedback
-├── feedback_store.py          # Manages feedback collection and storage
-├── main.py                    # Main execution loop for the application
-├── requirements.txt           # List of required Python dependencies
-├── test.py                    # Script for testing functionality
-└── train.py                   # Optional: Script for training or refining the agent using feedback
+├── backend/                 # FastAPI Server & AI Logic
+│   ├── agent.py            # AI Agent implementation
+│   ├── api.py              # FastAPI endpoints
+│   ├── main.py             # CLI entry point
+│   └── ...
+├── frontend/                # Next.js Web Application
+│   ├── app/                # App Router & Pages
+│   ├── components/         # UI Components (Chat, Upload)
+│   └── ...
+└── ...
 ```
 
-## Installation
+## 🤝 Contributing
 
-1. **Clone the repository:**
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-   ```bash
-   git clone https://github.com/Aniket-a14/Wizard-w1.git
-   cd Wizard-w1
-   ```
+## 📄 License
 
-2. **Install the required dependencies:**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Configuration:**
-
-   - Check the `config.py` file to ensure the correct model name is set. By default, it uses `"deepseek-r1"`. You can change this to any other supported model from Ollama if desired.
-
-## Usage
-
-1. **Run the main program:**
-
-   ```bash
-   python main.py
-   ```
-
-2. **Follow the prompts:**
-   - Enter the path to your CSV dataset when prompted.
-   - Review dataset details (shape, columns, etc.).
-   - Describe your data analysis task in plain English.
-   - The AI agent will generate Python code to perform the requested task.
-   - The generated code is executed, and the result (or plot) is displayed.
-   - Provide feedback on whether the output was correct. If not, you can optionally supply the correct code to improve future performance.
-
-## GitHub Actions CI Workflow
-This repository includes an **automated CI workflow** using **GitHub Actions**. The workflow is defined in `.github/workflows/python-ci.yml` and performs the following tasks:
-- Checks out the repository.
-- Sets up Python 3.9.
-- Installs dependencies from `requirements.txt`.
-- Runs linting with **Flake8**.
-- Runs tests using **PyTest**.
-
-To enable CI, ensure the file `.github/workflows/python-ci.yml` exists and push changes to `main`.
-
-## Contributing
-
-Contributions are welcome! If you have ideas for improvements or new features, please consider:
-- Reporting issues or suggesting enhancements via the repository’s Issues tab.
-- Submitting a pull request with your proposed changes.
-- Providing feedback through the integrated feedback mechanism to help train and refine the AI agent.
-
-
-## Acknowledgements
-
-- This project utilizes [LangChain](https://github.com/hwchase17/langchain) for building the AI agent.
-- The AI code generation is powered by Ollama’s ChatOllama interface.
-- Special thanks to the open-source community.
-
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
+This project is licensed under the MIT License.
