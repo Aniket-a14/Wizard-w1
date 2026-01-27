@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# VS Code
+.vscode/
+
+# Datasets (Large files)
+backend/dataset/*.csv
+instruction_code_dataset.csv
+
+# Models & Weights
+backend/fine_tuned_model/
+backend/results/
+*.pt
+*.safetensors
+*.bin
+
+# Node.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+.npm/
+
+# Logs
+*.log
+
+backend/dataset_generator.py
