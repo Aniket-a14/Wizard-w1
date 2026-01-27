@@ -1,101 +1,114 @@
-# Wizard-w1 🧙‍♂️
+# 🧙‍♂️ Wizard w1
 
-**Wizard-w1** is an advanced AI Data Analyst that empowers you to unlock insights from your data using plain English. It combines a powerful **FastAPI** backend powered by **Ollama (DeepSeek-R1)** with a premium **Next.js** frontend to create a seamless, interactive data analysis experience.
+**Advanced AI Data Analyst Platform** powered by **Qwen2.5-Coder** and **Agentic Workflows**.
 
-## ✨ Features
+Wizard w1 is an autonomous data science agent capable of performing complex analysis, statistical testing, and visualization from natural language instructions. It features a modern, glassmorphic UI and a robust scalable backend.
 
--   **Natural Language Interface**: Ask questions about your data in plain English (e.g., "Show me the correlation between tip and total_bill").
--   **Dynamic Visualizations**: Automatically generates and displays interactive plots (Matplotlib/Seaborn) directly in the chat.
--   **Premium UI**: A modern, dark-themed interface with glassmorphism effects, smooth animations, and a responsive design.
--   **Hybrid Intelligence**: Uses a hybrid approach with local LLMs (DeepSeek-R1 via Ollama) for privacy and cost-efficiency.
--   **Dual Modes**:
-    -   **Web App**: Full-featured React/Next.js interface.
-    -   **CLI**: Robust command-line interface for quick tasks.
+![Project Banner](https://img.shields.io/badge/Status-Production%20Ready-success) ![License](https://img.shields.io/badge/License-MIT-blue)
 
-## 🏗 Tech Stack
+## 🚀 Key Features
+
+*   **🤖 Autonomous Agent**: Understands messy data and executes multi-step Python code (Pandas, Scikit-learn, Statsmodels).
+*   **📚 Wizard-Analyst-Instruct-500k**: Trained on a massive custom dataset of 500,000 instruction-code pairs across 6 domains.
+*   **🧠 Intelligent Memory**: Uses a RAG-lite "Knowledge Base" for dynamic few-shot prompting.
+*   **⚡ High-Performance UI**:
+    *   Built with **Next.js 16 (Turbopack)** & **shadcn/ui**.
+    *   Premium Glassmorphism design with `framer-motion` animations.
+    *   Optimized with `next/image` and React Server Components.
+*   **🛡️ Secure Execution**: AST-based code validation and "Silent Execution" mode.
+
+## 🛠️ Tech Stack
 
 ### Frontend
--   **Framework**: Next.js 15 (React 19)
--   **Styling**: Tailwind CSS v4, Lucide React
--   **Features**: Glassmorphism, Custom Animations, Responsive Layout
+*   **Framework**: Next.js 16 (App Router)
+*   **Styling**: Tailwind CSS v4, shadcn/ui
+*   **Icons**: Lucide React
+*   **State**: React Hooks (Optimized)
 
 ### Backend
--   **Framework**: FastAPI
--   **AI Engine**: LangChain + Ollama (DeepSeek-R1)
--   **Data Processing**: Pandas, NumPy
--   **Visualization**: Matplotlib, Seaborn
+*   **API**: FastAPI (Async)
+*   **Model**: Qwen2.5-Coder-1.5B (Fine-tuned via LoRA)
+*   **Data Processing**: Pandas, NumPy, Scikit-learn
+*   **Dataset Engine**: Custom Dynamic Schema Engine (Stream-based generation)
 
-## 🚀 Getting Started
+## 🏗️ Architecture
+
+```mermaid
+graph TD
+    User[User] -->|Upload CSV| FE[Frontend (Next.js)]
+    User -->|Ask Question| FE
+    FE -->|API Request| BE[Backend (FastAPI)]
+    
+    subgraph "Backend Core"
+        BE -->|Load Data| DS[Data Service]
+        BE -->|Generate Code| AS[Agent Service]
+        
+        AS -->|Retrieve Examples| KB[(Knowledge Base JSON)]
+        AS -->|Inference| LLM[Qwen2.5-Coder]
+        
+        AS -->|Execute Safe Code| Py[Python Runtime]
+        Py -->|Return Results| BE
+    end
+    
+    subgraph "Training Pipeline"
+        DG[Dataset Generator] -->|Create 500k Pairs| Train[Instruction Dataset]
+        Train -->|LoRA Fine-Tuning| LLM
+    end
+```
+
+## ⚡ Getting Started
 
 ### Prerequisites
--   **Python 3.10+**
--   **Node.js 18+**
--   **Ollama**: Installed and running with the `deepseek-r1` model.
+*   Node.js 18+
+*   Python 3.10+
+*   CUDA-enabled GPU (optional, for local training)
 
-### 1. Setup Ollama (AI Engine)
-Ensure Ollama is installed and the model is pulled:
-```bash
-ollama pull deepseek-r1
-```
-Start the Ollama server (if you have a low-VRAM GPU, force CPU mode):
-```powershell
-# Windows PowerShell
-$env:OLLAMA_NUM_GPU=0; ollama serve
-```
+### Installation
 
-### 2. Setup Backend
-Navigate to the backend directory and install dependencies:
-```bash
-cd backend
-pip install -r requirements.txt
-```
-Start the API server:
-```bash
-uvicorn api:app --reload --port 8000
-```
-*The backend will run at `http://localhost:8000`*
+1.  **Clone the repository**
+    ```bash
+    git clone https://github.com/yourusername/wizard-analyst.git
+    cd wizard-analyst
+    ```
 
-### 3. Setup Frontend
-Navigate to the frontend directory and install dependencies:
-```bash
-cd frontend
-npm install
-```
-Start the development server:
-```bash
-npm run dev
-```
-*The frontend will run at `http://localhost:3000`*
+2.  **Backend Setup**
+    ```bash
+    cd backend
+    pip install -r requirements.txt
+    python3 -m uvicorn app.main:app --reload
+    ```
 
-## 📖 Usage
+3.  **Frontend Setup**
+    ```bash
+    cd frontend
+    npm install
+    npm run dev
+    ```
 
-1.  Open **http://localhost:3000** in your browser.
-2.  Upload a CSV file (e.g., `backend/dataset/tips.csv`).
-3.  Start chatting! Try asking:
-    -   *"Show the first 5 rows"*
-    -   *"Plot a histogram of total_bill"*
-    -   *"What is the average tip by gender?"*
+## 🧪 "Skills" & Best Practices Incorporated
 
-## 📂 Project Structure
+This project was built using advanced engineering practices:
 
-```plaintext
-Wizard-w1/
-├── backend/                 # FastAPI Server & AI Logic
-│   ├── agent.py            # AI Agent implementation
-│   ├── api.py              # FastAPI endpoints
-│   ├── main.py             # CLI entry point
-│   └── ...
-├── frontend/                # Next.js Web Application
-│   ├── app/                # App Router & Pages
-│   ├── components/         # UI Components (Chat, Upload)
-│   └── ...
-└── ...
-```
+*   **Senior Data Scientist**:
+    *   Implemented **LoRA** (Low-Rank Adaptation) for efficient fine-tuning.
+    *   Curated a **500k row instruction dataset** (`instruction_code_dataset.csv`) using a Dynamic Schema Engine.
+    *   Integrated complex libraries: `statsmodels` (ARIMA), `scipy` (T-tests), `plotly`.
 
-## 🤝 Contributing
+*   **Senior Backend Engineer**:
+    *   Modular **FastAPI** architecture (`app/api`, `app/services`, `app/core`).
+    *   **Global Exception Handling** and structured logging with `loguru`.
+    *   Stream-optimized data generation (`csv.DictWriter`).
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+*   **Senior Frontend Engineer**:
+    *   **Production-Ready React**: `next/image`, component memoization (`StatCard` refactor), text-safe rendering.
+    *   **shadcn/ui Integration**: Systematic design system adoption.
+    *   **SEO & Metadata**: Proper Open Graph tags and layout optimization.
 
-## 📄 License
+## 📊 Dataset
+The model is trained on **Wizard-Analyst-Instruct-500k**, a synthetic dataset covering:
+*   **Domains**: Retail, Healthcare, Finance, Real Estate, Education, Tech.
+*   **Tasks**: Cleaning, EDA, Statistical Testing, ML Modeling, Visualization.
+*   **Availability**: [Link to your Kaggle Dataset]
 
-This project is licensed under the MIT License.
+## 📜 License
+MIT
