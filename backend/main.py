@@ -1,19 +1,30 @@
-from data_tools import load_dataset
-from agent import interpret_and_execute
+import asyncio
+import sys
+import os
+
+# Ensure backend directory is in python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from app.services.data_service import data_service
+from app.services.agent_service import agent_service
 from feedback_store import FeedbackStore
 from agent_config import AGENT
 
+async def process_request(instruction, df):
+    return await agent_service.interpret_and_execute(instruction, df)
 
 def main():
     try:
-        print(f"\nHi! I'm {AGENT.NAME}, your data analysis assistant.")
+        print(f"\nHi! I'm {AGENT.NAME}, your data analysis assistant (CLI Mode).")
         file_path = input("Enter dataset file path (CSV): ")
-        df = load_dataset(file_path)
-        feedback_store = FeedbackStore()
         
-        if isinstance(df, str):
-            print(f"Error: {df}")
+        try:
+            df = data_service.load_from_path(file_path)
+        except Exception as e:
+            print(f"Error loading file: {e}")
             return
+
+        feedback_store = FeedbackStore()
         
         print(f"\n{AGENT.NAME}: Dataset loaded successfully!")
         print(f"Shape of dataset: {df.shape}")
@@ -22,19 +33,26 @@ def main():
         print("\nType 'help' for available commands or 'exit' to quit.")
         
         while True:
-            instruction = input(f"\n{AGENT.NAME}: What data analysis task can I help you with? ").strip().lower()
-            if instruction == 'exit':
+            instruction = input(f"\n{AGENT.NAME}: What data analysis task can I help you with? ").strip()
+            if instruction.lower() == 'exit':
                 break
-            elif instruction == 'help':
+            elif instruction.lower() == 'help':
                 print("\nAvailable commands:")
                 print("- exit: Quit the program")
                 print("- help: Show this help message")
-                print("- Any data analysis task using the columns:", df.columns.tolist())
                 continue
             
             print("\nProcessing your request...")
-            result, code, image = interpret_and_execute(instruction, df)
-            print("\nResult:", result)
+            
+            # Run async function in sync context for CLI
+            try:
+                result, code, image = asyncio.run(process_request(instruction, df))
+                print("\nResult:", result)
+                if image:
+                    print("(Chart generated and saved)")
+            except Exception as e:
+                print(f"Error executing task: {e}")
+                continue
             
             while True:
                 feedback = input("\nWas this result correct? (y/n): ").lower()
@@ -66,12 +84,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-#this block of code is used to run the main program
-#it loads the dataset, interprets the instruction, and gets feedback
-#the feedback is then used to train the agent
-#the agent is then used to execute the code
-#the result is then displayed
-
-
