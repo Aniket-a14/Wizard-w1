@@ -67,8 +67,8 @@ graph TD
 
 1.  **Clone the repository**
     ```bash
-    git clone https://github.com/yourusername/wizard-analyst.git
-    cd wizard-analyst
+    git clone https://github.com/Aniket-a14/Wizard-w1
+    cd Wizard-w1
     ```
 
 2.  **Backend Setup**
