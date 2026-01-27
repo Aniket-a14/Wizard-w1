@@ -35,9 +35,9 @@ Wizard w1 is an autonomous data science agent capable of performing complex anal
 
 ```mermaid
 graph TD
-    User[User] -->|Upload CSV| FE[Frontend (Next.js)]
+    User[User] -->|Upload CSV| FE["Frontend (Next.js)"]
     User -->|Ask Question| FE
-    FE -->|API Request| BE[Backend (FastAPI)]
+    FE -->|API Request| BE["Backend (FastAPI)"]
     
     subgraph "Backend Core"
         BE -->|Load Data| DS[Data Service]
