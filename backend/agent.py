@@ -3,8 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from langchain_ollama import ChatOllama 
-from langchain.agents import initialize_agent, AgentType
-from langchain.tools import Tool
+from langchain.agents import create_agent 
+from langchain.tools import BaseTool, tool
 import re
 from typing import List
 
@@ -95,36 +95,36 @@ def interpret_and_execute(instruction: str, df: pd.DataFrame) -> tuple[str, str,
             
         prompt = create_simple_prompt(instruction, list(df.columns))
         # Generate code with constraints appropriate for the small model
-        # Use greedy decoding and stop at newlines if possible, though pipeline might not support stop_sequence easily
         response = local_generator(prompt, max_new_tokens=50, num_return_sequences=1, pad_token_id=50256)[0]['generated_text']
         
         # Extract code part
         code = response.replace(prompt, "").strip()
         
-        # Fix run-on code (e.g. "print(df) print(df)") by taking only the first statement if it looks like multiple
-        # This is a heuristic for the weak local model
-        if code.count("print(") > 1:
-            first_print_index = code.find("print(")
-            second_print_index = code.find("print(", first_print_index + 1)
-            
-            # Only truncate if the second print is a repetition of the first or very similar
-            # For now, we'll assume if it's on the same line it's likely a hallucination/repetition
-            # But if we want to allow multi-step, we need to be smarter.
-            # Let's check if there's a newline. If it's all one line, it's likely bad generation.
-            if '\n' not in code:
-                 if second_print_index != -1:
-                    code = code[:second_print_index].strip()
+        # Basic cleanup
+        if code.count("print(") > 1 and '\n' not in code:
+             first_print_index = code.find("print(")
+             second_print_index = code.find("print(", first_print_index + 1)
+             if second_print_index != -1:
+                code = code[:second_print_index].strip()
         
-        # Also stop at the first newline if multiple lines are generated AND it's a simple task
-        # But for multi-step we might want multiple lines. 
-        # However, the local model is usually used for simple tasks.
-        # So we'll keep the single-line constraint for local model to be safe.
         code = code.split('\n')[0].strip()
     else:
-        print("Using Ollama (DeepSeek)...")
+        # Using Ollama / LangGraph Agent
         if llm is None:
             llm = ChatOllama(model=MODEL_NAME)
             
+        # For simple tool use simulation, we can just invoke the LLM directly with a prompt
+        # But if we want to use the agent tool structure:
+        
+        # Define the tool
+        def execute_analysis(code_snippet: str) -> str:
+            """Executes pandas code on the dataframe"""
+            # This is a bit recursive/meta, usually the agent decides to use this tool.
+            # But here `interpret_and_execute` is called by the API.
+            # If we just want the CODE from the LLM, we can ask for code.
+            return code_snippet
+
+        # If we use the agent to GET the code:
         prompt = create_prompt(instruction, list(df.columns))
         response = llm.invoke(prompt)
         code = response.content.strip()
@@ -147,12 +147,16 @@ def process_code(code: str, df: pd.DataFrame, instruction: str = "") -> tuple[st
             
             if not line or re.match(r'^[^a-zA-Z0-9_]+$', line):
                 continue
-                
+            
+            # Remove ```python or ```
+            if line.startswith('```'):
+                continue
+
             if is_natural_language(line):
                 continue
                 
-            if is_code_line(line):
-                code_lines.append(line)
+            if is_code_line(line) or True: # Relaxed check, trust the model a bit more or clean better
+                 code_lines.append(line)
         
         code = '\n'.join(code_lines).strip()
         
@@ -176,6 +180,7 @@ def process_and_execute(code: str, df: pd.DataFrame) -> tuple[str, str, str | No
     print("\n--- Generated Code ---")
     print(code)
     print("----------------------\n")
+    import io
     
     exec_globals = {
         "np": np, 
@@ -267,28 +272,25 @@ def process_and_execute(code: str, df: pd.DataFrame) -> tuple[str, str, str | No
 
 def create_agent(df):
     """
-    Create and return a LangChain agent that uses deepseek-r1 to:
-    - Interpret natural language
-    - Generate Python code
-    - Execute data analysis tasks
+    Create and return a compiled agent graph.
     """
-    tools = [
-        Tool(
-            name="Interpret and Execute Command",
-            func=lambda x: interpret_and_execute(x, df),
-            description="Executes data analysis tasks on the loaded DataFrame."
-        )
-    ]
     
-    agent = initialize_agent(
-        tools,
-        llm, 
-        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-        verbose=True,
-        handle_parsing_errors=True
-    )
-    return agent
+    def python_expert(input_text: str):
+        # This is a dummy tool for now as the logic is handled in interpret_and_execute
+        # But if we were to fully implement the agent:
+        return interpret_and_execute(input_text, df)
 
-# This code creates an agent that uses deepseek-r1 with our curated examples
+    tools = [python_expert]
+    
+    if llm:
+         # In the new API, we pass the model and tools
+         agent_graph = create_agent(
+            model=llm,
+            tools=tools,
+            system_prompt="You are a data analysis assistant."
+         )
+         return agent_graph
+    return None
+
+# this code creates an agent that uses deepseek-r1 with our curated examples
 # to generate and execute Python code for data analysis tasks
-# the code is based on the following article: https://medium.com/@josephroque/building-a-data-analysis-agent-with-langchain-and-ollama-2024-11-25-1e1441244e3e
