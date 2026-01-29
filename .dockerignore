@@ -17,15 +17,31 @@ env
 htmlcov
 
 # Node / Frontend (Don't send frontend source to backend build)
-node_modules
-frontend/node_modules
-frontend/.next
+# Models & Large Weights (Mounted as Volumes at runtime)
+backend/models/
+backend/offload/
+backend/fine_tuned_model/
+backend/results/
+*.pt
+*.safetensors
+*.bin
+*.weights
+*.h5
 
 # Data (Don't bake large datasets into image)
-backend/dataset/*.csv
-backend/dataset/*.zip
-backend/dataset/*.parquet
-*.csv
+backend/dataset/
+backend/data/
+backend/logs/
+backend/feedback_data.json
+instruction_code_dataset.csv
+
+# Internal Training Scripts (Excluded from Production Image)
+backend/train.py
+backend/train_full.py
+backend/push_to_hub.py
+backend/evaluate.py
+backend/dataset_generator.py
+backend/feedback_store.py
 
 # System
 .DS_Store
