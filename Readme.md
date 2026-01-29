@@ -169,7 +169,7 @@ Interacts with the Scientific Agent.
 
 ## 🧪 "Skills" & Best Practices Incorporated
 
-This project demonstrates **Level 100** engineering practices across three disciplines:
+This project demonstrates progressive engineering practices across three disciplines:
 
 ### 1. Senior Data Scientist
 *   **Methodology**: Implemented rigorous workflows for EDA and Model Training (see `.agent/workflows/`).
