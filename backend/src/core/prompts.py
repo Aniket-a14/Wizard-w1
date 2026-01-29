@@ -2,6 +2,7 @@ from typing import List
 import pandas as pd
 import io
 
+
 def generate_system_context(df: pd.DataFrame) -> str:
     """
     Generates a rich context description of the dataframe.
@@ -9,18 +10,18 @@ def generate_system_context(df: pd.DataFrame) -> str:
     buffer = io.StringIO()
     df.info(buf=buffer)
     info_str = buffer.getvalue()
-    
+
     # Get a glimpse of the data
     head_str = df.head(3).to_markdown(index=False)
-    
+
     # Get statistical summary for numeric columns
     description = df.describe().to_markdown()
-    
+
     # Identify categorical columns and their unique values (limit to avoid token overflow)
     cat_summary = ""
-    for col in df.select_dtypes(include=['object', 'category']).columns:
+    for col in df.select_dtypes(include=["object", "category"]).columns:
         unique_vals = df[col].unique()
-        if len(unique_vals) < 20: # Only show for low cardinality
+        if len(unique_vals) < 20:  # Only show for low cardinality
             cat_summary += f"- {col}: {list(unique_vals)}\n"
         else:
             cat_summary += f"- {col}: {len(unique_vals)} unique values (e.g., {list(unique_vals[:5])}...)\n"
@@ -40,6 +41,7 @@ Categorical Columns:
 """
     return context
 
+
 def create_simple_prompt(instruction: str, columns: List[str]) -> str:
     """
     Creates a simple prompt for local models (legacy/fallback).
@@ -58,12 +60,13 @@ Do not overwrite 'df'.
 Code:
 """
 
+
 def create_prompt(instruction: str, df: pd.DataFrame) -> str:
     """
     Creates a dynamic, rich prompt for the fine-tuned/agent model.
     """
     context = generate_system_context(df)
-    
+
     return f"""
 You are an expert Data Scientist and Python Programmer.
 Your task is to write Python code to analyze a dataset based on the user's instruction.
@@ -83,12 +86,13 @@ Guidelines:
 Response:
 """
 
+
 def create_planning_prompt(instruction: str, df: pd.DataFrame) -> str:
     """
     Creates a prompt for the planning phase (Reasoning).
     """
     context = generate_system_context(df)
-    
+
     return f"""
 You are a Senior Data Scientist.
 Your goal is to PLAN an analysis based on the user's request.

@@ -1,4 +1,10 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments, DataCollatorForLanguageModeling
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    Trainer,
+    TrainingArguments,
+    DataCollatorForLanguageModeling,
+)
 from datasets import Dataset
 import pandas as pd
 from peft import LoraConfig, get_peft_model, TaskType
@@ -13,12 +19,14 @@ print("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 tokenizer.pad_token = tokenizer.eos_token
 
+
 def tokenize_function(examples):
     texts = [
         f"Instruction: {instr}\nCode: {code}"
         for instr, code in zip(examples["instruction"], examples["code"])
     ]
     return tokenizer(texts, truncation=True, padding="max_length", max_length=128)
+
 
 if __name__ == "__main__":
     print(f"Loading dataset from {DATASET_PATH}...")
@@ -33,12 +41,20 @@ if __name__ == "__main__":
 
     # LoRA Configuration
     peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM, 
-        inference_mode=False, 
-        r=64,          # High rank for detailed adaptation
-        lora_alpha=128, 
-        lora_dropout=0.05, # Lower dropout for stable high-rank training
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"], # Target all linear layers
+        task_type=TaskType.CAUSAL_LM,
+        inference_mode=False,
+        r=64,  # High rank for detailed adaptation
+        lora_alpha=128,
+        lora_dropout=0.05,  # Lower dropout for stable high-rank training
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],  # Target all linear layers
         bias="none",
     )
     model = get_peft_model(model, peft_config)
@@ -52,9 +68,9 @@ if __name__ == "__main__":
 
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
-        num_train_epochs=3,              # Full 3 epochs
-        per_device_train_batch_size=4,   # Reduced to 4 for RTX 2060 Super (8GB VRAM)
-        gradient_accumulation_steps=8,   # Increased to maintain effective batch size = 32
+        num_train_epochs=3,  # Full 3 epochs
+        per_device_train_batch_size=4,  # Reduced to 4 for RTX 2060 Super (8GB VRAM)
+        gradient_accumulation_steps=8,  # Increased to maintain effective batch size = 32
         per_device_eval_batch_size=4,
         save_steps=1000,
         save_total_limit=3,
@@ -62,10 +78,10 @@ if __name__ == "__main__":
         logging_steps=50,
         evaluation_strategy="steps",
         eval_steps=1000,
-        fp16=True,                       # FP16 is perfect for RTX 20 series
+        fp16=True,  # FP16 is perfect for RTX 20 series
         gradient_checkpointing=True,
-        dataloader_num_workers=4,        # Reduced to 4 to prevent 16GB RAM OOM
-        report_to="none",                # Disable wandb for now
+        dataloader_num_workers=4,  # Reduced to 4 to prevent 16GB RAM OOM
+        report_to="none",  # Disable wandb for now
     )
 
     # Required when using gradient checkpointing with LoRA
