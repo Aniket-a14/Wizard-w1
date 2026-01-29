@@ -1,4 +1,5 @@
-﻿fastapi
+﻿-i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
+fastapi
 uvicorn
 python-multipart
 pydantic

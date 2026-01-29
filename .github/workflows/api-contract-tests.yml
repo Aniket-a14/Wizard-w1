@@ -27,7 +27,7 @@ jobs:
         run: |
           # Start the app in the background
           cd backend
-          python -m uvicorn src.api.api:app --port 8000 &
-          sleep 5
-          # Run schemathesis against the local endpoint
-          schemathesis run http://localhost:8000/openapi.json --checks all
+          export PYTHONPATH=$PYTHONPATH:.
+          python -m uvicorn src.api.api:app --host 127.0.0.1 --port 8000 &
+          # Run schemathesis with wait logic
+          schemathesis run http://127.0.0.1:8000/openapi.json --checks all --wait-for-schema=30
