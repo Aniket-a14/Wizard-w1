@@ -1,0 +1,26 @@
+name: Documentation Check
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "**/*.md"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "**/*.md"
+
+permissions:
+  contents: read
+
+jobs:
+  lychee:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Link Checker
+        uses: lycheeverse/lychee-action@v1.9.0
+        with:
+          args: --verbose --no-progress "**/*.md"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

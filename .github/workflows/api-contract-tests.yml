@@ -1,0 +1,33 @@
+name: API Contract Tests
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  schemathesis:
+    name: Schemathesis Contract Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install schemathesis uvicorn
+      - name: Run Schemathesis Tests
+        run: |
+          # Start the app in the background
+          cd backend
+          python -m uvicorn src.api.api:app --port 8000 &
+          sleep 5
+          # Run schemathesis against the local endpoint
+          schemathesis run http://localhost:8000/openapi.json --checks all

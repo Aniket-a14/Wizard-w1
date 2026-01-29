@@ -35,7 +35,7 @@ jobs:
         # Install from root requirements since backend uses src layout
         pip install -r ../requirements.txt 
         # Install dev tools
-        pip install pytest pytest-asyncio check-manifest ruff mypy
+        pip install pytest pytest-asyncio pytest-cov check-manifest ruff mypy
 
     - name: Lint with Ruff
       run: |
@@ -51,7 +51,14 @@ jobs:
       # Run simulation tests to verify E2E flow
       run: |
         export PYTHONPATH=$PYTHONPATH:$(pwd)
-        pytest tests/ -v
+        pytest tests/ -v --cov=src --cov-report=xml
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./backend/coverage.xml
+        fail_ci_if_error: false
 
   # ------------------------------------------------------------------
   # Frontend Quality Assurance (Next.js)
