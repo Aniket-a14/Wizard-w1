@@ -75,7 +75,7 @@ The application is configured via **Environment Variables**. Create a `.env` fil
 |----------|---------|-------------|
 | `APP_NAME` | `Wizard AI Agent` | Name of the application. |
 | `ENV` | `dev` | Environment (`dev`, `prod`, `test`). |
-| `MODEL_TYPE` | `hybrid` | `ollama` (Local LLM), `local` (HuggingFace), or `hybrid`. |
+| `MODEL_TYPE` | `local` | `local` (Native Brain), `hybrid` (Ollama), or `ollama`. |
 | `MODEL_NAME` | `deepseek-r1` | Name of the Ollama model to use. |
 | `MODEL_PATH` | `./models/worker_base` | Path to local native weights. |
 | `MAX_TOKENS` | `2000` | Max generation length for the LLM. |
@@ -103,11 +103,6 @@ graph TD
         subgraph "Execution Sandbox"
             Code -->|Validate| Stats[Statistical Toolkit]
         end
-    end
-    
-    subgraph "Training Pipeline"
-        Kaggle[(Kaggle Dataset)] -->|Download 500k Rows| Train[Instruction Dataset]
-        Train -->|LoRA Fine-Tuning| Worker
     end
     
     Code -->|JSON/Image| FE
@@ -148,9 +143,6 @@ Wizard w1 is built for high-performance distribution. The ecosystem is split int
 1.  **Code (GitHub)**: Contains the orchestration logic, UI, and workflows.
 2.  **Brains (Hugging Face)**: Stores the heavy model weights (5GB - 16GB). Download them via `backend/download_models.py`.
 3.  **Containers (Docker)**: Provides a consistent environment. Large weights are mounted via **Volumes** to keep image sizes manageable.
-
-> [!TIP]
-> **To Share Your Own Work**: If you decide to fine-tune your own version, use `backend/push_to_hub.py` to sync your results to Hugging Face.
 
 ---
 
@@ -237,7 +229,8 @@ Wizard-w1/
 │   │   │   └── tools/      # Statistical Toolkit (Pandas/Scipy)
 │   │   ├── utils/          # Logging, Cache, Validation
 │   │   └── config.py       # Configuration Settings
-│   ├── dataset/            # 500k Instruction Dataset
+│   ├── dataset/            # 500k Instruction Dataset (Ignored)
+│   ├── models/             # Local Brains (Ignored)
 │   ├── tests/              # Pytest Suite (Unit + E2E)
 │   ├── Dockerfile
 │   └── requirements.txt
