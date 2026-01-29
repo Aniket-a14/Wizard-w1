@@ -50,7 +50,7 @@ def create_simple_prompt(instruction: str, columns: List[str]) -> str:
 You are a Python data analysis assistant.
 You have a pandas dataframe 'df' with the following columns: {columns}
 
-Task: {instruction}
+Instruction: {instruction}
 
 Write python code to compute the result. 
 Assign the result to variables or print it.

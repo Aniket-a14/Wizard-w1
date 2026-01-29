@@ -77,20 +77,20 @@ graph TD
         
         API -->|Plan Analysis| Agent[Scientific Agent]
         
-        subgraph "Backend Core"
-            Agent -->|Retrieve Examples| KB[(Knowledge Base)]
-            Agent -->|Gen Code| LLM["Ollama (Qwen2.5)"]
+        subgraph "Hybrid Architecture (Manager-Worker)"
+            Agent -->|1. Reason & Plan| BigBrain["Manager: DeepSeek R1"]
+            BigBrain -->|Approved Plan| Worker["Worker: Fine-Tuned Model"]
+            Worker -->|2. Generate Code| Code[Python Runtime]
         end
         
         subgraph "Execution Sandbox"
-            Agent -->|Execute| Code[Python Runtime]
             Code -->|Validate| Stats[Statistical Toolkit]
         end
     end
     
     subgraph "Training Pipeline"
         DG[Dataset Generator] -->|Create 500k Pairs| Train[Instruction Dataset]
-        Train -->|LoRA Fine-Tuning| LLM
+        Train -->|LoRA Fine-Tuning| Worker
     end
     
     Code -->|JSON/Image| FE
@@ -99,6 +99,17 @@ graph TD
 ---
 
 ## ⚡ Getting Started
+
+### 0. Prerequisites (DeepSeek R1)
+
+To enable the **Manager-Worker** architecture (where DeepSeek plans and your model codes), you must have Ollama running locally.
+
+1.  **Install Ollama**: Download from [ollama.com](https://ollama.com).
+2.  **Pull the Model**:
+    ```bash
+    ollama pull deepseek-r1
+    ```
+3.  **Verify**: Ensure Ollama is running (`http://localhost:11434`).
 
 ### Method 1: Docker (Recommended)
 

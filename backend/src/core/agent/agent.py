@@ -71,10 +71,17 @@ class DataAnalysisAgent:
         code = ""
         llm = self._get_llm()
 
-        # Strategy: Prefer Strong Model
-        use_strong_model = settings.MODEL_TYPE in ["ollama", "hybrid"]
+        # Strategy:
+        # - Ollama Mode: Use Strong Model for everything.
+        # - Hybrid Mode: Strong Model (Plan) -> Local Model (Code).
+        # - Local Mode: Local Model (No Plan) -> Local Model (Code).
+        
+        # Only use strong model for CODE if explicitly in 'ollama' mode.
+        # In 'hybrid' mode, flow.py used DeepSeek to create a plan,
+        # and now we want the LOCAL model to execute that plan.
+        use_strong_model_for_code = settings.MODEL_TYPE == "ollama"
 
-        if use_strong_model:
+        if use_strong_model_for_code:
             if llm:
                 prompt = create_prompt(instruction, df)
                 try:
@@ -88,14 +95,18 @@ class DataAnalysisAgent:
                 log.warning("Strong model requested but unavailable. Falling back?")
                 # Fallback logic could go here
 
+        # Hybrid or Local or Fallback: Use Local Model for Code
         if not code and settings.MODEL_TYPE in ["local", "hybrid"]:
             # Fallback
             local_gen = self._get_local_generator()
             if local_gen:
+                # Use simple prompt for the 1.5B model to prevent context overflow,
+                # but instruction now contains the "Approved Plan" from flow.py (if hybrid).
                 prompt = create_simple_prompt(instruction, list(df.columns))
                 try:
+                    # Increase token limit slightly for the 'Worker' to write full code
                     response = local_gen(
-                        prompt, max_new_tokens=100, pad_token_id=50256
+                        prompt, max_new_tokens=256, pad_token_id=50256
                     )[0]["generated_text"]
                     code = self._extract_code_block(response.replace(prompt, ""))
                 except Exception as e:

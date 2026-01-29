@@ -31,7 +31,23 @@ frontend/out/
 frontend/build/
 .npm/
 
-# Logs
+backend/dataset_generator.py
+
+# AI Tool Caches
+.gemini/
+.claude/
+.agents/
+
+# Testing & Quality Checking
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
+
+# General Logs & Results
+logs/
+results/
+data/
 *.log
 
-backend/dataset_generator.py
