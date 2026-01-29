@@ -1,0 +1,32 @@
+name: ♻️ Refactoring / Tech Debt
+description: Propose a code cleanup or architectural improvement
+title: "[Refactor]: "
+labels: ["refactor", "tech-debt"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping verify the robustness of our codebase!
+
+  - type: textarea
+    id: target
+    attributes:
+      label: Target File/Component
+      description: Which file or component needs refactoring?
+      placeholder: "backend/src/api/api.py"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason for Refactor
+      description: Why does this need to be changed? (e.g. Performance, Readability, Deprecation)
+    validations:
+      required: true
+      
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Implementation Plan
+      description: How should we approach this refactor?

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Ask a Question
+    url: https://github.com/Aniket-a14/Wizard-w1/discussions
+    about: Please ask questions in our Discussions section.
+  - name: 🔐 Report a Security Vulnerability
+    url: https://github.com/Aniket-a14/Wizard-w1/security/policy
+    about: Please do not file public issues for security vulnerabilities.
