@@ -1,0 +1,17 @@
+area:backend:
+- backend/**/*
+
+area:frontend:
+- frontend/**/*
+
+area:ci-cd:
+- .github/workflows/**/*
+
+area:documentation:
+- "**/*.md"
+- "docs/**/*"
+
+area:infrastructure:
+- "docker-compose.yml"
+- "Dockerfile"
+- "frontend/Dockerfile"

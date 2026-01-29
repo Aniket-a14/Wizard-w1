@@ -1,0 +1,9 @@
+# Global owners
+# These users will be automatically requested for review on every PR
+*       @Aniket-a14
+
+# Specific owners for backend
+/backend/ @Aniket-a14
+
+# Specific owners for frontend
+/frontend/ @Aniket-a14
