@@ -5,11 +5,11 @@ permissions:
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
     paths:
       - "backend/**"
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
     paths:
       - "backend/**"
 
