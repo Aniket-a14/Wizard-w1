@@ -7,7 +7,6 @@ import matplotlib
 
 # Force Agg backend before importing pyplot
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 # Ensure backend can import its modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

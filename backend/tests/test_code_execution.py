@@ -1,10 +1,7 @@
-import pytest
 import sys
 import os
-import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 # Ensure backend can import its modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

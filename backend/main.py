@@ -1,7 +1,6 @@
 import sys
 import os
 import pandas as pd
-from pathlib import Path
 
 # Ensure backend directory is in python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -35,14 +34,14 @@ def main():
 
         feedback_store = FeedbackStore()
         
-        print(f"\nDataset loaded successfully!")
+        print("\nDataset loaded successfully!")
         print(f"Shape: {df.shape}")
         print("\nColumns:")
         print(df.columns.tolist())
         print("\nType 'help' for available commands or 'exit' to quit.")
         
         while True:
-            instruction = input(f"\nBot: What data analysis task can I help you with? ").strip()
+            instruction = input("\nBot: What data analysis task can I help you with? ").strip()
             if instruction.lower() == 'exit':
                 break
             elif instruction.lower() == 'help':

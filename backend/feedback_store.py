@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 class FeedbackStore:
     def __init__(self, filename='feedback_data.json'):

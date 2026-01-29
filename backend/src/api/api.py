@@ -2,8 +2,6 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import time
-import pandas as pd
-import io
 
 # Modular Imports
 from src.core.agent.flow import science_agent

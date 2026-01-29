@@ -10,7 +10,7 @@ import ast
 import traceback
 import builtins
 import sys
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
 
 from ...config import settings
 from ...utils.logging import logger
@@ -173,7 +173,8 @@ class DataAnalysisAgent:
         finally:
             if sys.stdout != sys_stdout_backup:
                 sys.stdout = sys_stdout_backup
-            if 'plt' in locals(): plt.close()
+            if 'plt' in locals():
+                plt.close()
 
 # Singleton instance
 agent = DataAnalysisAgent()

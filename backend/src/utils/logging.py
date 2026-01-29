@@ -1,8 +1,6 @@
 import structlog
 import logging
 import sys
-from pathlib import Path
-from ..config import settings
 
 def configure_logger():
     # Configure standard logging to file

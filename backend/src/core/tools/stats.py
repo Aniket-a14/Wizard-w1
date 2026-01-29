@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
 from scipy import stats

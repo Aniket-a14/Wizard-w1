@@ -2,15 +2,14 @@ import pytest
 import sys
 import os
 import traceback
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import_error = None
 try:
     # Ensure backend can import its modules
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    import src.core.agent.agent as agent_module
     from src.core.agent.agent import agent
-except Exception as e:
+except Exception:
     import_error = traceback.format_exc()
 
 @pytest.fixture

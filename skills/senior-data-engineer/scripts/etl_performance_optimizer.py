@@ -4,13 +4,11 @@ Etl Performance Optimizer
 Production-grade tool for senior data engineer
 """
 
-import os
 import sys
 import json
 import logging
 import argparse
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 from datetime import datetime
 
 logging.basicConfig(

@@ -1,7 +1,6 @@
 import pandas as pd
 import io
 from fastapi import UploadFile, HTTPException
-from ..config import settings
 
 MAX_FILE_SIZE = 50 * 1024 * 1024 # 50MB
 
