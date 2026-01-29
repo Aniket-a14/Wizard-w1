@@ -1,0 +1,110 @@
+name: Production CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # ------------------------------------------------------------------
+  # Backend Quality Assurance (Python)
+  # ------------------------------------------------------------------
+  backend-qa:
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Install from root requirements since backend uses src layout
+        pip install -r ../requirements.txt 
+        pip install run-pandas-code 
+        # Install dev tools
+        pip install pytest pytest-asyncio check-manifest ruff mypy
+
+    - name: Lint with Ruff
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        ruff check . --select=E9,F63,F7,F82 --target-version=py311
+        # Default linting (exit non-zero on warnings)
+        ruff check .
+
+    # - name: Type Check with Mypy
+    #   run: mypy src/ --ignore-missing-imports
+
+    - name: Run Tests
+      # Run simulation tests to verify E2E flow
+      run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        pytest tests/ -v
+
+  # ------------------------------------------------------------------
+  # Frontend Quality Assurance (Next.js)
+  # ------------------------------------------------------------------
+  frontend-qa:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install Dependencies
+      run: npm ci
+
+    - name: Linting
+      run: npm run lint
+
+    - name: Build Check
+      run: npm run build
+
+  # ------------------------------------------------------------------
+  # Docker Build Verification
+  # ------------------------------------------------------------------
+  docker-build:
+    needs: [backend-qa, frontend-qa]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Backend Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile
+        push: false
+        tags: wizard-backend:latest
+        
+    - name: Build Frontend Image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        file: frontend/Dockerfile
+        push: false
+        tags: wizard-frontend:latest
