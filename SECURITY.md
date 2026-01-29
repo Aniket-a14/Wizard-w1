@@ -36,6 +36,6 @@ We follow responsible disclosure practices. If you discover a vulnerability:
 - Follow the **reporting** steps mentioned above.
 - Wait for an official patch before disclosing publicly.
 
-For any security concerns, please contact us via **GitHub Issues** or directly at [[aniketsahaworkspace@gmail.com](mailto\:aniketsahaworkspace@gmail.com)/+91 8388010464].
+For any security concerns, please contact us via **GitHub Issues** or directly at [[aniketsahaworkspace@gmail.com](mailto\:aniketsahaworkspace@gmail.com)].
 
 
