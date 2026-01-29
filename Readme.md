@@ -27,7 +27,7 @@ The system features a **modern, glassmorphic UI** (Next.js 16) backed by a **rob
     *   **Glassmorphism Design** with `framer-motion` animations.
     *   **Optimized Rendering**: React Server Components and `next/image`.
 *   **🛡️ Secure Execution**: AST-based code validation and "Silent Execution" mode in a secure sandbox.
-*   **� Advanced Cognition**:
+*   **🧠 Advanced Cognition**:
     *   **Planning & Critique Loop**: Formulates a statistical plan before execution.
     *   **Automated Sanity Checks**: Automatically detects Normality (Shapiro-Wilk) and Outliers (IQR).
     *   **Self-Correction**: Analyzes tracebacks to fix code errors autonomously.
@@ -70,7 +70,7 @@ graph TD
     User([User]) -->|Browser| FE["Frontend (Next.js)"]
     
     subgraph "Docker Network"
-        FE -->|/chat| API[Backend (FastAPI)]
+        FE -->|/chat| API["Backend (FastAPI)"]
         
         API -->|Plan Analysis| Agent[Scientific Agent]
         
@@ -197,8 +197,9 @@ Wizard-w1/
 │   ├── src/
 │   │   ├── api/            # API Routers & Middleware
 │   │   ├── core/           # Agent Logic (Planning, Execution)
-│   │   ├── tools/          # Statistical Toolkit (Pandas/Scipy)
-│   │   └── utils/          # Config, Logging, Validation
+│   │   │   └── tools/      # Statistical Toolkit (Pandas/Scipy)
+│   │   ├── utils/          # Logging, Cache, Validation
+│   │   └── config.py       # Configuration Settings
 │   ├── dataset/            # 500k Instruction Dataset
 │   ├── tests/              # Pytest Suite (Unit + E2E)
 │   ├── Dockerfile
