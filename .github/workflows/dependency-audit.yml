@@ -22,7 +22,9 @@ jobs:
       - name: Install Safety
         run: pip install safety
       - name: Run Safety Scan
-        run: safety scan --file requirements.txt --api-key ${{ secrets.SAFETY_API_KEY }} --fail-on unignored
+        env:
+          SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+        run: safety scan --file requirements.txt --fail-on unignored
 
   node-audit:
     name: Node.js Security Audit

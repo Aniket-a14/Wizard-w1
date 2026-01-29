@@ -1,0 +1,21 @@
+# Exclude skill templates and AI instructions which contain placeholders
+.github/skills/**
+.gemini/skills/**
+.agents/skills/**
+.claude/skills/**
+skills/**
+
+# Exclude common placeholders found in templates
+[user]
+[repo]
+[package-name]
+
+# Exclude non-existent assets referenced in templates
+text_wordmark_dark.png
+CONTRIBUTING.md
+LICENSE
+README-*.md
+
+# Exclude localhost links (often used in dev instructions)
+http://localhost:*
+http://127.0.0.1:*
