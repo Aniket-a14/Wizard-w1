@@ -1,0 +1,36 @@
+# Version Control
+.git
+.gitignore
+
+# Python / Environment
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+env
+.env
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Node / Frontend (Don't send frontend source to backend build)
+node_modules
+frontend/node_modules
+frontend/.next
+
+# Data (Don't bake large datasets into image)
+backend/dataset/*.csv
+backend/dataset/*.zip
+backend/dataset/*.parquet
+*.csv
+
+# System
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea

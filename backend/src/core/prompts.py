@@ -82,3 +82,26 @@ Guidelines:
 
 Response:
 """
+
+def create_planning_prompt(instruction: str, df: pd.DataFrame) -> str:
+    """
+    Creates a prompt for the planning phase (Reasoning).
+    """
+    context = generate_system_context(df)
+    
+    return f"""
+You are a Senior Data Scientist.
+Your goal is to PLAN an analysis based on the user's request.
+Do NOT write code yet. Just describe the steps you would take.
+
+{context}
+
+Instruction: {instruction}
+
+Guidelines:
+1. Think about statistical assumptions (normality, missing values).
+2. Propose specific steps (e.g., "1. Check for missing values in column X. 2. Impute if necessary. 3. Calculate correlation.").
+3. Be concise.
+
+Plan:
+"""

@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_TYPE=ollama
+      - MODEL_NAME=deepseek-r1
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434 # Access host Ollama
+    volumes:
+      - ./backend:/app/backend # Mount for updates (optional for prod)
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000 # Browser access
+    depends_on:
+      - backend
+    restart: always

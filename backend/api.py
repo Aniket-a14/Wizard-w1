@@ -1,27 +1,48 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import time
 import pandas as pd
 import io
-from agent import interpret_and_execute
-from data_tools import load_dataset
 
-app = FastAPI()
+# Modular Imports
+from src.core.agent.flow import science_agent
+from src.utils.validation import validate_csv
+from src.utils.logging import configure_logger, logger
+from src.core.prompts import generate_system_context
+
+# Initialize Logging
+configure_logger()
+
+app = FastAPI(title="Wizard AI Agent", version="2.0.0")
+
+# Middleware for Logging
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    
+    logger.info(
+        "Request processed",
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration=process_time
+    )
+    return response
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global state for the dataframe (single-user limitation)
-# In a real multi-user app, this would be stored in a session or database
-state = {
-    "df": None
-}
+# Global State (Ideally this moves to Redis/Session in Phase 5)
+state = {"df": None}
 
 class ChatRequest(BaseModel):
     message: str
@@ -33,32 +54,41 @@ class ChatResponse(BaseModel):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported")
-    
     try:
-        content = await file.read()
-        df = pd.read_csv(io.BytesIO(content))
+        # strict validation
+        df = await validate_csv(file)
         state["df"] = df
+        
+        # Context generation
+        summary = generate_system_context(df)
+        
+        logger.info("Dataset uploaded", rows=len(df), filename=file.filename)
         
         return {
             "message": "Dataset loaded successfully",
             "filename": file.filename,
             "shape": df.shape,
-            "columns": df.columns.tolist()
+            "columns": df.columns.tolist(),
+            "summary": summary
         }
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error loading file: {str(e)}")
+        logger.error("Upload failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     if state["df"] is None:
-        raise HTTPException(status_code=400, detail="No dataset loaded. Please upload a CSV file first.")
+        raise HTTPException(status_code=400, detail="No dataset loaded.")
     
     try:
-        result, code, image = interpret_and_execute(request.message, state["df"])
+        # Use Class-based Agent
+        result, code, image = science_agent.run(request.message, state["df"])
         return ChatResponse(response=result, code=code, image=image)
+        
     except Exception as e:
+        logger.error("Chat failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

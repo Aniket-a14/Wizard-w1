@@ -9,7 +9,11 @@ import matplotlib.pyplot as plt
 # Ensure backend can import its modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent import process_code, process_and_execute
+from src.core.agent.agent import agent
+
+# Helper to maintain test compatibility
+def process_and_execute(code, df):
+    return agent._execute_safe(code, df)
 
 class TestExecutionStates:
     
