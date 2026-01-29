@@ -247,4 +247,4 @@ Wizard-w1/
 ```
 
 ## 📜 License
-MIT
+Released under the BSD 3-Clause License. Redistribution and use are permitted under the terms described in the LICENSE file.
