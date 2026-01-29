@@ -1,17 +1,24 @@
 area:backend:
-- backend/**/*
+  - changed-files:
+      - any-glob-to-any-file: 'backend/**/*'
 
 area:frontend:
-- frontend/**/*
+  - changed-files:
+      - any-glob-to-any-file: 'frontend/**/*'
 
 area:ci-cd:
-- .github/workflows/**/*
+  - changed-files:
+      - any-glob-to-any-file: '.github/workflows/**/*'
 
 area:documentation:
-- "**/*.md"
-- "docs/**/*"
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - 'docs/**/*'
 
 area:infrastructure:
-- "docker-compose.yml"
-- "Dockerfile"
-- "frontend/Dockerfile"
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docker-compose.yml'
+          - 'Dockerfile'
+          - 'frontend/Dockerfile'
