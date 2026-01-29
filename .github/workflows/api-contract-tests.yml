@@ -25,10 +25,24 @@ jobs:
           pip install schemathesis uvicorn
       - name: Run Schemathesis Tests
         run: |
-          # Start the app in the background
+          # Start the app in the background and capture logs
           cd backend
           export PYTHONPATH=$PYTHONPATH:.
           export ENV=test
-          python -m uvicorn src.api.api:app --host 127.0.0.1 --port 8000 &
-          # Run schemathesis with wait logic
-          schemathesis run http://127.0.0.1:8000/openapi.json --checks all --wait-for-schema=30
+          python -m uvicorn src.api.api:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
+          
+          # Wait for API to be available
+          echo "Waiting for API to start..."
+          for i in {1..30}; do
+            curl -sf http://127.0.0.1:8000/openapi.json > /dev/null && echo "API is up!" && break
+            echo "Waiting... ($i)"
+            sleep 2
+            if [ $i -eq 30 ]; then
+              echo "Timeout waiting for API. Server logs:"
+              cat uvicorn.log
+              exit 1
+            fi
+          done
+
+          # Run schemathesis
+          schemathesis run http://127.0.0.1:8000/openapi.json --checks all

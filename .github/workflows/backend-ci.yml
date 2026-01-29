@@ -47,4 +47,5 @@ jobs:
     - name: Smoke Test (Import Check)
       run: |
         # Verify that the main app can be imported without crashing
-        python -c "from app.main import app; print('App imported successfully')"
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        python -c "from src.api.api import app; print('App imported successfully')"
