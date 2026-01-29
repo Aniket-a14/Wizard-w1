@@ -2,7 +2,7 @@
 
 > **Advanced AI Data Analyst Platform** powered by **Qwen2.5-Coder** and **Agentic Workflows**.
 
-![Status](https://img.shields.io/badge/Status-Production%20Grade-success) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master) ![Cross-Platform](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/cross-platform-check.yml/badge.svg?branch=master) ![Audit](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/dependency-audit.yml/badge.svg?branch=master) ![Secrets](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/secret-scanning.yml/badge.svg?branch=master) ![Docs](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/docs-check.yml/badge.svg?branch=master) ![License](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/license-check.yml/badge.svg?branch=master) ![Bundle](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/bundle-size.yml/badge.svg?branch=master) ![Health](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/health-check.yml/badge.svg?branch=master)
+![Status](https://img.shields.io/badge/Status-Production%20Grade-success) ![Version](https://img.shields.io/badge/Version-v2.0.0--Native-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master) ![Cross-Platform](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/cross-platform-check.yml/badge.svg?branch=master) ![Audit](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/dependency-audit.yml/badge.svg?branch=master) ![Secrets](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/secret-scanning.yml/badge.svg?branch=master) ![Docs](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/docs-check.yml/badge.svg?branch=master) ![License](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/license-check.yml/badge.svg?branch=master) ![Bundle](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/bundle-size.yml/badge.svg?branch=master) ![Health](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/health-check.yml/badge.svg?branch=master)
 
 ## 🌟 Overview
 
@@ -15,15 +15,18 @@ Unlike standard chatbots, it operates as a **Senior Data Scientist**:
 
 ---
 
-## 🔄 Evolution (v1.0 vs v2.0)
+## 🔄 Evolution (Legacy vs v2.2.0)
 
-| Feature | v1.0 (Legacy) | v2.0 (Local-Native) |
+| Feature | v1.0 (Legacy) | v2.2 (Local-Native) |
 |---------|---------------|-----------------------|
 | **Brain Link** | Required **Ollama** App Service | **Direct Integration** via Transformers |
 | **Model Size** | Standard FP16 (Heavy) | **4-Bit Quantization** (Laptop-Ready) |
 | **Logic** | Cloud/API Dependency Risk | **100% Offline** (Air-Gapped) |
 | **Setup** | Manual Model Pulling | Single-command `download_models.py` |
 | **Hardware** | High GPU/RAM Requirement | Supports **CPU Offloading** & Low VRAM |
+
+> [!NOTE]
+> **Next Release (v2.3.0)**: Integration of our custom **Wizard-Analyst-Instruct-500k** fine-tuned weights (Worker) currently in training.
 
 ---
 
