@@ -21,8 +21,8 @@ jobs:
           python-version: "3.11"
       - name: Install Safety
         run: pip install safety
-      - name: Run Safety Check
-        run: safety check -r requirements.txt
+      - name: Run Safety Scan
+        run: safety scan --file requirements.txt
 
   node-audit:
     name: Node.js Security Audit
