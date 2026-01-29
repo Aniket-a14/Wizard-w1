@@ -48,10 +48,28 @@ class DataAnalysisAgent:
         if self.local_generator is None:
             logger.info("Loading local model...", path=settings.MODEL_PATH)
             try:
-                from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+                from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+                import torch
+
+                # Use float16 for memory efficiency
+                dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+                quant_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=dtype,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                    llm_int8_enable_fp32_cpu_offload=True
+                )
 
                 tokenizer = AutoTokenizer.from_pretrained(settings.MODEL_PATH)
-                model = AutoModelForCausalLM.from_pretrained(settings.MODEL_PATH)
+                model = AutoModelForCausalLM.from_pretrained(
+                    settings.MODEL_PATH,
+                    quantization_config=quant_config,
+                    device_map="auto",
+                    low_cpu_mem_usage=True,
+                    offload_folder="offload"
+                )
                 self.local_generator = pipeline(
                     "text-generation", model=model, tokenizer=tokenizer
                 )

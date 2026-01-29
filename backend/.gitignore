@@ -125,3 +125,4 @@ fine_tuned_model/
 logs/
 
 dataset_generator.py
+models/

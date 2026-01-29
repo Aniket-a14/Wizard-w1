@@ -10,11 +10,11 @@ services:
       - ENV=${ENV:-prod}
       - MODEL_TYPE=${MODEL_TYPE:-hybrid}
       - MODEL_NAME=${MODEL_NAME:-deepseek-r1}
-      - MODEL_PATH=${MODEL_PATH:-./fine_tuned_model}
+      - MODEL_PATH=${MODEL_PATH:-./models/worker_base}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
-      - ./backend/fine_tuned_model:/app/fine_tuned_model
-      - ./backend:/app/backend:ro # Mount source code as read-only for production safety
+      - ./backend/models:/app/models
+      - ./backend:/app/backend:ro
     restart: always
 
   frontend:

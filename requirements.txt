@@ -21,3 +21,5 @@ pytest
 pytest-asyncio
 httpx
 tabulate
+bitsandbytes
+accelerate

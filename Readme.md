@@ -13,6 +13,20 @@ Unlike standard chatbots, it operates as a **Senior Data Scientist**:
 *   **Validates** assumptions (normality, outliers) automatically.
 *   **Refines** its strategies based on execution feedback.
 
+---
+
+## 🔄 Evolution (v1.0 vs v2.0)
+
+| Feature | v1.0 (Legacy) | v2.0 (Local-Native) |
+|---------|---------------|-----------------------|
+| **Brain Link** | Required **Ollama** App Service | **Direct Integration** via Transformers |
+| **Model Size** | Standard FP16 (Heavy) | **4-Bit Quantization** (Laptop-Ready) |
+| **Logic** | Cloud/API Dependency Risk | **100% Offline** (Air-Gapped) |
+| **Setup** | Manual Model Pulling | Single-command `download_models.py` |
+| **Hardware** | High GPU/RAM Requirement | Supports **CPU Offloading** & Low VRAM |
+
+---
+
 The system features a **modern, glassmorphic UI** (Next.js 16) backed by a **robust, scalable backend** (FastAPI) and is fully containerized for production.
 
 ---
@@ -45,8 +59,11 @@ The system features a **modern, glassmorphic UI** (Next.js 16) backed by a **rob
 | **Model** | Qwen2.5-Coder-1.5B (Fine-tuned via LoRA) |
 | **Data Engine** | Custom Dynamic Schema Engine (Stream-based generation) |
 
-> [!NOTE]
-> **Model Availability Disclaimer**: The fine-tuned weights for the 500k dataset are currently NOT bundled in the Docker image or GitHub Packages. Due to the massive dataset size, training is estimated to take ~6,640 hours on local hardware. Once training is finalized, the pre-trained weights will be integrated directly into the Docker packages for immediate use.
+> [!IMPORTANT]
+> **Model Training Status (January 2026)**:
+> *   **Manager Brain**: Done! Pulled from `deepseek-ai/DeepSeek-R1-Distill-Llama-8B`.
+> *   **Worker Brain (Fine-tuned)**: **[IN PROGRESS]**. We are currently training on the **500k Analyst Dataset**. Due to the massive scale, training is estimated to take significant time. 
+> *   **Current Action**: The `download_models.py` script currently pulls the high-performance **Qwen2.5-Coder Base** to ensure the agent is functional *today*. The custom "Wizard-Analyst" weights will be pushed to Hugging Face as a v2.1 update once the GPU cluster finishes the run.
 
 ---
 
@@ -60,7 +77,7 @@ The application is configured via **Environment Variables**. Create a `.env` fil
 | `ENV` | `dev` | Environment (`dev`, `prod`, `test`). |
 | `MODEL_TYPE` | `hybrid` | `ollama` (Local LLM), `local` (HuggingFace), or `hybrid`. |
 | `MODEL_NAME` | `deepseek-r1` | Name of the Ollama model to use. |
-| `MODEL_PATH` | `./fine_tuned_model` | Path to local fine-tuned weights. |
+| `MODEL_PATH` | `./models/worker_base` | Path to local native weights. |
 | `MAX_TOKENS` | `2000` | Max generation length for the LLM. |
 | `TEMPERATURE` | `0.7` | Creativity of the model (0.0 - 1.0). |
 
@@ -100,31 +117,20 @@ graph TD
 
 ## ⚡ Getting Started
 
-### 0. Prerequisites (DeepSeek R1)
+### Method 1: Docker (Recommended - Fast & Local)
 
-To enable the **Manager-Worker** architecture (where DeepSeek plans and your model codes), you must have Ollama running locally.
-
-1.  **Install Ollama**: Download from [ollama.com](https://ollama.com).
-2.  **Pull the Model**:
-    ```bash
-    ollama pull deepseek-r1
-    ```
-3.  **Verify**: Ensure Ollama is running (`http://localhost:11434`).
-
-### Method 1: Docker (Recommended)
-
-> **⚠️ Prerequisite**: You must **train the model** before starting the Docker container to ensure valid model artifacts are available locally. 
-> 
-> *Note: The GitHub packages (`ghcr.io`) do not yet contain the fine-tuned weights due to current training duration (~6,640 hours). These will be added to the official Docker distribution once complete.*
+You no longer need Ollama or manual training to get started. You can pull the "Base Brains" directly from Hugging Face.
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/Aniket-a14/Wizard-w1
 cd Wizard-w1
 
-# 2. Train the Model (Required)
+# 2. Download the Models (Native Brains)
+# This pulls DeepSeek-R1 (Manager) and Qwen2.5-Coder (Worker)
 cd backend
-python train.py 
+pip install -r requirements.txt
+python download_models.py 
 cd ..
 
 # 3. Start Services
@@ -133,7 +139,22 @@ docker-compose up --build
 *   **Frontend**: `http://localhost:3000`
 *   **Backend**: `http://localhost:8000/docs`
 
-### Method 2: Manual Development
+---
+
+### 📦 Distribution & Portability
+
+Wizard w1 is built for high-performance distribution. The ecosystem is split into three layers:
+
+1.  **Code (GitHub)**: Contains the orchestration logic, UI, and workflows.
+2.  **Brains (Hugging Face)**: Stores the heavy model weights (5GB - 16GB). Download them via `backend/download_models.py`.
+3.  **Containers (Docker)**: Provides a consistent environment. Large weights are mounted via **Volumes** to keep image sizes manageable.
+
+> [!TIP]
+> **To Share Your Own Work**: If you decide to fine-tune your own version, use `backend/push_to_hub.py` to sync your results to Hugging Face.
+
+---
+
+### Method 2: Manual Development (Legacy / Low Spec)
 
 **1. Backend Setup**
 ```bash

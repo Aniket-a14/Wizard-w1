@@ -17,12 +17,16 @@ ENV/
 backend/dataset/*.csv
 instruction_code_dataset.csv
 
-# Models & Weights
+# Models & Weights (Excluded from Git - Download Only)
+backend/models/
+backend/offload/
 backend/fine_tuned_model/
 backend/results/
 *.pt
 *.safetensors
 *.bin
+*.weights
+*.h5
 
 # Node.js
 frontend/node_modules/
@@ -31,7 +35,17 @@ frontend/out/
 frontend/build/
 .npm/
 
+# Training & Internal Development (Ignored for public release)
+backend/train.py
+backend/train_full.py
+backend/push_to_hub.py
 backend/dataset_generator.py
+backend/evaluate.py
+backend/dataset/
+backend/feedback_data.json
+backend/feedback/
+backend/logs/
+backend/data/
 
 # AI Tool Caches
 .gemini/

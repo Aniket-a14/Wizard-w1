@@ -12,8 +12,9 @@ class Settings(BaseSettings):
 
     # Model Configuration
     MODEL_TYPE: Literal["ollama", "local", "hybrid"] = "hybrid"
-    MODEL_NAME: str = "deepseek-r1"  # For Ollama
-    MODEL_PATH: str = "./fine_tuned_model"  # For Local
+    MODEL_NAME: str = "deepseek-r1"  # For Ollama (Deprecated/Fallback)
+    MODEL_PATH: str = "./models/worker_base"  # For Local Worker
+    MANAGER_MODEL_PATH: str = "./models/manager"  # For Local Manager (DeepSeek)
 
     @property
     def resolved_model_path(self) -> Path:
