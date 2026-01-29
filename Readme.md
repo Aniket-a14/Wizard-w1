@@ -45,6 +45,9 @@ The system features a **modern, glassmorphic UI** (Next.js 16) backed by a **rob
 | **Model** | Qwen2.5-Coder-1.5B (Fine-tuned via LoRA) |
 | **Data Engine** | Custom Dynamic Schema Engine (Stream-based generation) |
 
+> [!NOTE]
+> **Model Availability Disclaimer**: The fine-tuned weights for the 500k dataset are currently NOT bundled in the Docker image or GitHub Packages. Due to the massive dataset size, training is estimated to take ~6,640 hours on local hardware. Once training is finalized, the pre-trained weights will be integrated directly into the Docker packages for immediate use.
+
 ---
 
 ## ⚙️ Configuration
@@ -99,7 +102,9 @@ graph TD
 
 ### Method 1: Docker (Recommended)
 
-> **⚠️ Prerequisite**: You must **train the model** before starting the Docker container to ensure valid model artifacts are available.
+> **⚠️ Prerequisite**: You must **train the model** before starting the Docker container to ensure valid model artifacts are available locally. 
+> 
+> *Note: The GitHub packages (`ghcr.io`) do not yet contain the fine-tuned weights due to current training duration (~6,640 hours). These will be added to the official Docker distribution once complete.*
 
 ```bash
 # 1. Clone the repository
