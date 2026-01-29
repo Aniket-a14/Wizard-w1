@@ -100,4 +100,21 @@ def test_chat_without_upload():
 
     response = client.post("/chat", json={"message": "What is the mean of A?"})
     assert response.status_code == 412
-    assert response.json()["detail"] == "No dataset loaded."
+    assert response.json()["detail"] == [
+        {"loc": ["state"], "msg": "No dataset loaded.", "type": "state_error"}
+    ]
+
+def test_upload_invalid_file_type():
+    """Verify 422 error for non-CSV files."""
+    invalid_file = io.BytesIO(b"not a csv")
+    files = {"file": ("test.txt", invalid_file, "text/plain")}
+    response = client.post("/upload", files=files)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {
+            "loc": ["file"],
+            "msg": "Invalid file type. Only CSV allowed.",
+            "type": "value_error",
+        }
+    ]
