@@ -123,3 +123,5 @@ fine_tuned_model/
 *.log
 *.log.*
 logs/
+
+dataset_generator.py

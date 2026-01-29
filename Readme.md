@@ -20,7 +20,7 @@ The system features a **modern, glassmorphic UI** (Next.js 16) backed by a **rob
 ## 🚀 Key Features
 
 *   **🤖 Autonomous Agent**: Understands messy data and executes multi-step Python code (Pandas, Scikit-learn, Statsmodels).
-*   **📚 Wizard-Analyst-Instruct-500k**: Trained on a massive custom dataset of **500,000 instruction-code pairs** across 6 domains.
+*   **📚 [Wizard-Analyst-Instruct-500k](https://www.kaggle.com/datasets/aniketa14/wizard-analyst-instruct-500k)**: Trained on a massive custom dataset of **500,000 instruction-code pairs** across 6 domains (Dataset Generator excluded from repo to protect IP; data available on Kaggle).
 *   **🧠 Intelligent Memory**: Uses a RAG-lite "Knowledge Base" for dynamic few-shot prompting.
 *   **⚡ High-Performance UI**:
     *   **Next.js 16 (Turbopack)** & **TailwindCSS v4**.
@@ -89,7 +89,7 @@ graph TD
     end
     
     subgraph "Training Pipeline"
-        DG[Dataset Generator] -->|Create 500k Pairs| Train[Instruction Dataset]
+        Kaggle[(Kaggle Dataset)] -->|Download 500k Rows| Train[Instruction Dataset]
         Train -->|LoRA Fine-Tuning| Worker
     end
     
