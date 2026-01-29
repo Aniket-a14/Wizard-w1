@@ -34,6 +34,9 @@ async def log_requests(request: Request, call_next):
     )
     return response
 
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -43,30 +46,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Force all 422 validation errors to match our Message model."""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
+
 # Global State
 state = {"df": None}
 
-# Test Mode Initialization
-if settings.ENV == "test":
-    # Pre-load a dummy dataset for contract tests to exercise the full logic
-    state["df"] = pd.DataFrame({
-        "A": np.random.randn(10),
-        "B": np.random.randn(10)
-    })
-    logger.info("Test Mode: Mock dataset loaded.")
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="The analysis request from the user.")
 
+from typing import Any
+
 class Message(BaseModel):
-    detail: str
+    detail: list[dict]
 
 class ChatResponse(BaseModel):
     response: str
     code: str
     image: str | None = None
 
-@app.post("/upload", responses={415: {"model": Message}, 400: {"model": Message}})
+@app.post("/upload", responses={422: {"model": Message}, 400: {"model": Message}})
 async def upload_file(file: UploadFile = File(...)):
     try:
         # strict validation
@@ -91,12 +96,16 @@ async def upload_file(file: UploadFile = File(...)):
         logger.error("Upload failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/chat", response_model=ChatResponse, responses={412: {"model": Message}, 400: {"model": Message}})
+@app.post("/chat", response_model=ChatResponse, responses={412: {"model": Message}, 422: {"model": Message}, 400: {"model": Message}})
 async def chat(request: ChatRequest):
     if state["df"] is None:
-        raise HTTPException(status_code=412, detail="No dataset loaded.")
+        raise HTTPException(
+            status_code=412, 
+            detail=[{"loc": ["state"], "msg": "No dataset loaded.", "type": "state_error"}]
+        )
     
     try:
+
         # Use Class-based Agent
         result, code, image = science_agent.run(request.message, state["df"])
         return ChatResponse(response=result, code=code, image=image)

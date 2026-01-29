@@ -1,10 +1,11 @@
 name: Bundle Size Check
 
 on:
+  push:
+    branches: [ "master", "main" ]
   pull_request:
     branches: [ "master", "main" ]
-    paths:
-      - 'frontend/**'
+  workflow_dispatch:
 
 permissions:
   contents: read

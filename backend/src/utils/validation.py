@@ -4,10 +4,15 @@ from fastapi import UploadFile, HTTPException
 
 MAX_FILE_SIZE = 50 * 1024 * 1024 # 50MB
 
+from src.config import settings
+
 async def validate_csv(file: UploadFile) -> pd.DataFrame:
     # 1. Check Extension
     if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=415, detail="Invalid file type. Only CSV allowed.")
+        raise HTTPException(
+            status_code=422, 
+            detail=[{"loc": ["file"], "msg": "Invalid file type. Only CSV allowed.", "type": "value_error"}]
+        )
         
     # 2. Check Size (Streaming check would be better for massive files, but this is a start)
     # Getting size from spool isn't always reliable, relying on content read or headers
@@ -22,6 +27,7 @@ async def validate_csv(file: UploadFile) -> pd.DataFrame:
         raise HTTPException(status_code=400, detail=f"File too large. Max size is {MAX_FILE_SIZE/1024/1024}MB")
         
     try:
+
         content = await file.read()
         df = pd.read_csv(io.BytesIO(content))
         
@@ -34,5 +40,7 @@ async def validate_csv(file: UploadFile) -> pd.DataFrame:
         
         return df
         
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Malformed CSV: {str(e)}")

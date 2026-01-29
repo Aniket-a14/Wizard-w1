@@ -1,6 +1,8 @@
 name: Scheduled Health Check
 
 on:
+  push:
+    branches: [ "main","master" ]
   schedule:
     - cron: '0 */4 * * *' # Every 4 hours
   workflow_dispatch: # Allow manual triggering
