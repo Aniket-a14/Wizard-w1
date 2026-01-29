@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 # Ensure backend can import its modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from api import app
+from src.api.api import app
 
 client = TestClient(app)
 
@@ -83,7 +83,7 @@ def test_chat_without_upload():
     # 2. Explicitly clear state in this test logic via some hack or endpoint?
     # Better: just clear the state dict directly.
     
-    from api import state
+    from src.api.api import state
     state["df"] = None
     
     chat_payload = {"message": "hello"}

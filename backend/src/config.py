@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     MODEL_TYPE: Literal["ollama", "local", "hybrid"] = "hybrid"
     MODEL_NAME: str = "deepseek-r1" # For Ollama
     MODEL_PATH: str = "./fine_tuned_model" # For Local
+
+    @property
+    def resolved_model_path(self) -> Path:
+        """Resolve model path relative to BASE_DIR if not absolute."""
+        path = Path(self.MODEL_PATH)
+        if path.is_absolute():
+            return path
+        return self.BASE_DIR / path
     
     # Analysis Configuration
     MAX_TOKENS: int = 2000

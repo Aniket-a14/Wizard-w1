@@ -1,39 +1,48 @@
-import asyncio
 import sys
 import os
+import pandas as pd
+from pathlib import Path
 
 # Ensure backend directory is in python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from app.services.data_service import data_service
-from app.services.agent_service import agent_service
+# Modern Imports (Src Architecture)
+from src.core.agent.flow import science_agent
+from src.config import settings
 from feedback_store import FeedbackStore
-from agent_config import AGENT
 
-async def process_request(instruction, df):
-    return await agent_service.interpret_and_execute(instruction, df)
+def load_dataset_local(file_path: str) -> pd.DataFrame:
+    """Helper to load dataset locally for CLI."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+    df = pd.read_csv(file_path)
+    if df.empty:
+        raise ValueError("Dataset is empty")
+    return df
 
 def main():
     try:
-        print(f"\nHi! I'm {AGENT.NAME}, your data analysis assistant (CLI Mode).")
+        print(f"\nHi! I'm {settings.APP_NAME}, your data analysis assistant (CLI Mode).")
+        print(f"Environment: {settings.ENV}")
+        
         file_path = input("Enter dataset file path (CSV): ")
         
         try:
-            df = data_service.load_from_path(file_path)
+            df = load_dataset_local(file_path)
         except Exception as e:
             print(f"Error loading file: {e}")
             return
 
         feedback_store = FeedbackStore()
         
-        print(f"\n{AGENT.NAME}: Dataset loaded successfully!")
-        print(f"Shape of dataset: {df.shape}")
-        print("\nColumns in dataset:")
+        print(f"\nDataset loaded successfully!")
+        print(f"Shape: {df.shape}")
+        print("\nColumns:")
         print(df.columns.tolist())
         print("\nType 'help' for available commands or 'exit' to quit.")
         
         while True:
-            instruction = input(f"\n{AGENT.NAME}: What data analysis task can I help you with? ").strip()
+            instruction = input(f"\nBot: What data analysis task can I help you with? ").strip()
             if instruction.lower() == 'exit':
                 break
             elif instruction.lower() == 'help':
@@ -44,43 +53,48 @@ def main():
             
             print("\nProcessing your request...")
             
-            # Run async function in sync context for CLI
             try:
-                result, code, image = asyncio.run(process_request(instruction, df))
+                # Synchronous execution via Science Agent
+                result, code, image = science_agent.run(instruction, df)
+                
                 print("\nResult:", result)
                 if image:
                     print("(Chart generated and saved)")
+                
+                # Feedback Loop
+                while True:
+                    feedback = input("\nWas this result correct? (y/n): ").lower()
+                    if feedback in ['y', 'yes', 'n', 'no']:
+                        break
+                    print("Please enter 'y' or 'n'")
+                    
+                if feedback in ['y', 'yes']:
+                    example = {
+                        "task": instruction,
+                        "code": code
+                    }
+                    feedback_store.add_example(example)
+                    print("Great! Added to successful examples.")
+                else:
+                    correct_code = input("What would be the correct code? (press enter to skip): ")
+                    if correct_code.strip():
+                        correct_example = {
+                            "task": instruction,
+                            "code": correct_code
+                        }
+                        feedback_store.add_example(correct_example)
+                    print("Thank you for the feedback!")
+                    
             except Exception as e:
                 print(f"Error executing task: {e}")
                 continue
-            
-            while True:
-                feedback = input("\nWas this result correct? (y/n): ").lower()
-                if feedback in ['y', 'yes', 'n', 'no']:
-                    break
-                print("Please enter 'y' or 'n'")
-                
-            if feedback in ['y', 'yes']:
-                example = {
-                    "task": instruction,
-                    "code": code
-                }
-                feedback_store.add_example(example)
-                print("Great! Added to successful examples.")
-            else:
-                correct_code = input("What would be the correct code? (press enter to skip): ")
-                if correct_code.strip():
-                    correct_example = {
-                        "task": instruction,
-                        "code": correct_code
-                    }
-                    feedback_store.add_example(correct_example)
-                print("Thank you for the feedback!")
                 
     except KeyboardInterrupt:
         print("\nProgram terminated by user.")
     except Exception as e:
         print(f"\nAn error occurred: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
