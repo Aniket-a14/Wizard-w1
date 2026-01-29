@@ -19,7 +19,7 @@ def generate_system_context(df: pd.DataFrame) -> str:
 
     # Identify categorical columns and their unique values (limit to avoid token overflow)
     cat_summary = ""
-    for col in df.select_dtypes(include=["object", "category"]).columns:
+    for col in df.select_dtypes(include=["object", "category", "string"]).columns:
         unique_vals = df[col].unique()
         if len(unique_vals) < 20:  # Only show for low cardinality
             cat_summary += f"- {col}: {list(unique_vals)}\n"

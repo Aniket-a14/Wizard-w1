@@ -6,7 +6,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # Example: "Aniket-a14/wizard-worker-v1"
 MODELS = {
     "manager": os.getenv("MANAGER_MODEL_ID", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
-    "worker_base": os.getenv("WORKER_MODEL_ID", "Qwen/Qwen2.5-Coder-1.5B-Instruct")
+    "worker": os.getenv("WORKER_MODEL_ID", "Qwen/Qwen2.5-Coder-1.5B-Instruct")
 }
 # ---------------------
 

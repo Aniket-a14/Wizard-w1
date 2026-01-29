@@ -13,13 +13,23 @@ class Settings(BaseSettings):
     # Model Configuration
     MODEL_TYPE: Literal["ollama", "local", "hybrid"] = "hybrid"
     MODEL_NAME: str = "deepseek-r1"  # For Ollama (Deprecated/Fallback)
-    MODEL_PATH: str = "./models/worker_base"  # For Local Worker
-    MANAGER_MODEL_PATH: str = "./models/manager"  # For Local Manager (DeepSeek)
+    MODEL_PATH: str = "./models/worker"  # The slot for your Fine-tuned Worker
+    MANAGER_MODEL_PATH: str = "./models/manager"  # The slot for your Manager
+    OFFLOAD_FOLDER: str = "offload"
+    FEEDBACK_FILE: str = "feedback_data.json"
 
     @property
-    def resolved_model_path(self) -> Path:
-        """Resolve model path relative to BASE_DIR if not absolute."""
+    def resolved_worker_path(self) -> Path:
+        """Resolve worker path relative to BASE_DIR if not absolute."""
         path = Path(self.MODEL_PATH)
+        if path.is_absolute():
+            return path
+        return self.BASE_DIR / path
+
+    @property
+    def resolved_manager_path(self) -> Path:
+        """Resolve manager path relative to BASE_DIR if not absolute."""
+        path = Path(self.MANAGER_MODEL_PATH)
         if path.is_absolute():
             return path
         return self.BASE_DIR / path

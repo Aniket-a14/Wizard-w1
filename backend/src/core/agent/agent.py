@@ -62,13 +62,13 @@ class DataAnalysisAgent:
                     llm_int8_enable_fp32_cpu_offload=True
                 )
 
-                tokenizer = AutoTokenizer.from_pretrained(settings.MODEL_PATH)
+                tokenizer = AutoTokenizer.from_pretrained(settings.resolved_worker_path)
                 model = AutoModelForCausalLM.from_pretrained(
-                    settings.MODEL_PATH,
+                    settings.resolved_worker_path,
                     quantization_config=quant_config,
                     device_map="auto",
                     low_cpu_mem_usage=True,
-                    offload_folder="offload"
+                    offload_folder=settings.OFFLOAD_FOLDER
                 )
                 self.local_generator = pipeline(
                     "text-generation", model=model, tokenizer=tokenizer

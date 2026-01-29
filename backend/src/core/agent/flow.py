@@ -22,7 +22,7 @@ class ScientificAgent:
         if self.local_manager is None:
             # Only load if we are in a mode that supports/needs it
             # We assume 'hybrid' or 'local' wants to try local manager first
-            path = settings.MANAGER_MODEL_PATH
+            path = settings.resolved_manager_path
             import os
             if os.path.exists(path):
                 logger.info("Loading Local Manager Model...", path=path)
@@ -47,7 +47,7 @@ class ScientificAgent:
                         quantization_config=quant_config,
                         device_map="auto",
                         low_cpu_mem_usage=True,
-                        offload_folder="offload" # Folder for disk offload if needed
+                        offload_folder=settings.OFFLOAD_FOLDER # Folder for disk offload if needed
                     )
                     
                     self.local_manager = pipeline(

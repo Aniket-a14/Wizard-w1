@@ -80,7 +80,9 @@ The application is configured via **Environment Variables**. Create a `.env` fil
 | `ENV` | `dev` | Environment (`dev`, `prod`, `test`). |
 | `MODEL_TYPE` | `local` | `local` (Native Brain), `hybrid` (Ollama), or `ollama`. |
 | `MODEL_NAME` | `deepseek-r1` | Name of the Ollama model to use. |
-| `MODEL_PATH` | `./models/worker_base` | Path to local native weights. |
+| `MODEL_PATH` | `./models/worker` | Path to local weights (Your Fine-Tuned Brain). |
+| `MANAGER_MODEL_PATH` | `./models/manager` | Path to local native weights (Manager). |
+| `OFFLOAD_FOLDER` | `offload` | Directory for GPU memory disk offloading. |
 | `MAX_TOKENS` | `2000` | Max generation length for the LLM. |
 | `TEMPERATURE` | `0.7` | Creativity of the model (0.0 - 1.0). |
 
@@ -124,8 +126,9 @@ You no longer need Ollama or manual training to get started. You can pull the "B
 git clone https://github.com/Aniket-a14/Wizard-w1
 cd Wizard-w1
 
-# 2. Download the Models (Native Brains)
+# 2. Download the Models (The Wizard's Brains)
 # This pulls DeepSeek-R1 (Manager) and Qwen2.5-Coder (Worker)
+# Once you fine-tune your own, this script will still populate these slots.
 cd backend
 pip install -r requirements.txt
 python download_models.py 

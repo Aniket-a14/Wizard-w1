@@ -1,9 +1,12 @@
 import json
 
 
+from src.config import settings
+
+
 class FeedbackStore:
-    def __init__(self, filename="feedback_data.json"):
-        self.filename = filename
+    def __init__(self, filename=None):
+        self.filename = filename or settings.FEEDBACK_FILE
         self.feedback_data = self._load_feedback()
 
     def _load_feedback(self):
