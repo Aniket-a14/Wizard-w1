@@ -67,7 +67,7 @@ The application is configured via **Environment Variables**. Create a `.env` fil
 
 ```mermaid
 graph TD
-    User([User]) -->|Browser| FE[Frontend (Next.js)]
+    User([User]) -->|Browser| FE["Frontend (Next.js)"]
     
     subgraph "Docker Network"
         FE -->|/chat| API[Backend (FastAPI)]
@@ -76,7 +76,7 @@ graph TD
         
         subgraph "Backend Core"
             Agent -->|Retrieve Examples| KB[(Knowledge Base)]
-            Agent -->|Gen Code| LLM[Ollama (Qwen2.5)]
+            Agent -->|Gen Code| LLM["Ollama (Qwen2.5)"]
         end
         
         subgraph "Execution Sandbox"
