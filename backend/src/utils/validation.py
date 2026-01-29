@@ -7,7 +7,7 @@ MAX_FILE_SIZE = 50 * 1024 * 1024 # 50MB
 async def validate_csv(file: UploadFile) -> pd.DataFrame:
     # 1. Check Extension
     if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Invalid file type. Only CSV allowed.")
+        raise HTTPException(status_code=415, detail="Invalid file type. Only CSV allowed.")
         
     # 2. Check Size (Streaming check would be better for massive files, but this is a start)
     # Getting size from spool isn't always reliable, relying on content read or headers

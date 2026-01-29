@@ -86,8 +86,6 @@ def test_chat_without_upload():
     from src.api.api import state
     state["df"] = None
     
-    chat_payload = {"message": "hello"}
-    chat_response = client.post("/chat", json=chat_payload)
-    
-    assert chat_response.status_code == 400
-    assert "No dataset loaded" in chat_response.json()['detail']
+    response = client.post("/chat", json={"message": "What is the mean of A?"})
+    assert response.status_code == 412
+    assert response.json()["detail"] == "No dataset loaded."

@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from pathlib import Path
 from typing import Literal
@@ -30,8 +30,7 @@ class Settings(BaseSettings):
     DATA_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "data")
     LOG_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "logs")
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 settings = Settings()
 

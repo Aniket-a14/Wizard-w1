@@ -1,13 +1,17 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import time
+import numpy as np
+import pandas as pd
+
 
 # Modular Imports
 from src.core.agent.flow import science_agent
 from src.utils.validation import validate_csv
 from src.utils.logging import configure_logger, logger
 from src.core.prompts import generate_system_context
+from src.config import settings
 
 # Initialize Logging
 configure_logger()
@@ -39,11 +43,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global State (Ideally this moves to Redis/Session in Phase 5)
+# Global State
 state = {"df": None}
 
+# Test Mode Initialization
+if settings.ENV == "test":
+    # Pre-load a dummy dataset for contract tests to exercise the full logic
+    state["df"] = pd.DataFrame({
+        "A": np.random.randn(10),
+        "B": np.random.randn(10)
+    })
+    logger.info("Test Mode: Mock dataset loaded.")
+
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=2000, description="The analysis request from the user.")
 
 class Message(BaseModel):
     detail: str
@@ -53,7 +66,7 @@ class ChatResponse(BaseModel):
     code: str
     image: str | None = None
 
-@app.post("/upload", responses={400: {"model": Message}})
+@app.post("/upload", responses={415: {"model": Message}, 400: {"model": Message}})
 async def upload_file(file: UploadFile = File(...)):
     try:
         # strict validation
@@ -78,10 +91,10 @@ async def upload_file(file: UploadFile = File(...)):
         logger.error("Upload failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/chat", response_model=ChatResponse, responses={400: {"model": Message}})
+@app.post("/chat", response_model=ChatResponse, responses={412: {"model": Message}, 400: {"model": Message}})
 async def chat(request: ChatRequest):
     if state["df"] is None:
-        raise HTTPException(status_code=400, detail="No dataset loaded.")
+        raise HTTPException(status_code=412, detail="No dataset loaded.")
     
     try:
         # Use Class-based Agent
