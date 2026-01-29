@@ -92,23 +92,23 @@ The application is configured via **Environment Variables**. Create a `.env` fil
 graph TD
     User([User]) -->|Browser| FE["Frontend (Next.js)"]
     
-    subgraph "Docker Network"
+    subgraph "Docker Hub-Ready Platform"
         FE -->|/chat| API["Backend (FastAPI)"]
         
-        API -->|Plan Analysis| Agent[Scientific Agent]
-        
-        subgraph "Hybrid Architecture (Manager-Worker)"
-            Agent -->|1. Reason & Plan| BigBrain["Manager: DeepSeek R1"]
-            BigBrain -->|Approved Plan| Worker["Worker: Fine-Tuned Model"]
+        subgraph "Local Native Architecture (v2.2)"
+            API -->|Orchestrate| SA[Scientific Agent]
+            SA -->|1. Reason & Plan| Manager["Manager: DeepSeek-R1 (8B)"]
+            Manager -->|Augmented Instruction| Worker["Worker: Qwen2.5-Coder (1.5B)"]
             Worker -->|2. Generate Code| Code[Python Runtime]
         end
         
-        subgraph "Execution Sandbox"
+        subgraph "Secure Execution Sandbox"
             Code -->|Validate| Stats[Statistical Toolkit]
+            Code -->|Analyze| DF[(Pandas/Scipy)]
         end
     end
     
-    Code -->|JSON/Image| FE
+    Code -->|JSON/Image/Plot| FE
 ```
 
 ---
