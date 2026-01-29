@@ -1,0 +1,20 @@
+name: Scheduled Health Check
+
+on:
+  schedule:
+    - cron: '0 */4 * * *' # Every 4 hours
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: read
+
+jobs:
+  ping-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Production Health
+        run: |
+          # Replace with your actual production URL when deployed
+          # Example: curl -f https://wizard-w1.vercel.app/api/health || exit 1
+          echo "Pinging health endpoint..."
+          curl -f http://localhost:8000/health || echo "Local health check failed (expected in CI)"

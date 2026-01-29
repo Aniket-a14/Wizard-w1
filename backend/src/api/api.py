@@ -45,12 +45,15 @@ state = {"df": None}
 class ChatRequest(BaseModel):
     message: str
 
+class Message(BaseModel):
+    detail: str
+
 class ChatResponse(BaseModel):
     response: str
     code: str
     image: str | None = None
 
-@app.post("/upload")
+@app.post("/upload", responses={400: {"model": Message}})
 async def upload_file(file: UploadFile = File(...)):
     try:
         # strict validation
@@ -75,7 +78,7 @@ async def upload_file(file: UploadFile = File(...)):
         logger.error("Upload failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, responses={400: {"model": Message}})
 async def chat(request: ChatRequest):
     if state["df"] is None:
         raise HTTPException(status_code=400, detail="No dataset loaded.")
