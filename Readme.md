@@ -247,4 +247,4 @@ Wizard-w1/
 ```
 
 ## 📜 License
-Released under the BSD 3-Clause License. Redistribution and use are permitted under the terms described in the LICENSE file.
+Released under the BSD 3-Clause License. Redistribution and use are permitted under the terms described in the [LICENSE](https://github.com/Aniket-a14/Wizard-w1?tab=BSD-3-Clause-1-ov-file) file.
