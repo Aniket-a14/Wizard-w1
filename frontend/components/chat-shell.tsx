@@ -48,15 +48,8 @@ export function ChatShell() {
           setIsFileUploaded(true)
         }
       } else {
-        // Initial welcome message for accurate workflow
-        setMessages([
-          {
-            id: generateId(),
-            role: "assistant",
-            content: "System initialized. Please upload a dataset to begin analysis.",
-            createdAt: new Date(),
-          }
-        ])
+        // Allow empty state to show the intro Orb animation
+        setMessages([])
       }
     } catch (e) {
       console.error("Failed to load from localStorage:", e)
@@ -205,16 +198,23 @@ export function ChatShell() {
     }
   }, [messages, sendMessage])
 
+  const playClick = useCallback(() => {
+    const audio = new Audio("/sound/click.mp3")
+    audio.volume = 0.5
+    audio.play().catch(() => { })
+  }, [])
+
   const stopStreaming = useCallback(() => {
     // Abort logic removed as we are not streaming anymore
   }, [])
 
   const clearChat = useCallback(() => {
+    playClick()
     setMessages([])
     setError(null)
     setIsFileUploaded(false)
     localStorage.removeItem(STORAGE_KEY)
-  }, [])
+  }, [playClick])
 
   return (
     <div

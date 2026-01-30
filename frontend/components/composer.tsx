@@ -37,15 +37,22 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
     }
   }, [])
 
+  const playClick = useCallback(() => {
+    const audio = new Audio("/sound/click.mp3")
+    audio.volume = 0.5
+    audio.play().catch(() => { }) // Ignore errors if blocked
+  }, [])
+
   const handleSend = useCallback(() => {
     if (!value.trim() || isStreaming || disabled || !isReady) return
 
+    playClick()
     onSend(value)
     setValue("")
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
-  }, [value, isStreaming, disabled, onSend, isReady])
+  }, [value, isStreaming, disabled, onSend, isReady, playClick])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -60,14 +67,17 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0]
-      if (file && file.name.endsWith(".csv")) {
-        onUpload(file)
-      } else if (file) {
-        alert("Please upload a CSV file")
+      if (file) {
+        if (file.name.endsWith(".csv")) {
+          playClick()
+          onUpload(file)
+        } else {
+          alert("Please upload a CSV file")
+        }
       }
       e.target.value = ""
     },
-    [onUpload],
+    [onUpload, playClick],
   )
 
   return (

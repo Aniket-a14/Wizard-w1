@@ -16,12 +16,15 @@ interface MessageListProps {
   isLoaded: boolean // Added isLoaded prop to know when localStorage is loaded
 }
 
+const LAUNCH_SOUND_URL = "/sound/startup.mp3"
+
 export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const rafRef = useRef<number | null>(null)
   const [hasAnimated, setHasAnimated] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const lastScrollRef = useRef<number>(0)
   const hasPlayedIntroRef = useRef(false) // Track if intro has played
 
@@ -32,10 +35,24 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }:
     if (messages.length === 0 && !hasPlayedIntroRef.current) {
       setHasAnimated(true)
       hasPlayedIntroRef.current = true
+
+      audioRef.current = new Audio(LAUNCH_SOUND_URL)
+      audioRef.current.volume = 0.5
+      audioRef.current.play().catch((err) => {
+        // Ignore autoplay errors - browser may block without user interaction
+        console.warn("Startup sound blocked:", err)
+      })
     } else if (messages.length > 0) {
       // Skip animation if messages exist
       setHasAnimated(false)
       hasPlayedIntroRef.current = true
+    }
+
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
     }
   }, [isLoaded, messages.length])
 
