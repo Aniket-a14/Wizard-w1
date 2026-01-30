@@ -23,3 +23,4 @@ httpx
 tabulate
 bitsandbytes
 accelerate
+pyarrow
