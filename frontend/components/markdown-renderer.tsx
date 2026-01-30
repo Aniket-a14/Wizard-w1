@@ -75,7 +75,7 @@ export function MarkdownRenderer({ content, className, isStreaming = false }: Ma
       }
 
       // Check for links
-      const linkMatch = remaining.match(/^\[([^\]]+)\]\(([^)]+))/)
+      const linkMatch = remaining.match(/^\[([^\]]+)\]\(([^)]+)\)/)
       if (linkMatch) {
         elements.push(
           <a
@@ -162,7 +162,7 @@ export function MarkdownRenderer({ content, className, isStreaming = false }: Ma
       }
 
       // Check for links
-      const linkMatch = remaining.match(/^\[([^\]]+)\]\(([^)]+))/)
+      const linkMatch = remaining.match(/^\[([^\]]+)\]\(([^)]+)\)/)
       if (linkMatch) {
         elements.push(
           <a
