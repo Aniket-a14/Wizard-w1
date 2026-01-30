@@ -47,6 +47,7 @@ backend/feedback_data.json
 backend/feedback/
 backend/logs/
 backend/data/
+backend/train_chunked.py
 
 # AI Tool Caches
 .gemini/
