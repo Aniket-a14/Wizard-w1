@@ -244,7 +244,8 @@ Wizard-w1/
 │   ├── app/                # App Router (Dashboard, Landing)
 │   ├── components/         # Reusable UI (Chat, Visualizer)
 │   ├── public/             # Static Assets
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── README.md           # 🎨 Dedicated Frontend Documentation
 ├── docker-compose.yml      # Orchestration Config
 └── README.md
 ```
