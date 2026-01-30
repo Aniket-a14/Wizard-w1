@@ -6,22 +6,20 @@ WORKDIR /app
 
 # Environment Variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    ENV=prod
+  PYTHONUNBUFFERED=1 \
+  ENV=prod
 
 # Install system dependencies (for matplotlib/scipy if needed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+  build-essential \
+  && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code (Src Layout)
-COPY backend/src ./src
-COPY backend/main.py . 
-# Note: Adjust paths based on actual root. Assuming build context is root.
+# Copy application code
+COPY backend/ . 
 
 # Create non-root user
 RUN adduser --disabled-password --gecos '' appuser

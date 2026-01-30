@@ -1,41 +1,68 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Python
+__pycache__/
+*.py[cod]
+*.so
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
 
-# testing
-/coverage
+# VS Code
+.vscode/
 
-# next.js
-/.next/
-/out/
+# Datasets (Large files)
+backend/dataset/*.csv
+instruction_code_dataset.csv
 
-# production
-/build
+# Models & Weights (Excluded from Git - Download Only)
+backend/models/
+backend/offload/
+backend/fine_tuned_model/
+backend/results/
+*.pt
+*.safetensors
+*.bin
+*.weights
+*.h5
 
-# misc
-.DS_Store
-*.pem
+# Node.js
+node_modules/
+.next/
+out/
+build/
+.npm/
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
+# Training & Internal Development (Ignored for public release)
+backend/train.py
+backend/train_full.py
+backend/push_to_hub.py
+backend/dataset_generator.py
+backend/evaluate.py
+backend/dataset/
+backend/prompts/knowledge_base.json
+backend/feedback_data.json
+backend/feedback/
+backend/logs/
+backend/data/
 
-# env files (can opt-in for committing if needed)
-.env*
+# AI Tool Caches
+.gemini/
+.claude/
+.agents/
 
-# vercel
-.vercel
+# Testing & Quality Checking
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# General Logs & Results
+logs/
+results/
+data/
+*.log
+

@@ -1,100 +1,578 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
-  
-  --card: 224 71% 4%;
-  --card-foreground: 213 31% 91%;
- 
-  --popover: 224 71% 4%;
-  --popover-foreground: 215 20.2% 65.1%;
- 
-  --primary: 262 83% 58%;
-  --primary-foreground: 210 40% 98%;
- 
-  --secondary: 217.2 32.6% 17.5%;
-  --secondary-foreground: 210 40% 98%;
- 
-  --muted: 217.2 32.6% 17.5%;
-  --muted-foreground: 215 20.2% 65.1%;
- 
-  --accent: 199 89% 48%; /* Cyan */
-  --accent-foreground: 210 40% 98%;
- 
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 210 40% 98%;
- 
-  --border: 217.2 32.6% 17.5%;
-  --input: 217.2 32.6% 17.5%;
-  --ring: 262 83% 58%;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
 }
 
 @theme inline {
-  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-  --font-heading: var(--font-outfit), ui-sans-serif, system-ui;
-
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
+  --font-sans: "Geist", "Geist Fallback";
+  --font-mono: "Geist Mono", "Geist Mono Fallback";
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }
 
-body {
-  background: radial-gradient(circle at 10% 20%, rgb(18, 22, 40) 0%, rgb(5, 5, 10) 90.2%);
-  color: var(--foreground);
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
 }
 
-/* Glassmorphism Utilities */
-.glass-panel {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+/* Replace gray gradient with colorful animated gradient for AI streaming responses */
+.gradient-text-animated {
+  background: linear-gradient(
+    45deg,
+    rgba(59, 130, 246, 1) 0% /* Blue */,
+    rgba(139, 92, 246, 1) 25% /* Violet */,
+    rgba(6, 182, 212, 1) 50% /* Cyan */,
+    rgba(245, 158, 11, 1) 75% /* Orange */,
+    rgba(59, 130, 246, 1) 100% /* Back to blue */
+  );
+  background-size: 300% 300%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-shift 2s ease infinite;
 }
 
-.glass-card {
-  background: rgba(30, 41, 59, 0.4);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+/* Add analysis-word-gradient alias for the colorful gradient */
+.analysis-word-gradient {
+  background: linear-gradient(
+    45deg,
+    rgba(59, 130, 246, 1) 0% /* Blue */,
+    rgba(139, 92, 246, 1) 25% /* Violet */,
+    rgba(6, 182, 212, 1) 50% /* Cyan */,
+    rgba(245, 158, 11, 1) 75% /* Orange */,
+    rgba(59, 130, 246, 1) 100% /* Back to blue */
+  );
+  background-size: 300% 300%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-shift 2s ease infinite;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: rgba(0,0,0,0.1); 
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1); 
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2); 
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
 }
 
-/* Typography */
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-heading);
+/* Add progressive blur reveal animation for streaming text */
+@keyframes blur-reveal {
+  0% {
+    filter: blur(8px);
+    opacity: 0;
+  }
+  100% {
+    filter: blur(0px);
+    opacity: 1;
+  }
 }
 
-.text-glow {
-  text-shadow: 0 0 20px rgba(124, 58, 237, 0.5); /* Violet Glow */
+.streaming-word {
+  display: inline;
+  animation: blur-reveal 0.4s ease-out forwards;
+}
+
+/* Add user message slide-up animation */
+@keyframes slide-up-bounce {
+  0% {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  60% {
+    transform: translateY(-4px);
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.user-message-enter {
+  animation: slide-up-bounce 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Add ripple wave animation with 3 concentric circles */
+@keyframes ripple-wave {
+  0% {
+    transform: translate(-50%, -50%) scale(0.8);
+    opacity: 0.6;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.5);
+    opacity: 0;
+  }
+}
+
+/* Add bounce animation for uploaded image */
+@keyframes image-bounce {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.image-bounce {
+  animation: image-bounce 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* More dynamic orb animations with faster speeds, rotation, and more varied paths */
+@keyframes orb-float-1 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  10% {
+    transform: translate(6px, -4px) scale(1.15);
+  }
+  25% {
+    transform: translate(-3px, 5px) scale(0.9) rotate(5deg);
+  }
+  40% {
+    transform: translate(8px, 2px) scale(1.1);
+  }
+  55% {
+    transform: translate(-5px, -6px) scale(0.85) rotate(-3deg);
+  }
+  70% {
+    transform: translate(4px, 7px) scale(1.2);
+  }
+  85% {
+    transform: translate(-6px, -2px) scale(0.95) rotate(2deg);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes orb-float-2 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  15% {
+    transform: translate(-7px, 5px) scale(1.2) rotate(-4deg);
+  }
+  30% {
+    transform: translate(5px, -6px) scale(0.85);
+  }
+  45% {
+    transform: translate(-4px, -3px) scale(1.15) rotate(6deg);
+  }
+  60% {
+    transform: translate(8px, 4px) scale(0.9);
+  }
+  75% {
+    transform: translate(-2px, 7px) scale(1.1) rotate(-2deg);
+  }
+  90% {
+    transform: translate(6px, -5px) scale(0.95);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes orb-float-3 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  12% {
+    transform: translate(5px, 8px) scale(0.88) rotate(3deg);
+  }
+  28% {
+    transform: translate(-8px, -3px) scale(1.18);
+  }
+  42% {
+    transform: translate(3px, -7px) scale(0.92) rotate(-5deg);
+  }
+  58% {
+    transform: translate(-6px, 5px) scale(1.12);
+  }
+  72% {
+    transform: translate(7px, -2px) scale(0.86) rotate(4deg);
+  }
+  88% {
+    transform: translate(-4px, 6px) scale(1.08);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes orb-float-4 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  20% {
+    transform: translate(-5px, -7px) scale(1.25) rotate(-6deg);
+  }
+  40% {
+    transform: translate(7px, 4px) scale(0.8);
+  }
+  60% {
+    transform: translate(-3px, 8px) scale(1.15) rotate(5deg);
+  }
+  80% {
+    transform: translate(6px, -4px) scale(0.9) rotate(-3deg);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+}
+
+/* Faster animation speeds for more dynamic movement */
+.orb-circle-1 {
+  animation: orb-float-1 3s ease-in-out infinite;
+}
+
+.orb-circle-2 {
+  animation: orb-float-2 3.5s ease-in-out infinite;
+}
+
+.orb-circle-3 {
+  animation: orb-float-3 4s ease-in-out infinite;
+}
+
+.orb-circle-4 {
+  animation: orb-float-4 2.5s ease-in-out infinite;
+}
+
+/* Added intro animation for orb - comes from top, starts at 200% with blur and 0 opacity */
+@keyframes orb-intro {
+  0% {
+    /* Increased starting scale from 2 to 4 (200% larger) */
+    transform: translateY(-100px) scale(4);
+    filter: blur(30px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    filter: blur(0px);
+    opacity: 1;
+  }
+}
+
+/* Increased animation duration to 4s */
+.orb-intro {
+  animation: orb-intro 4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+}
+
+/* Added intro animation for composer - slides up from bottom */
+@keyframes composer-intro {
+  0% {
+    transform: translateY(100px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Increased animation duration to 4s with 1s delay */
+.composer-intro {
+  animation: composer-intro 4s cubic-bezier(0.16, 1, 0.3, 1) 1s forwards;
+  opacity: 0;
+}
+
+/* Added hue rotation animation for orb background */
+@keyframes orb-hue-rotate {
+  0% {
+    filter: hue-rotate(0deg);
+  }
+  25% {
+    filter: hue-rotate(45deg);
+  }
+  50% {
+    filter: hue-rotate(90deg);
+  }
+  75% {
+    filter: hue-rotate(45deg);
+  }
+  100% {
+    filter: hue-rotate(0deg);
+  }
+}
+
+/* Added separate hue rotation animation for circles that includes blur */
+@keyframes orb-hue-rotate-blur {
+  0% {
+    filter: blur(var(--orb-blur, 6px)) hue-rotate(0deg);
+  }
+  25% {
+    filter: blur(var(--orb-blur, 6px)) hue-rotate(45deg);
+  }
+  50% {
+    filter: blur(var(--orb-blur, 6px)) hue-rotate(90deg);
+  }
+  75% {
+    filter: blur(var(--orb-blur, 6px)) hue-rotate(45deg);
+  }
+  100% {
+    filter: blur(var(--orb-blur, 6px)) hue-rotate(0deg);
+  }
+}
+
+/* Added orbital rotation animations - circles rotate around the center */
+@keyframes orb-orbit-1 {
+  0% {
+    transform: rotate(0deg) translateX(25%) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: rotate(90deg) translateX(30%) rotate(-90deg) scale(1.15);
+  }
+  50% {
+    transform: rotate(180deg) translateX(25%) rotate(-180deg) scale(0.9);
+  }
+  75% {
+    transform: rotate(270deg) translateX(30%) rotate(-270deg) scale(1.1);
+  }
+  100% {
+    transform: rotate(360deg) translateX(25%) rotate(-360deg) scale(1);
+  }
+}
+
+@keyframes orb-orbit-2 {
+  0% {
+    transform: rotate(90deg) translateX(20%) rotate(-90deg) scale(1);
+  }
+  25% {
+    transform: rotate(180deg) translateX(25%) rotate(-180deg) scale(0.85);
+  }
+  50% {
+    transform: rotate(270deg) translateX(20%) rotate(-270deg) scale(1.2);
+  }
+  75% {
+    transform: rotate(360deg) translateX(25%) rotate(-360deg) scale(0.95);
+  }
+  100% {
+    transform: rotate(450deg) translateX(20%) rotate(-450deg) scale(1);
+  }
+}
+
+@keyframes orb-orbit-3 {
+  0% {
+    transform: rotate(180deg) translateX(30%) rotate(-180deg) scale(1);
+  }
+  25% {
+    transform: rotate(270deg) translateX(35%) rotate(-270deg) scale(1.1);
+  }
+  50% {
+    transform: rotate(360deg) translateX(30%) rotate(-360deg) scale(0.85);
+  }
+  75% {
+    transform: rotate(450deg) translateX(35%) rotate(-450deg) scale(1.15);
+  }
+  100% {
+    transform: rotate(540deg) translateX(30%) rotate(-540deg) scale(1);
+  }
+}
+
+@keyframes orb-orbit-4 {
+  0% {
+    transform: rotate(270deg) translateX(15%) rotate(-270deg) scale(1);
+  }
+  25% {
+    transform: rotate(360deg) translateX(20%) rotate(-360deg) scale(1.25);
+  }
+  50% {
+    transform: rotate(450deg) translateX(15%) rotate(-450deg) scale(0.8);
+  }
+  75% {
+    transform: rotate(540deg) translateX(20%) rotate(-540deg) scale(1.1);
+  }
+  100% {
+    transform: rotate(630deg) translateX(15%) rotate(-630deg) scale(1);
+  }
+}
+
+@keyframes orb-orbit-5 {
+  0% {
+    transform: rotate(45deg) translateX(22%) rotate(-45deg) scale(1);
+  }
+  25% {
+    transform: rotate(135deg) translateX(28%) rotate(-135deg) scale(0.9);
+  }
+  50% {
+    transform: rotate(225deg) translateX(22%) rotate(-225deg) scale(1.15);
+  }
+  75% {
+    transform: rotate(315deg) translateX(28%) rotate(-315deg) scale(0.95);
+  }
+  100% {
+    transform: rotate(405deg) translateX(22%) rotate(-405deg) scale(1);
+  }
+}
+
+/* Updated circle classes to use orbital animations */
+.orb-circle-1 {
+  animation: orb-orbit-1 6s ease-in-out infinite;
+}
+
+.orb-circle-2 {
+  animation: orb-orbit-2 5s ease-in-out infinite;
+}
+
+.orb-circle-3 {
+  animation: orb-orbit-3 7s ease-in-out infinite;
+}
+
+.orb-circle-4 {
+  animation: orb-orbit-4 4s ease-in-out infinite;
+}
+
+.orb-circle-5 {
+  animation: orb-orbit-5 5.5s ease-in-out infinite;
+}
+
+/* Added text intro blur animation for title/subtitle */
+@keyframes text-blur-intro {
+  0% {
+    filter: blur(12px);
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    filter: blur(0px);
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.text-blur-intro {
+  animation: text-blur-intro 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+}
+
+.text-blur-intro-delay {
+  animation: text-blur-intro 1.5s cubic-bezier(0.16, 1, 0.3, 1) 0.3s forwards;
+  opacity: 0;
+}
+
+::-webkit-scrollbar{
+  display: none;
 }
