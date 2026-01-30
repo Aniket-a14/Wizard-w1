@@ -30,7 +30,6 @@ Note: For most GRPO use cases, the TRL maintained script is recommended:
     https://raw.githubusercontent.com/huggingface/trl/main/examples/scripts/grpo.py
 """
 
-import trackio
 from datasets import load_dataset
 from trl import GRPOTrainer, GRPOConfig
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { BarChart2, Database, History, Home, Settings, Terminal } from "lucide-react";
+import { Database, History, Home, Settings, Terminal } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 

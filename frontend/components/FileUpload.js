@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, Loader2 } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function FileUpload({ onUploadSuccess }) {

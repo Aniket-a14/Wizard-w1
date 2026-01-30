@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowRight, BarChart3, BrainCircuit, Terminal, Zap } from "lucide-react";
+import { ArrowRight, BarChart3, BrainCircuit, Terminal } from "lucide-react";
 import Link from "next/link";
 
 export default function LandingPage() {

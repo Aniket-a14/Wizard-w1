@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowUp, Play, Sparkles, Terminal } from "lucide-react";
+import { ArrowUp, Sparkles, Terminal } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
 export default function ChatInterface({ messages = [], onSendMessage, isProcessing }) {
