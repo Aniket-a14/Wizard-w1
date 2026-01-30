@@ -42,6 +42,7 @@ backend/push_to_hub.py
 backend/dataset_generator.py
 backend/evaluate.py
 backend/dataset/
+backend/prompts/knowledge_base.json
 backend/feedback_data.json
 backend/feedback/
 backend/logs/
