@@ -45,6 +45,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }:
     const container = containerRef.current
     container.scrollTop = container.scrollHeight
     setAutoScroll(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length])
 
   useEffect(() => {

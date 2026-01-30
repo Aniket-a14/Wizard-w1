@@ -24,6 +24,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
 
   useEffect(() => {
     // Trigger intro animation after mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     setHasAnimated(true)
   }, [])
 
