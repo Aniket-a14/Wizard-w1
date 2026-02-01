@@ -12,7 +12,6 @@ interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, className, isStreaming = false }: MarkdownRendererProps) {
-  const renderedContentRef = useRef("")
   const [staticContent, setStaticContent] = useState("")
   const [animatingContent, setAnimatingContent] = useState("")
 
