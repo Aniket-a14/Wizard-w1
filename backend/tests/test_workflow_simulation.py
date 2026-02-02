@@ -63,6 +63,8 @@ def test_upload_and_chat_flow(sample_csv):
             "Plot generated.",
             "df['price'].plot()",
             "base64image...",
+            "Thinking process...",
+            "completed"
         )
 
         chat_payload = {
