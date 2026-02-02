@@ -14,7 +14,7 @@ from typing import Optional, Tuple
 
 from ...config import settings
 from ...utils.logging import logger
-from ..prompts import create_prompt, create_simple_prompt
+from ..prompts import create_prompt
 from ..tools.stats import StatisticalToolkit
 
 
