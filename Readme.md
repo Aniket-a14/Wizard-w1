@@ -23,7 +23,8 @@ Unlike standard chatbots, it operates as a **Senior Data Scientist**:
 | **Model Size** | Standard FP16 (Heavy) | **4-Bit Quantization** (Laptop-Ready) |
 | **Logic** | Cloud/API Dependency Risk | **100% Offline** (Air-Gapped) |
 | **Setup** | Manual Model Pulling | Single-command `download_models.py` |
-| **Hardware** | High GPU/RAM Requirement | Supports **CPU Offloading** & Low VRAM |
+| **Hardware** | High GPU/RAM Requirement | Supports **CPU Offloading**, **Ollama Turbo**, & Low VRAM |
+| **OS Support** | Linux/Mac Preferred | **Windows Native Support** (with Auto-Fallback) |
 
 > [!NOTE]
 > **Next Release (v2.3.0)**: Integration of our custom **Wizard-Analyst-Instruct-500k** fine-tuned weights (Worker) currently in training.
@@ -46,6 +47,8 @@ The system features a **modern, glassmorphic UI** (Next.js 16) backed by a **rob
 *   **🛡️ Secure Execution**: AST-based code validation and "Silent Execution" mode in a secure sandbox.
 *   **🧠 Advanced Cognition**:
     *   **Planning & Critique Loop**: Formulates a statistical plan before execution.
+    *   **Thinking UI**: Visualizes the agent's thought process (e.g., `<thought>Analysis...</thought>`) in real-time.
+    *   **Planning vs Fast Mode**: Toggle between deep reasoning (Slow/Accurate) and rapid execution (Fast/Reactive).
     *   **Automated Sanity Checks**: Automatically detects Normality (Shapiro-Wilk) and Outliers (IQR).
     *   **Self-Correction**: Analyzes tracebacks to fix code errors autonomously.
 
@@ -78,7 +81,7 @@ The application is configured via **Environment Variables**. Create a `.env` fil
 |----------|---------|-------------|
 | `APP_NAME` | `Wizard AI Agent` | Name of the application. |
 | `ENV` | `dev` | Environment (`dev`, `prod`, `test`). |
-| `MODEL_TYPE` | `local` | `local` (Native Brain), `hybrid` (Ollama), or `ollama`. |
+| `MODEL_TYPE` | `hybrid` | `local` (Native), `ollama` (Turbo Speed), or `hybrid` (Best of Both). |
 | `MODEL_NAME` | `deepseek-r1` | Name of the Ollama model to use. |
 | `MODEL_PATH` | `./models/worker` | Path to local weights (Your Fine-Tuned Brain). |
 | `MANAGER_MODEL_PATH` | `./models/manager` | Path to local native weights (Manager). |
@@ -139,6 +142,16 @@ docker-compose up --build
 ```
 *   **Frontend**: `http://localhost:3000`
 *   **Backend**: `http://localhost:8000`
+
+---
+
+## 🖥️ Windows Support & Troubleshooting
+
+> [!TIP]
+> **Ollama Turbo Mode**: If the local model is too slow (CPU offloading), verify you have [Ollama](https://ollama.com) installed and run `ollama pull deepseek-r1`. Then set `MODEL_TYPE=ollama` in `.env` for **10x speed**.
+
+*   **BitsAndBytes Fallback**: On Windows, 4-bit quantization often fails. We have added an **auto-fallback** mechanism that switches to standard 16-bit caching if this happens.
+*   **Session Persistence**: Chat history is stored in `sessionStorage`. It persists on refresh but clears when you close the tab to prevent "412 Precondition" desync errors.
 
 ---
 

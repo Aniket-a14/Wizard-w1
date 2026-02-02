@@ -89,6 +89,12 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
               </div>
             ) : (
               <div className="flex flex-col gap-3">
+                {message.thought && (
+                  <div className="text-xs text-stone-500 italic border-l-2 border-stone-200 pl-3 py-1 mb-2 bg-stone-50/50 rounded-r-md">
+                    <span className="font-semibold not-italic block mb-1 opacity-70">Thinking...</span>
+                    {message.thought}
+                  </div>
+                )}
                 <MarkdownRenderer content={message.content || " "} isStreaming={isStreaming} />
                 {message.imageData && (
                   <div className="rounded-xl overflow-hidden border border-stone-200 bg-white shadow-sm mt-2">
@@ -100,6 +106,24 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
                       className="w-full h-auto"
                       unoptimized
                     />
+                  </div>
+                )}
+                {message.actions && (
+                  <div className="flex gap-2 mt-3 pt-2 border-t border-stone-100">
+                    {message.actions.map((action, idx) => (
+                      <button
+                        key={idx}
+                        onClick={action.onClick}
+                        className={cn(
+                          "px-3 py-1.5 text-xs font-medium rounded-lg transition-colors",
+                          action.variant === "primary"
+                            ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm"
+                            : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                        )}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>

@@ -59,11 +59,11 @@ class ChatRequest(BaseModel):
     message: str = Field(
         ...,
         min_length=1,
-        max_length=2000,
+        max_length=10000, # Increased for plans
         description="The analysis request from the user.",
     )
-
-
+    mode: str = "planning" # "planning" or "fast"
+    is_confirmed_plan: bool = False
 
 
 class Message(BaseModel):
@@ -73,7 +73,9 @@ class Message(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     code: str
+    thought: str | None = None
     image: str | None = None
+    status: str = "completed" # "completed" or "waiting_confirmation"
 
 
 @app.post("/upload", responses={422: {"model": Message}, 400: {"model": Message}})
@@ -122,8 +124,19 @@ async def chat(request: ChatRequest):
 
     try:
         # Use Class-based Agent
-        result, code, image = science_agent.run(request.message, state["df"])
-        return ChatResponse(response=result, code=code, image=image)
+        result, code, image, thought, status = science_agent.run(
+            request.message, 
+            state["df"], 
+            mode=request.mode, 
+            is_confirmed_plan=request.is_confirmed_plan
+        )
+        return ChatResponse(
+            response=result, 
+            code=code, 
+            image=image, 
+            thought=thought,
+            status=status
+        )
 
     except Exception as e:
         logger.error("Chat failed", error=str(e))

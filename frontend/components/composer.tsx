@@ -8,15 +8,17 @@ import { cn } from "@/lib/utils"
 import { AnimatedOrb } from "./animated-orb"
 
 interface ComposerProps {
-  onSend: (content: string) => void
+  onSend: (content: string, mode: "planning" | "fast") => void
   onStop: () => void
   isStreaming: boolean
   disabled?: boolean
   onUpload: (file: File) => void
   isReady: boolean
+  mode: "planning" | "fast"
+  setMode: (mode: "planning" | "fast") => void
 }
 
-export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isReady }: ComposerProps) {
+export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isReady, mode, setMode }: ComposerProps) {
   const [value, setValue] = useState("")
   const [hasAnimated, setHasAnimated] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -47,12 +49,12 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
     if (!value.trim() || isStreaming || disabled || !isReady) return
 
     playClick()
-    onSend(value)
+    onSend(value, mode)
     setValue("")
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
-  }, [value, isStreaming, disabled, onSend, isReady, playClick])
+  }, [value, isStreaming, disabled, onSend, isReady, playClick, mode])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -80,6 +82,11 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
     [onUpload, playClick],
   )
 
+  const toggleMode = () => {
+    setMode(mode === "planning" ? "fast" : "planning")
+    playClick()
+  }
+
   return (
     <div className={cn("fixed bottom-4 left-0 right-0 px-4 pointer-events-none z-10", hasAnimated && "composer-intro")}>
       <div className="relative max-w-2xl mx-auto pointer-events-auto">
@@ -93,6 +100,20 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
               "rgba(14, 63, 126, 0.06) 0px 0px 0px 1px, rgba(42, 51, 69, 0.06) 0px 1px 1px -0.5px, rgba(42, 51, 70, 0.06) 0px 3px 3px -1.5px, rgba(42, 51, 70, 0.06) 0px 6px 6px -3px, rgba(14, 63, 126, 0.06) 0px 12px 12px -6px, rgba(14, 63, 126, 0.06) 0px 24px 24px -12px",
           }}
         >
+          {/* Mode Toggle */}
+          <div className="flex justify-end gap-2 mb-1">
+            <button
+              onClick={toggleMode}
+              className={cn(
+                "text-xs font-semibold px-3 py-1 rounded-full transition-colors flex items-center gap-1.5",
+                mode === "planning" ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+              )}
+            >
+              <span className={cn("w-2 h-2 rounded-full", mode === "planning" ? "bg-indigo-500" : "bg-emerald-500")}></span>
+              {mode === "planning" ? "Planning Mode" : "Fast Mode"}
+            </button>
+          </div>
+
           <div className="flex gap-2 items-center">
             <textarea
               ref={textareaRef}

@@ -13,6 +13,12 @@ export interface Message {
   content: string
   createdAt: Date
   imageData?: string
+  thought?: string
+  actions?: {
+    label: string
+    onClick: () => void
+    variant?: "primary" | "secondary"
+  }[]
 }
 
 // localStorage key for persisting messages
@@ -32,11 +38,12 @@ export function ChatShell() {
   const [error, setError] = useState<string | null>(null)
   const [isLoaded, setIsLoaded] = useState(false)
   const [isFileUploaded, setIsFileUploaded] = useState(false)
+  const [mode, setMode] = useState<"planning" | "fast">("planning")
 
-  // Load messages from localStorage on mount
+  // Load messages from sessionStorage on mount
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY)
+      const stored = sessionStorage.getItem(STORAGE_KEY)
       if (stored) {
         const parsed = JSON.parse(stored)
         const messagesWithDates = parsed.map((msg: Message) => ({
@@ -52,18 +59,18 @@ export function ChatShell() {
         setMessages([])
       }
     } catch (e) {
-      console.error("Failed to load from localStorage:", e)
+      console.error("Failed to load from sessionStorage:", e)
     } finally {
       setIsLoaded(true)
     }
   }, [])
 
-  // Persist messages to localStorage whenever they change
+  // Persist messages to sessionStorage whenever they change
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
     } catch (e) {
-      console.error("Failed to save messages to localStorage:", e)
+      console.error("Failed to save messages to sessionStorage:", e)
     }
   }, [messages])
 
@@ -82,7 +89,18 @@ export function ChatShell() {
       })
 
       if (!response.ok) {
-        throw new Error("Upload failed")
+        let errorMessage = "Upload failed"
+        try {
+          const errorData = await response.json()
+          if (errorData.detail) {
+            errorMessage = typeof errorData.detail === "string"
+              ? errorData.detail
+              : JSON.stringify(errorData.detail)
+          }
+        } catch (e) {
+          // Fallback to default message if JSON parse fails
+        }
+        throw new Error(errorMessage)
       }
 
       const data = await response.json()
@@ -121,7 +139,7 @@ export function ChatShell() {
 
   // Send a message to the AI
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, currentMode: "planning" | "fast" = "planning", isConfirmedPlan: boolean = false) => {
       if (!content.trim() || isStreaming || !isFileUploaded) return
 
       setError(null)
@@ -133,7 +151,13 @@ export function ChatShell() {
         createdAt: new Date(),
       }
 
-      setMessages((prev) => [...prev, userMessage])
+      // Only add user message if it's NOT a confirmation of an existing plan (to avoid clutter)
+      // Actually, typically we do want to show "Confirmed" or similar.
+      // But for simplicity, we just add it.
+      if (!isConfirmedPlan) {
+        setMessages((prev) => [...prev, userMessage])
+      }
+
       setIsStreaming(true)
 
       try {
@@ -144,6 +168,8 @@ export function ChatShell() {
           },
           body: JSON.stringify({
             message: content.trim(),
+            mode: currentMode,
+            is_confirmed_plan: isConfirmedPlan
           }),
         })
 
@@ -157,6 +183,7 @@ export function ChatShell() {
           id: generateId(),
           role: "assistant",
           content: data.response,
+          thought: data.thought,
           createdAt: new Date(),
         }
 
@@ -176,7 +203,36 @@ export function ChatShell() {
           newMessages[newMessages.length - 1].imageData = data.image
         }
 
+        // Handle Confirmation
+        if (data.status === "waiting_confirmation") {
+          const confirmMessage: Message = {
+            id: generateId(),
+            role: "assistant",
+            content: "I have created a plan based on your request. Please review the logic above.",
+            createdAt: new Date(),
+            actions: [
+              {
+                label: "Confirm & Execute",
+                variant: "primary",
+                onClick: () => {
+                  // Execute the plan
+                  sendMessage(data.response, "fast", true)
+                }
+              },
+              {
+                label: "Cancel",
+                variant: "secondary",
+                onClick: () => {
+                  setMessages(prev => prev.filter(m => m.id !== confirmMessage.id))
+                }
+              }
+            ]
+          }
+          newMessages.push(confirmMessage)
+        }
+
         setMessages((prev) => [...prev, ...newMessages])
+
       } catch (e) {
         console.error("Error sending message:", e)
         setError(e instanceof Error ? e.message : "An error occurred")
@@ -213,7 +269,7 @@ export function ChatShell() {
     setMessages([])
     setError(null)
     setIsFileUploaded(false)
-    localStorage.removeItem(STORAGE_KEY)
+    sessionStorage.removeItem(STORAGE_KEY)
   }, [playClick])
 
   return (
@@ -243,6 +299,8 @@ export function ChatShell() {
         disabled={!!error}
         onUpload={handleUpload}
         isReady={isFileUploaded}
+        mode={mode}
+        setMode={setMode}
       />
     </div>
   )

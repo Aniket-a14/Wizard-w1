@@ -61,18 +61,22 @@ Code:
 """
 
 
-def create_prompt(instruction: str, df: pd.DataFrame) -> str:
+def create_prompt(instruction: str, df: pd.DataFrame, previous_error: str = None) -> str:
     """
     Creates a dynamic, rich prompt for the fine-tuned/agent model.
     """
     context = generate_system_context(df)
+    
+    error_context = ""
+    if previous_error:
+        error_context = f"\nPREVIOUS EXECUTION ERROR:\n{previous_error}\n\nPlease analyze the error above and provide a corrected version of the code.\n"
 
     return f"""
 You are an expert Data Scientist and Python Programmer.
 Your task is to write Python code to analyze a dataset based on the user's instruction.
 
 {context}
-
+{error_context}
 Instruction: {instruction}
 
 Guidelines:
@@ -96,16 +100,15 @@ def create_planning_prompt(instruction: str, df: pd.DataFrame) -> str:
     return f"""
 You are a Senior Data Scientist.
 Your goal is to PLAN an analysis based on the user's request.
-Do NOT write code yet. Just describe the steps you would take.
 
 {context}
 
 Instruction: {instruction}
 
 Guidelines:
-1. Think about statistical assumptions (normality, missing values).
-2. Propose specific steps (e.g., "1. Check for missing values in column X. 2. Impute if necessary. 3. Calculate correlation.").
-3. Be concise.
+1. Provide your reasoning in a <thought> block (e.g., <thought>Analysis of variables X and Y is needed because...</thought>).
+2. After the thought block, provide a concise numbered list for the "Approved Plan".
+3. Think about statistical assumptions (normality, missing values).
 
 Plan:
 """
