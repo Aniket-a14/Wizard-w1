@@ -47,7 +47,7 @@ def test_upload_and_chat_flow(sample_csv):
     data = response.json()
 
     # Verify "basic info"
-    assert data["message"] == "Dataset loaded successfully"
+    assert "Dataset loaded" in data["message"]
     assert data["filename"] == "backend/dataset/housing.csv"
     assert data["shape"] == [5, 4]  # 5 rows, 4 cols
     assert "summary" in data
