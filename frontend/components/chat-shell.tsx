@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { MessageSquareDashed, ClipboardCheck, BookOpenText } from "lucide-react"
+import { MessageSquareDashed, BookOpenText } from "lucide-react"
 import { MessageList } from "./message-list"
 import { Composer } from "./composer"
 import { Button } from "@/components/ui/button"
@@ -97,7 +97,7 @@ export function ChatShell() {
               ? errorData.detail
               : JSON.stringify(errorData.detail)
           }
-        } catch (e) {
+        } catch {
           // Fallback to default message if JSON parse fails
         }
         throw new Error(errorMessage)
@@ -121,7 +121,10 @@ export function ChatShell() {
 
       const semanticSummary = data.catalog?.columns
         ? "\n\n**Semantic Insights:**\n" + Object.entries(data.catalog.columns)
-          .map(([col, meta]: [string, any]) => `- **${col}**: ${meta.semantic_type} (${meta.quality.missing_percentage}% missing)`)
+          .map(([col, meta]) => {
+            const m = meta as { semantic_type: string; quality: { missing_percentage: number } }
+            return `- **${col}**: ${m.semantic_type} (${m.quality.missing_percentage}% missing)`
+          })
           .join("\n")
         : "";
 
