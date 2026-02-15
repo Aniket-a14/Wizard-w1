@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     APP_NAME: str = "Wizard AI Agent"
     ENV: Literal["dev", "prod", "test"] = "dev"
     BASE_DIR: Path = Path(__file__).parent.parent
+    
+    # Adaptive Hardware Profile
+    SYSTEM_PROFILE: Literal["laptop", "server", "hpc"] = "laptop"
 
     # Model Configuration
     MODEL_TYPE: Literal["ollama", "local", "hybrid"] = "hybrid"

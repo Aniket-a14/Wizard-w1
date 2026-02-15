@@ -58,7 +58,7 @@ class TestScientificFlow:
         result, code, image, thought, status = agent.run("Analyze this", mock_df, mode="fast", is_confirmed_plan=True)
         
         assert status == "completed"
-        assert result == "Success"
+        assert "Success" in result
         # Verify execution was called
         mock_exec_instance.run.assert_called_once()
 

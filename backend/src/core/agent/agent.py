@@ -16,12 +16,14 @@ from ...config import settings
 from ...utils.logging import logger
 from ..prompts import create_prompt
 from ..tools.stats import StatisticalToolkit
+from ..tools.sandbox import SandboxManager
 
 
 class DataAnalysisAgent:
     def __init__(self):
         self.llm = None
         self.local_generator = None
+        self.sandbox = SandboxManager()
         self._initialize_llm()
 
     def _initialize_llm(self):
@@ -90,7 +92,7 @@ class DataAnalysisAgent:
                 return None
         return self.local_generator
 
-    def run(self, instruction: str, df: pd.DataFrame, previous_error: str = None) -> Tuple[str, str, Optional[str]]:
+    def run(self, instruction: str, df: pd.DataFrame, previous_error: str = None, catalog: dict = None) -> Tuple[str, str, Optional[str]]:
         """
         Main entry point for agent execution.
         Returns: (Response Text, Code Executed, Base64 Image)
@@ -111,7 +113,7 @@ class DataAnalysisAgent:
 
         if use_strong_model_for_code:
             if llm:
-                prompt = create_prompt(instruction, df, previous_error=previous_error)
+                prompt = create_prompt(instruction, df, previous_error=previous_error, catalog=catalog)
                 try:
                     log.info("Invoking LLM")
                     response = llm.invoke(prompt)
@@ -126,7 +128,7 @@ class DataAnalysisAgent:
         if not code and settings.MODEL_TYPE in ["local", "hybrid"]:
             local_gen = self._get_local_generator()
             if local_gen:
-                prompt = create_prompt(instruction, df, previous_error=previous_error)
+                prompt = create_prompt(instruction, df, previous_error=previous_error, catalog=catalog)
                 try:
                     # Increase token limit slightly for the 'Worker' to write full code
                     response = local_gen(
@@ -161,8 +163,23 @@ class DataAnalysisAgent:
         if code.startswith("python"):
             code = code[6:].strip()
 
-        # Execute
-        return self._execute_safe(code, df)
+        # Execute via Sandbox
+        return self._execute_sandboxed(code, df)
+
+    def _execute_sandboxed(
+        self, code: str, df: pd.DataFrame
+    ) -> Tuple[str, str, Optional[str]]:
+        """Executes code in a Docker sandbox."""
+        logger.info("Executing code in sandbox", code_snippet=code[:50])
+        
+        # Serialize DF to pass to sandbox
+        buf = io.BytesIO()
+        df.to_csv(buf, index=False)
+        df_bytes = buf.getvalue()
+
+        result, image_base64 = self.sandbox.run_code(code, df_bytes)
+        
+        return result, code, image_base64
 
     def _execute_safe(
         self, code: str, df: pd.DataFrame

@@ -1,10 +1,15 @@
 from typing import Tuple, Optional
 import re
-from ...config import settings
-from ...utils.logging import logger
-from ...utils.cache import response_cache
-from .agent import DataAnalysisAgent
-from ..prompts import create_planning_prompt
+from src.config import settings
+from src.utils.logging import logger, trace_agent
+from src.utils.cache import response_cache
+from src.core.agent.agent import DataAnalysisAgent
+from src.core.prompts import create_planning_prompt, create_cleaning_prompt
+from src.core.tools.catalog import CatalogEngine
+from src.core.tools.guardrail import GuardrailAgent
+from src.core.tools.evaluator import Evaluator
+from src.core.agent.council import TheCouncil
+from src.core.memory import working_memory
 import pandas as pd
 
 
@@ -16,7 +21,9 @@ class ScientificAgent:
 
     def __init__(self):
         self.execution_agent = DataAnalysisAgent()
+        self.council = TheCouncil()
         self.local_manager = None
+        self.catalog = None
 
     def _get_manager_model(self):
         """Lazy load the local Manager model (DeepSeek-Llama-8B)."""
@@ -74,11 +81,13 @@ class ScientificAgent:
                 return None
         return self.local_manager
 
-    def run(self, instruction: str, df: pd.DataFrame, mode: str = "planning", is_confirmed_plan: bool = False) -> Tuple[str, str, Optional[str], Optional[str], str]:
+    @trace_agent("ScientificAgent")
+    def run(self, instruction: str, df: pd.DataFrame, mode: str = "planning", is_confirmed_plan: bool = False, catalog: dict = None) -> Tuple[str, str, Optional[str], Optional[str], str]:
         """
         Returns: (Result, Code, Image, Thought, Status)
         Status: "completed" or "waiting_confirmation"
         """
+        self.catalog = catalog
         logger.info("Starting Scientific Workflow", instruction=instruction, mode=mode, confirmed=is_confirmed_plan)
 
         thought = None
@@ -127,10 +136,42 @@ Please execute this plan using Python.
         previous_error = None
         
         for attempt in range(max_retries + 1):
-            result, code, image = self.execution_agent.run(augmented_instruction, df, previous_error=previous_error)
+            result, code, image = self.execution_agent.run(augmented_instruction, df, previous_error=previous_error, catalog=self.catalog)
             
+            # 3. Guardrail Check
+            is_safe, reason = GuardrailAgent.scan(code)
+            if not is_safe:
+                logger.warning("Code blocked by guardrails", reason=reason)
+                return reason, code, None, thought, "completed"
+
             if "Error executing code:" not in result:
-                # Success!
+                # 4. Success - Evaluate Quality
+                eval_result = Evaluator.score_execution(result)
+                logger.info("Execution evaluated", score=eval_result["score"], status=eval_result["status"])
+                
+                # 5. Adjudicate with The Council
+                council_feedback = self.council.adjudicate(augmented_instruction, code, result)
+                logger.info("Adjudication complete", reviewer_count=len(council_feedback["reviews"]))
+                
+                # Append council feedback to result for transparency
+                result += "\n\n### 🛡️ The Council's Review\n"
+                for review in council_feedback["reviews"]:
+                    agent_name = review["agent"]
+                    feedback_items = review.get("feedback", [])
+                    if feedback_items:
+                        result += f"- **{agent_name}**: {', '.join(feedback_items)}\n"
+                    else:
+                        result += f"- **{agent_name}**: ✅ No issues detected.\n"
+
+                # Save to Memory
+                working_memory.add_interaction(
+                    instruction=instruction,
+                    plan=plan,
+                    code=code,
+                    result=result,
+                    meta={"catalog": self.catalog}
+                )
+
                 return result, code, image, thought, "completed"
             
             # Failure - Try to correct
@@ -143,8 +184,35 @@ Please execute this plan using Python.
 
         return result, code, image, thought, "completed"
 
+    def clean_dataset(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, dict, str]:
+        """
+        New Stage: Semantic Cleaning.
+        Uses the CatalogEngine to detect issues and the Agent to fix them.
+        Returns: (Cleaned DF, Catalog, Cleaning Summary)
+        """
+        logger.info("Starting Semantic Cleaning Stage")
+        
+        # 1. Analyze
+        catalog = CatalogEngine.analyze(df)
+        
+        # 2. Clean
+        prompt = create_cleaning_prompt(df, catalog)
+        result, code, _ = self.execution_agent.run(prompt, df)
+        
+        if "Error executing code:" in result:
+            logger.warning("Cleaning failed, proceeding with raw data", error=result)
+            return df, catalog, "No changes applied due to error."
+        
+        # The result of the agent execution is effectively the 'cleaning summary' 
+        # (prints or text returned by the execution agent)
+        logger.info("Dataset cleaned successfully")
+        return df, catalog, result
+
     def _create_plan(self, instruction: str, df: pd.DataFrame) -> str:
         """Generates a high-level analysis plan (including thoughts)."""
+        # Retrieve Context from Memory
+        memory_context = working_memory.get_context_string(instruction)
+        
         # Check Cache
         cache_key = response_cache.generate_key(
             instruction, str(df.columns.tolist()), str(df.shape)
@@ -165,7 +233,7 @@ Please execute this plan using Python.
             return "Proceed directly."
 
         try:
-            prompt = create_planning_prompt(instruction, df)
+            prompt = create_planning_prompt(instruction, df, catalog=self.catalog, memory_context=memory_context)
             
             if llm_pipeline:
                 logger.info("Generating plan with Local Manager...")

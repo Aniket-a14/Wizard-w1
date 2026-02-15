@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { MessageSquareDashed } from "lucide-react"
+import { MessageSquareDashed, ClipboardCheck, BookOpenText } from "lucide-react"
 import { MessageList } from "./message-list"
 import { Composer } from "./composer"
 import { Button } from "@/components/ui/button"
@@ -119,10 +119,16 @@ export function ChatShell() {
         createdAt: new Date(),
       }
 
+      const semanticSummary = data.catalog?.columns
+        ? "\n\n**Semantic Insights:**\n" + Object.entries(data.catalog.columns)
+          .map(([col, meta]: [string, any]) => `- **${col}**: ${meta.semantic_type} (${meta.quality.missing_percentage}% missing)`)
+          .join("\n")
+        : "";
+
       const summaryMessage: Message = {
         id: generateId(),
         role: "assistant",
-        content: `**Data Summary:**\n${data.summary || "I have analyzed the schema. You can ask me to visualize distributions, detect outliers, or run statistical tests."}`,
+        content: `**Data Summary:**\n${data.summary || "I have analyzed the schema."}${semanticSummary}\n\n**Cleaning Stage**: ${data.cleaning_result}`,
         createdAt: new Date(),
       }
 
@@ -243,6 +249,34 @@ export function ChatShell() {
     [isStreaming, isFileUploaded],
   )
 
+  // Generate Executive Story
+  const generateReport = useCallback(async () => {
+    if (isStreaming || !isFileUploaded) return
+    setIsStreaming(true)
+    setError(null)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/report`)
+      if (!response.ok) throw new Error("Failed to generate report")
+
+      const data = await response.json()
+
+      const reportMessage: Message = {
+        id: generateId(),
+        role: "assistant",
+        content: data.report,
+        createdAt: new Date(),
+      }
+
+      setMessages((prev) => [...prev, reportMessage])
+    } catch (e) {
+      console.error("Error generating report:", e)
+      setError("Failed to generate executive story.")
+    } finally {
+      setIsStreaming(false)
+    }
+  }, [isStreaming, isFileUploaded])
+
   const retry = useCallback(() => {
     if (messages.length === 0) return
     const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")
@@ -289,6 +323,18 @@ export function ChatShell() {
       >
         <MessageSquareDashed className="w-5 h-5" />
       </Button>
+
+      <div className="absolute top-4 right-4 z-20 flex gap-2">
+        <Button
+          onClick={generateReport}
+          disabled={!isFileUploaded || isStreaming}
+          variant="outline"
+          className="rounded-full bg-white/80 backdrop-blur-md border-stone-200 text-stone-600 hover:bg-white flex items-center gap-2 px-4 h-10 text-xs font-semibold shadow-sm"
+        >
+          <BookOpenText className="w-4 h-4 text-emerald-600" />
+          Executive Story
+        </Button>
+      </div>
 
       <MessageList messages={messages} isStreaming={isStreaming} error={error} onRetry={retry} isLoaded={isLoaded} />
 

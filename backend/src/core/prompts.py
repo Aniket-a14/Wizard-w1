@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 
-def generate_system_context(df: pd.DataFrame) -> str:
+def generate_system_context(df: pd.DataFrame, catalog: dict = None) -> str:
     """
     Generates a rich context description of the dataframe.
     """
@@ -26,6 +26,15 @@ def generate_system_context(df: pd.DataFrame) -> str:
         else:
             cat_summary += f"- {col}: {len(unique_vals)} unique values (e.g., {list(unique_vals[:5])}...)\n"
 
+    # Semantic Insight from Catalog
+    semantic_insight = ""
+    if catalog:
+        semantic_insight = "\nSemantic Column Analysis:\n"
+        for col, meta in catalog.get("columns", {}).items():
+            sem_type = meta.get("semantic_type", "unknown")
+            missing = meta.get("quality", {}).get("missing_percentage", 0)
+            semantic_insight += f"- {col}: {sem_type} ({missing}% missing)\n"
+
     context = f"""
 Dataset Overview:
 {info_str}
@@ -38,8 +47,32 @@ Statistical Summary (Numeric):
 
 Categorical Columns:
 {cat_summary}
+{semantic_insight}
 """
     return context
+
+
+def create_cleaning_prompt(df: pd.DataFrame, catalog: dict) -> str:
+    """
+    Creates a prompt asking the agent to CLEAN the dataset based on catalog findings.
+    """
+    context = generate_system_context(df, catalog)
+    
+    return f"""
+You are a Senior Data Engineer. Your task is to CLEAN the following dataset.
+
+{context}
+
+Issues to fix:
+1. Handle missing values (impute with median/mean or drop if appropriate).
+2. Fix data types (e.g., convert strings to dates/numbers if they look like them).
+3. Sanitize strings (remove whitespaces, handle casing).
+
+Write Python code that modifies the dataframe 'df' in-place or reassigns it.
+Return ONLY the python code block.
+
+Response:
+"""
 
 
 def create_simple_prompt(instruction: str, columns: List[str]) -> str:
@@ -61,11 +94,11 @@ Code:
 """
 
 
-def create_prompt(instruction: str, df: pd.DataFrame, previous_error: str = None) -> str:
+def create_prompt(instruction: str, df: pd.DataFrame, previous_error: str = None, catalog: dict = None) -> str:
     """
     Creates a dynamic, rich prompt for the fine-tuned/agent model.
     """
-    context = generate_system_context(df)
+    context = generate_system_context(df, catalog=catalog)
     
     error_context = ""
     if previous_error:
@@ -91,17 +124,19 @@ Response:
 """
 
 
-def create_planning_prompt(instruction: str, df: pd.DataFrame) -> str:
+def create_planning_prompt(instruction: str, df: pd.DataFrame, catalog: dict = None, memory_context: str = "") -> str:
     """
     Creates a prompt for the planning phase (Reasoning).
     """
-    context = generate_system_context(df)
+    context = generate_system_context(df, catalog=catalog)
 
     return f"""
 You are a Senior Data Scientist.
 Your goal is to PLAN an analysis based on the user's request.
 
 {context}
+
+{memory_context}
 
 Instruction: {instruction}
 

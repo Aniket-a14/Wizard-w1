@@ -6,14 +6,15 @@ This guide provides the necessary information to get you started and ensures you
 
 ---
 
-## 🏗️ Architectural Core: Manager-Worker Relay
-Wizard w1 operates on a unique **v2.2 Local-Native Architecture**. When contributing to the backend, keep this flow in mind:
-1.  **Manager (DeepSeek-R1-8B)**: Handles the high-level reasoning and planning. It outputs a step-by-step strategy.
-2.  **Worker (Qwen2.5-Coder-1.5B)**: Receives the Manager's plan and generates the specific Python code.
-3.  **Sandbox**: All generated code is validated via AST (Abstract Syntax Trees) before being executed in a secure environment.
+## 🏗️ Architectural Core: Multi-Agent System (MAS)
+Wizard w1 operates on an enterprise-grade **Multi-Agent Architecture**. When contributing, keep this flow in mind:
+1.  **Scientific Agent (Manager)**: Handles reasoning, planning, and evaluation.
+2.  **Specialist Council**: Visualizers, Statisticians, and Architects adjudicate results.
+3.  **Hardened Sandbox**: All code is executed in isolated Docker containers with strict resource limits and warm pooling.
+4.  **WorkingMemory**: Persistent RAG-based context allows for session-aware development.
 
 > [!IMPORTANT]
-> Any changes to `src/core/agent/` must ensure this relay remains unbroken. Avoid introducing cloud-based dependencies; the project is strictly **Local-First**.
+> The project is strictly **Local-First**. Avoid introducing cloud-based dependencies or proprietary APIs unless explicitly approved.
 
 ---
 

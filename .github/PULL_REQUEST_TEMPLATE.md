@@ -11,9 +11,11 @@ Please include a summary of the changes and the related issue. Please also inclu
 
 ### How Has This Been Tested?
 Please describe the tests that you ran to verify your changes. 
+- [ ] **The Council verification**: Ensured that the Visualizer, Statistician, and Architect specialist logic is not regressed.
+- [ ] **Sandbox compatibility**: Verified execution in the Docker-isolated sandbox with resource limits.
+- [ ] **RAG persistence**: Confirmed WorkingMemory integrity if changes involve the storage layer.
 - [ ] Automatic CI Tests
 - [ ] Manual Smoke Tests
-- [ ] Unit Tests
 
 ### Checklist
 - [ ] My code follows the style guidelines of this project

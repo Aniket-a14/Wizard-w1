@@ -11,6 +11,7 @@ from src.core.agent.flow import science_agent
 from src.utils.validation import validate_csv
 from src.utils.logging import configure_logger, logger
 from src.core.prompts import generate_system_context
+from src.core.reporting import reporting_engine
 
 # Initialize Logging
 configure_logger()
@@ -52,7 +53,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # Global State
-state = {"df": None}
+state = {"df": None, "catalog": None}
 
 
 class ChatRequest(BaseModel):
@@ -83,19 +84,24 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         # strict validation
         df = await validate_csv(file)
-        state["df"] = df
+        # Phase 1: Semantic Cleaning Stage
+        cleaned_df, catalog, cleaning_summary = science_agent.clean_dataset(df)
+        state["df"] = cleaned_df
+        state["catalog"] = catalog
 
-        # Context generation
-        summary = generate_system_context(df)
+        # Context generation (now catalog-aware)
+        summary = generate_system_context(cleaned_df, catalog=catalog)
 
-        logger.info("Dataset uploaded", rows=len(df), filename=file.filename)
+        logger.info("Dataset uploaded and cleaned", rows=len(cleaned_df), filename=file.filename)
 
         return {
-            "message": "Dataset loaded successfully",
+            "message": "Dataset loaded and semantically cleaned",
             "filename": file.filename,
-            "shape": df.shape,
-            "columns": df.columns.tolist(),
+            "shape": cleaned_df.shape,
+            "columns": cleaned_df.columns.tolist(),
             "summary": summary,
+            "cleaning_result": cleaning_summary,
+            "catalog": catalog
         }
     except HTTPException as he:
         raise he
@@ -128,7 +134,8 @@ async def chat(request: ChatRequest):
             request.message, 
             state["df"], 
             mode=request.mode, 
-            is_confirmed_plan=request.is_confirmed_plan
+            is_confirmed_plan=request.is_confirmed_plan,
+            catalog=state.get("catalog")
         )
         return ChatResponse(
             response=result, 
@@ -141,6 +148,13 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error("Chat failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/report")
+async def generate_report():
+    """Generates an executive summary of recent data analysis interactions."""
+    report = reporting_engine.generate_executive_summary()
+    return {"report": report}
 
 
 @app.get("/health")

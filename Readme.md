@@ -118,6 +118,19 @@ graph TD
 
 ---
 
+## 🗺️ Strategic Roadmap (Phases 1-6)
+
+**Wizard w1** was built via a 6-phase evolution to reach enterprise-grade maturity:
+
+1.  **Semantic Data Layer**: Added `CatalogEngine` for PII and financial detection.
+2.  **Hardened Sandbox**: Implemented Docker-isolated execution with **Warm Container Pooling**.
+3.  **AgentOps & Reliability**: Integrated `Evaluator` scoring and `GuardrailAgent` security scanning.
+4.  **Specialist Council**: Developed a committee of agents (Visualizer, Statistician, Architect) to adjudicate results.
+5.  **Multi-Session Intelligence**: Persistent **WorkingMemory** (RAG) for cross-session context.
+6.  **Enterprise Hardening**: Abstract memory layers, Hardware-Aware Profiles, and Standardized Telemetry.
+
+---
+
 ## ⚡ Getting Started
 
 ### Method 1: Docker (Recommended - Fast & Local)
