@@ -2,11 +2,10 @@ import docker
 import os
 import io
 import tarfile
-import time
 import atexit
 from typing import Tuple, Optional
 from src.config import settings
-from src.utils.logging import logger, trace_agent
+from src.utils.logging import logger
 
 class SandboxManager:
     """
@@ -49,7 +48,8 @@ class SandboxManager:
 
     def _prune_orphans(self):
         """Removes any stale containers from previous crashed runs."""
-        if not self.client: return
+        if not self.client:
+            return
         try:
             orphans = self.client.containers.list(all=True, filters={"label": "wizard_managed=true"})
             if orphans:
@@ -57,7 +57,7 @@ class SandboxManager:
                 for container in orphans:
                     try:
                         container.remove(force=True)
-                    except:
+                    except Exception:
                         pass
         except Exception as e:
             logger.warning("Failed to prune orphans", error=str(e))
@@ -175,13 +175,14 @@ except Exception as e:
 
     def cleanup_pool(self):
         """Kills all containers in the warm pool on system shutdown."""
-        if not self._warm_pool: return
+        if not self._warm_pool:
+            return
         logger.info(f"Shutting down Sandbox Pool ({len(self._warm_pool)} containers)...")
         while self._warm_pool:
             container = self._warm_pool.pop()
             try:
                 container.remove(force=True)
-            except:
+            except Exception:
                 pass
 
     def _indent_code(self, code: str) -> str:

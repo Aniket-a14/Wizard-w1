@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from src.api.api import app
-from src.utils.logging import trace_agent, logger
+from src.utils.logging import trace_agent
 from unittest.mock import patch
 
 client = TestClient(app)
