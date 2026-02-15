@@ -8,13 +8,18 @@ services:
     environment:
       - APP_NAME=${APP_NAME:-Wizard AI Agent}
       - ENV=${ENV:-prod}
+      - SYSTEM_PROFILE=${SYSTEM_PROFILE:-server}
       - MODEL_TYPE=${MODEL_TYPE:-hybrid}
       - MODEL_NAME=${MODEL_NAME:-deepseek-r1}
-      - MODEL_PATH=${MODEL_PATH:-./models/worker_base}
+      - MODEL_PATH=${MODEL_PATH:-./models/worker}
+      - MANAGER_MODEL_PATH=${MANAGER_MODEL_PATH:-./models/manager}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
       - ./backend/models:/app/models
       - ./backend:/app/backend:ro
+      - /var/run/docker.sock:/var/run/docker.sock # Required for SandboxManager
+    networks:
+      - wizard_net
     restart: always
 
   frontend:
@@ -24,7 +29,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000 # Browser access
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - backend
+    networks:
+      - wizard_net
     restart: always
+
+networks:
+  wizard_net:
+    driver: bridge
