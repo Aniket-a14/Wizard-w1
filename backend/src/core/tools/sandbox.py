@@ -2,19 +2,32 @@ import docker
 import os
 import io
 import tarfile
+import time
+import atexit
 from typing import Tuple, Optional
 from src.config import settings
-from src.utils.logging import logger
+from src.utils.logging import logger, trace_agent
 
 class SandboxManager:
     """
     Manages Docker containers for secure code execution.
     Optimized with a 'Warmer' container pool to eliminate startup latency.
+    Implemented as a Singleton to prevent resource exhaustion.
     """
     
+    _instance = None
     IMAGE_NAME = "wizard-sandbox:latest"
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(SandboxManager, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
     
     def __init__(self):
+        if getattr(self, '_initialized', False):
+            return
+            
         try:
             self.client = docker.from_env()
             self._warm_pool = []
@@ -24,10 +37,30 @@ class SandboxManager:
             self.mem_limit = "512m" if settings.SYSTEM_PROFILE == "laptop" else "2g"
             self.cpu_limit = 500000000 if settings.SYSTEM_PROFILE == "laptop" else 1000000000 # 0.5 vs 1.0 CPU
             
+            self._prune_orphans()
             self._initialize_pool()
+            
+            # Register cleanup on exit
+            atexit.register(self.cleanup_pool)
+            self._initialized = True
         except Exception as e:
             logger.error("Failed to connect to Docker daemon", error=str(e))
             self.client = None
+
+    def _prune_orphans(self):
+        """Removes any stale containers from previous crashed runs."""
+        if not self.client: return
+        try:
+            orphans = self.client.containers.list(all=True, filters={"label": "wizard_managed=true"})
+            if orphans:
+                logger.info(f"Pruning {len(orphans)} orphan sandbox containers...")
+                for container in orphans:
+                    try:
+                        container.remove(force=True)
+                    except:
+                        pass
+        except Exception as e:
+            logger.warning("Failed to prune orphans", error=str(e))
 
     def _initialize_pool(self):
         """Pre-starts containers to have them ready."""
@@ -139,6 +172,17 @@ except Exception as e:
             new_container = self._create_container()
             if new_container:
                 self._warm_pool.append(new_container)
+
+    def cleanup_pool(self):
+        """Kills all containers in the warm pool on system shutdown."""
+        if not self._warm_pool: return
+        logger.info(f"Shutting down Sandbox Pool ({len(self._warm_pool)} containers)...")
+        while self._warm_pool:
+            container = self._warm_pool.pop()
+            try:
+                container.remove(force=True)
+            except:
+                pass
 
     def _indent_code(self, code: str) -> str:
         return "\n".join(["    " + line for line in code.split("\n")])
