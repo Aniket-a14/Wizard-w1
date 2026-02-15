@@ -2,10 +2,9 @@ import docker
 import os
 import io
 import tarfile
-import time
 from typing import Tuple, Optional
 from src.config import settings
-from src.utils.logging import logger, trace_agent
+from src.utils.logging import logger
 
 class SandboxManager:
     """
@@ -32,7 +31,8 @@ class SandboxManager:
 
     def _initialize_pool(self):
         """Pre-starts containers to have them ready."""
-        if not self.client: return
+        if not self.client:
+            return
         logger.info(f"Initializing Sandbox Pool ({settings.SYSTEM_PROFILE} profile)...")
         for _ in range(self.pool_size):
             container = self._create_container()
@@ -133,7 +133,7 @@ except Exception as e:
             # For robustness, we'll replace it to ensure a clean state
             try:
                 container.remove(force=True)
-            except:
+            except Exception:
                 pass
             # Refill pool
             new_container = self._create_container()

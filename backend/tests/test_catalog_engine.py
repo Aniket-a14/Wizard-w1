@@ -1,5 +1,4 @@
 import pandas as pd
-import pytest
 from src.core.tools.catalog import CatalogEngine
 
 def test_catalog_engine_detection():

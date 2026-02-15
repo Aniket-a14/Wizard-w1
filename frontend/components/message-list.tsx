@@ -33,7 +33,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }:
 
     // Only animate if no messages were loaded (fresh start)
     if (messages.length === 0 && !hasPlayedIntroRef.current) {
-      setHasAnimated(true)
+      setTimeout(() => setHasAnimated(true), 0)
       hasPlayedIntroRef.current = true
 
       audioRef.current = new Audio(LAUNCH_SOUND_URL)
@@ -44,7 +44,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }:
       })
     } else if (messages.length > 0) {
       // Skip animation if messages exist
-      setHasAnimated(false)
+      setTimeout(() => setHasAnimated(false), 0)
       hasPlayedIntroRef.current = true
     }
 
@@ -61,9 +61,8 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }:
     // Immediate scroll to bottom when messages change
     const container = containerRef.current
     container.scrollTop = container.scrollHeight
-    setAutoScroll(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length])
+    setTimeout(() => setAutoScroll(true), 0)
+  }, [messages.length, setAutoScroll])
 
   useEffect(() => {
     if (!isStreaming || !autoScroll || !containerRef.current) {

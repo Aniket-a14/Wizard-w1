@@ -1,7 +1,5 @@
 import time
-from typing import List, Dict, Any
 from src.core.memory import working_memory
-from src.utils.logging import logger
 
 class ReportingEngine:
     """

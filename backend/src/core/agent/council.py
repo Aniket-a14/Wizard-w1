@@ -1,6 +1,5 @@
 from typing import Dict, Any
-import re
-from src.utils.logging import logger, trace_agent
+from src.utils.logging import trace_agent
 
 class SpecialistAgent:
     """Base class for specialized council agents."""

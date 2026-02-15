@@ -1,6 +1,4 @@
-from typing import Dict, List, Any
-import numpy as np
-from ...utils.logging import logger
+from typing import Dict, Any
 
 class Evaluator:
     """

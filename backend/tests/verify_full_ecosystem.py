@@ -1,18 +1,14 @@
 import pandas as pd
-import io
 import os
 import sys
-import json
-import time
 
 # Set up paths
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from src.core.agent.flow import ScientificAgent
 from src.core.memory import working_memory
 from src.core.reporting import reporting_engine
-from src.core.tools.sandbox import SandboxManager
 
 def verify_ecosystem():
     print("🚀 --- Wizard w1: Full Ecosystem Integration Test (Lightweight) ---")
@@ -52,7 +48,7 @@ def verify_ecosystem():
             catalog=catalog
         )
         
-        print(f"✅ Execution Result received.")
+        print("✅ Execution Result received.")
         if "The Council's Review" in result:
             print("✅ Council Adjudication: FOUND in result.")
         else:

@@ -249,7 +249,7 @@ export function ChatShell() {
         setIsStreaming(false)
       }
     },
-    [isStreaming, isFileUploaded],
+    [isStreaming, isFileUploaded, setMessages, setError, setIsStreaming],
   )
 
   // Generate Executive Story
@@ -272,13 +272,13 @@ export function ChatShell() {
       }
 
       setMessages((prev) => [...prev, reportMessage])
-    } catch (e) {
-      console.error("Error generating report:", e)
+    } catch {
+      console.error("Error generating report:")
       setError("Failed to generate executive story.")
     } finally {
       setIsStreaming(false)
     }
-  }, [isStreaming, isFileUploaded])
+  }, [isStreaming, isFileUploaded, setMessages, setError, setIsStreaming])
 
   const retry = useCallback(() => {
     if (messages.length === 0) return
@@ -289,7 +289,7 @@ export function ChatShell() {
       setError(null)
       setTimeout(() => sendMessage(lastUserMessage.content), 100)
     }
-  }, [messages, sendMessage])
+  }, [messages, sendMessage, setMessages, setError])
 
   const playClick = useCallback(() => {
     const audio = new Audio("/sound/click.mp3")
