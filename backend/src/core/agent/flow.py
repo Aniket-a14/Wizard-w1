@@ -1,6 +1,5 @@
 from typing import Tuple, Optional
 import re
-from src.config import settings
 from src.utils.logging import logger, trace_agent
 from src.utils.cache import response_cache
 from src.core.agent.agent import DataAnalysisAgent

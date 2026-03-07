@@ -135,7 +135,7 @@ def create_prompt(
 
     error_context = ""
     if previous_error:
-        error_context = f"\\n<previous_error>\\n{{previous_error}}\\n</previous_error>\\n\\n<error_handling_instruction>\\nThe previous execution failed. Do NOT apologize. meticulously analyze the Python traceback above line-by-line, identify the exact variable or dataframe syntax causing the crash, and write corrected code that fulfills the original plan.\\n</error_handling_instruction>\\n"
+        error_context = f"\n<previous_error>\n{previous_error}\n</previous_error>\n\n<error_handling_instruction>\nThe previous execution failed. Do NOT apologize. meticulously analyze the Python traceback above line-by-line, identify the exact variable or dataframe syntax causing the crash, and write corrected code that fulfills the original plan.\n</error_handling_instruction>\n"
 
     return f"""<role>
 You are an expert Python Code Generator operating inside a secure, headless Data Science sandbox.

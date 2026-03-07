@@ -3,16 +3,17 @@ import os
 import pandas as pd
 import warnings
 
+# Modern Imports (Src Architecture)
+from src.core.agent.flow import science_agent
+from src.config import settings
+from feedback_store import FeedbackStore
+
+
 # Suppress Pydantic V1 compatibility warnings in Python 3.14+
 warnings.filterwarnings("ignore", message=".*Pydantic V1 functionality isn't compatible with Python 3.14.*")
 
 # Ensure backend directory is in python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-# Modern Imports (Src Architecture)
-from src.core.agent.flow import science_agent
-from src.config import settings
-from feedback_store import FeedbackStore
 
 
 def load_dataset_local(file_path: str) -> pd.DataFrame:

@@ -81,9 +81,6 @@ class DataAnalysisAgent:
             if self.search_tool is None:
                 self.search_tool = WebSearchTool()
             
-            # Ensure search_tool is not None for the linter
-            search_tool: WebSearchTool = self.search_tool
-
             planning_prompt = create_planning_prompt(instruction, df, catalog=catalog, mode=mode)
             
             llm = self._get_llm()
@@ -124,7 +121,6 @@ class DataAnalysisAgent:
 
         # 2. EXECUTION PHASE (Worker Brain - Qwen)
         # Qwen is the coding specialist.
-        from ..prompts import create_prompt
         worker_llm = self._get_worker_llm()
         
         max_retries = 2
