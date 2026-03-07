@@ -231,23 +231,122 @@ export function MarkdownRenderer({ content, className, isStreaming = false }: Ma
     )
   }
 
+  const renderTable = (text: string, partIndex: number) => {
+    const rows = text.trim().split("\n")
+    const headerRow = rows[0].split("|").filter((cell) => cell.trim() !== "")
+    const bodyRows = rows.slice(2).map((row) => row.split("|").filter((cell) => cell.trim() !== ""))
+
+    return (
+      <div key={partIndex} className="markdown-table-container">
+        <table className="markdown-table">
+          <thead>
+            <tr>
+              {headerRow.map((header, i) => (
+                <th key={i}>
+                  {header.trim()}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {bodyRows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, cellIndex) => (
+                  <td key={cellIndex}>
+                    {renderPlainInlineMarkdown(cell.trim())}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
   const renderContent = (text: string, animated: boolean) => {
     if (!text) return null
 
     // Split by code blocks first
     const parts = text.split(/(```[\s\S]*?```)/g)
 
-    return parts.map((part, partIndex) => {
-      if (part.startsWith("```") && part.endsWith("```")) {
-        return renderCodeBlock(part, partIndex)
-      }
+    return (
+      <div className="markdown-content">
+        {parts.map((part, partIndex) => {
+          if (part.startsWith("```") && part.endsWith("```")) {
+            return renderCodeBlock(part, partIndex)
+          }
 
-      if (animated) {
-        return <span key={partIndex}>{renderAnimatedInlineMarkdown(part)}</span>
-      }
+          // More robust check for tables in the part
+          const lines = part.split("\n")
+          // Check if any line looks like a table row (contains | and isn't just whitespace)
+          const hasTable = lines.some((line) => line.trim().startsWith("|") || (line.includes("|") && line.trim().length > 2))
 
-      return <span key={partIndex}>{renderPlainInlineMarkdown(part)}</span>
-    })
+          if (hasTable) {
+            // Find the table block
+            const nonTableBefore: string[] = []
+            const tableLines: string[] = []
+            const nonTableAfter: string[] = []
+
+            let tableStarted = false
+            let tableEnded = false
+
+            for (const line of lines) {
+              const isTableRow = line.trim().startsWith("|") || (line.includes("|") && line.trim().length > 2)
+
+              if (!tableStarted && isTableRow) {
+                tableStarted = true
+                tableLines.push(line)
+              } else if (tableStarted && !tableEnded && isTableRow) {
+                tableLines.push(line)
+              } else if (tableStarted && !tableEnded && !isTableRow) {
+                // Check if it's just a gap
+                if (line.trim() === "" && tableLines.length < 2) {
+                  // Ignore empty line before table actually starts with data
+                  nonTableBefore.push(line)
+                } else {
+                  tableEnded = true
+                  if (line.trim() !== "") nonTableAfter.push(line)
+                }
+              } else if (!tableStarted) {
+                nonTableBefore.push(line)
+              } else {
+                nonTableAfter.push(line)
+              }
+            }
+
+            // Only render as a table if we have a header AND at least the separator row
+            if (tableLines.length >= 2) {
+              return (
+                <div key={partIndex} className="flex flex-col gap-1">
+                  {nonTableBefore.length > 0 && (
+                    <span className="block">
+                      {animated
+                        ? renderAnimatedInlineMarkdown(nonTableBefore.join("\n"))
+                        : renderPlainInlineMarkdown(nonTableBefore.join("\n"))}
+                    </span>
+                  )}
+                  {renderTable(tableLines.join("\n"), partIndex)}
+                  {nonTableAfter.length > 0 && (
+                    <span className="block">
+                      {animated
+                        ? renderAnimatedInlineMarkdown(nonTableAfter.join("\n"))
+                        : renderPlainInlineMarkdown(nonTableAfter.join("\n"))}
+                    </span>
+                  )}
+                </div>
+              )
+            }
+          }
+
+          if (animated) {
+            return <span key={partIndex}>{renderAnimatedInlineMarkdown(part)}</span>
+          }
+
+          return <span key={partIndex}>{renderPlainInlineMarkdown(part)}</span>
+        })}
+      </div>
+    )
   }
 
   return (

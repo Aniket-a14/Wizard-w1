@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 import time
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+import asyncio
 
 
 # Modular Imports
@@ -16,7 +17,7 @@ from src.core.reporting import reporting_engine
 # Initialize Logging
 configure_logger()
 
-app = FastAPI(title="Wizard AI Agent", version="2.0.0")
+app = FastAPI(title="Wizard AI Agent", version="2.3.0")
 
 
 # Middleware for Logging
@@ -84,8 +85,8 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         # strict validation
         df = await validate_csv(file)
-        # Phase 1: Semantic Cleaning Stage
-        cleaned_df, catalog, cleaning_summary = science_agent.clean_dataset(df)
+        # Phase 1: Semantic Cleaning Stage (Offloaded to background thread)
+        cleaned_df, catalog, cleaning_summary = await asyncio.to_thread(science_agent.clean_dataset, df)
         state["df"] = cleaned_df
         state["catalog"] = catalog
 
@@ -129,13 +130,14 @@ async def chat(request: ChatRequest):
         )
 
     try:
-        # Use Class-based Agent
-        result, code, image, thought, status = science_agent.run(
+        # Use Class-based Agent in a background thread to prevent blocking
+        result, code, image, thought, status = await asyncio.to_thread(
+            science_agent.run,
             request.message, 
             state["df"], 
-            mode=request.mode, 
-            is_confirmed_plan=request.is_confirmed_plan,
-            catalog=state.get("catalog")
+            request.mode, 
+            request.is_confirmed_plan,
+            state.get("catalog")
         )
         return ChatResponse(
             response=result, 

@@ -43,23 +43,11 @@ export function ChatShell() {
   // Load messages from sessionStorage on mount
   useEffect(() => {
     try {
-      const stored = sessionStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        const messagesWithDates = parsed.map((msg: Message) => ({
-          ...msg,
-          createdAt: new Date(msg.createdAt),
-        }))
-        setMessages(messagesWithDates)
-        if (messagesWithDates.length > 0) {
-          setIsFileUploaded(true)
-        }
-      } else {
-        // Allow empty state to show the intro Orb animation
-        setMessages([])
-      }
+      // Force clear old format messages for this update rollout
+      sessionStorage.removeItem(STORAGE_KEY)
+      setMessages([])
     } catch (e) {
-      console.error("Failed to load from sessionStorage:", e)
+      console.error("Failed to clear sessionStorage:", e)
     } finally {
       setIsLoaded(true)
     }
@@ -119,19 +107,10 @@ export function ChatShell() {
         createdAt: new Date(),
       }
 
-      const semanticSummary = data.catalog?.columns
-        ? "\n\n**Semantic Insights:**\n" + Object.entries(data.catalog.columns)
-          .map(([col, meta]) => {
-            const m = meta as { semantic_type: string; quality: { missing_percentage: number } }
-            return `- **${col}**: ${m.semantic_type} (${m.quality.missing_percentage}% missing)`
-          })
-          .join("\n")
-        : "";
-
       const summaryMessage: Message = {
         id: generateId(),
         role: "assistant",
-        content: `**Data Summary:**\n${data.summary || "I have analyzed the schema."}${semanticSummary}\n\n**Cleaning Stage**: ${data.cleaning_result}`,
+        content: `**Data Summary:**\n${data.summary || "I have analyzed the schema."}\n\n**Cleaning Stage**: ${data.cleaning_result}`,
         createdAt: new Date(),
       }
 

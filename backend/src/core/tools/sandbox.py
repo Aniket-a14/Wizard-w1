@@ -36,15 +36,44 @@ class SandboxManager:
             self.mem_limit = "512m" if settings.SYSTEM_PROFILE == "laptop" else "2g"
             self.cpu_limit = 500000000 if settings.SYSTEM_PROFILE == "laptop" else 1000000000 # 0.5 vs 1.0 CPU
             
+            # Ensure Image Exists
+            try:
+                self.client.images.get(self.IMAGE_NAME)
+            except docker.errors.ImageNotFound:
+                logger.info(f"Image {self.IMAGE_NAME} not found. Attempting to build...")
+                self._build_image()
+            
             self._prune_orphans()
             self._initialize_pool()
             
+            # Check if pool was initialized
+            if not self._warm_pool and self.pool_size > 0:
+                logger.warning("Sandbox pool failed to initialize. Disabling Docker client.")
+                self.client = None
+                return
+
             # Register cleanup on exit
             atexit.register(self.cleanup_pool)
             self._initialized = True
         except Exception as e:
-            logger.error("Failed to connect to Docker daemon", error=str(e))
+            logger.error("Failed to connect to Docker daemon or initialize sandbox", error=str(e))
             self.client = None
+
+    def _build_image(self):
+        """Builds the sandbox image from backend/docker/Dockerfile."""
+        try:
+            # Resolve Dockerfile path relative to this file
+            # sandbox.py is in backend/src/core/tools/
+            # Dockerfile is in backend/docker/
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            docker_context = os.path.abspath(os.path.join(current_dir, "..", "..", "..", "docker"))
+            
+            logger.info(f"Building {self.IMAGE_NAME} from {docker_context}...")
+            self.client.images.build(path=docker_context, tag=self.IMAGE_NAME, rm=True)
+            logger.info(f"Successfully built {self.IMAGE_NAME}")
+        except Exception as e:
+            logger.error(f"Failed to build sandbox image: {e}")
+            raise  # Re-raise to be caught in __init__
 
     def _prune_orphans(self):
         """Removes any stale containers from previous crashed runs."""
@@ -116,9 +145,14 @@ import seaborn as sns
 import io
 import base64
 import sys
+import warnings
+import traceback
 
-# Load Data
-df = pd.read_csv(io.BytesIO({df_bytes!r}))
+# Silence non-essential warnings
+warnings.simplefilter('ignore')
+
+# Load Data optimally using Feather IPC
+df = pd.read_feather(io.BytesIO({df_bytes!r}))
 
 # Execute User Code
 try:
@@ -133,7 +167,7 @@ try:
         print(base64.b64encode(buf.read()).decode('utf-8'))
         print("---PLOT_END---")
 except Exception as e:
-    print(f"Error executing code: {{e}}", file=sys.stderr)
+    print(f"Error executing code:\\n{{traceback.format_exc()}}", file=sys.stderr)
 """
             # 1. Inject script
             self._put_file(container, "/tmp/executor.py", executor_script)

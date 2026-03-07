@@ -22,126 +22,145 @@ from ..tools.sandbox import SandboxManager
 class DataAnalysisAgent:
     def __init__(self):
         self.llm = None
-        self.local_generator = None
+        self.worker_llm = None
         self.sandbox = SandboxManager()
-        self._initialize_llm()
-
-    def _initialize_llm(self):
-        """Lazy initialization of the LLM connection."""
-        if settings.MODEL_TYPE in ["ollama", "hybrid"]:
-            # We don't correct eagerly connect here to keep it lazy,
-            # but we set up the potential to connect.
-            # actually, lazy loading means we do it in run().
-            pass
+        self.search_tool = None
 
     def _get_llm(self):
-        """Get or initialize the LLM client."""
-        if self.llm is None and settings.MODEL_TYPE in ["ollama", "hybrid"]:
+        """Get or initialize the Manager LLM (Planning & Critique)."""
+        if self.llm is None:
             try:
-                logger.info("Initializing ChatOllama", model=settings.MODEL_NAME)
-                self.llm = ChatOllama(model=settings.MODEL_NAME)
-            except Exception as e:
-                logger.warning("Failed to initialize ChatOllama", error=str(e))
-                self.llm = None
-        return self.llm
-
-    def _get_local_generator(self):
-        """Get or initialize local transformer model."""
-        if self.local_generator is None:
-            logger.info("Loading local model...", path=settings.MODEL_PATH)
-            try:
-                from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-                import torch
-
-                # Use float16 for memory efficiency
-                dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
-                try:
-                    quant_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=dtype,
-                        bnb_4bit_quant_type="nf4",
-                        bnb_4bit_use_double_quant=True,
-                        llm_int8_enable_fp32_cpu_offload=True
-                    )
-
-                    tokenizer = AutoTokenizer.from_pretrained(settings.resolved_worker_path)
-                    model = AutoModelForCausalLM.from_pretrained(
-                        settings.resolved_worker_path,
-                        quantization_config=quant_config,
-                        device_map="auto",
-                        low_cpu_mem_usage=True,
-                        offload_folder=settings.OFFLOAD_FOLDER
-                    )
-                except Exception as e:
-                    logger.warning("4-bit quantization failed, falling back to float16", error=str(e))
-                    tokenizer = AutoTokenizer.from_pretrained(settings.resolved_worker_path)
-                    model = AutoModelForCausalLM.from_pretrained(
-                        settings.resolved_worker_path,
-                        device_map="auto",
-                        torch_dtype=dtype,
-                        low_cpu_mem_usage=True,
-                        offload_folder=settings.OFFLOAD_FOLDER
-                    )
-
-                self.local_generator = pipeline(
-                    "text-generation", model=model, tokenizer=tokenizer
+                logger.info("Initializing Manager (ChatOllama)", 
+                            model=settings.MODEL_NAME, 
+                            temp=settings.TEMPERATURE)
+                self.llm = ChatOllama(
+                    model=settings.MODEL_NAME, 
+                    base_url=settings.OLLAMA_BASE_URL,
+                    temperature=settings.TEMPERATURE,
+                    num_predict=settings.MAX_TOKENS,
+                    num_ctx=settings.LLM_NUM_CTX,
+                    num_thread=settings.LLM_NUM_THREAD,
+                    repeat_penalty=1.1
                 )
             except Exception as e:
-                logger.error("Error loading local model", error=str(e))
-                return None
-        return self.local_generator
+                logger.warning("Failed to initialize Manager", error=str(e))
+        return self.llm
 
-    def run(self, instruction: str, df: pd.DataFrame, previous_error: str = None, catalog: dict = None) -> Tuple[str, str, Optional[str]]:
+    def _get_worker_llm(self):
+        """Get or initialize the Worker LLM (Coding)."""
+        if self.worker_llm is None:
+            try:
+                logger.info("Initializing Worker (ChatOllama)", 
+                            model=settings.WORKER_MODEL_NAME,
+                            temp=settings.TEMPERATURE)
+                self.worker_llm = ChatOllama(
+                    model=settings.WORKER_MODEL_NAME, 
+                    base_url=settings.OLLAMA_BASE_URL,
+                    temperature=settings.TEMPERATURE,
+                    num_predict=settings.MAX_TOKENS,
+                    num_ctx=settings.LLM_NUM_CTX,
+                    num_thread=settings.LLM_NUM_THREAD
+                )
+            except Exception as e:
+                logger.warning("Failed to initialize Worker", error=str(e))
+        return self.worker_llm
+
+    def run(self, instruction: str, df: pd.DataFrame, previous_error: Optional[str] = None, catalog: Optional[dict] = None, plan: Optional[str] = None, mode: str = "standard") -> Tuple[str, str, Optional[str]]:
         """
-        Main entry point for agent execution.
-        Returns: (Response Text, Code Executed, Base64 Image)
+        Refactored main entry point: Plan (DeepSeek) -> Execute (Qwen) -> Critique (DeepSeek).
         """
         log = logger.bind(instruction=instruction, df_shape=df.shape)
-        log.info("Agent received instruction")
+        log.info("Agent starting execution loop", mode=mode)
 
-        code = ""
-        llm = self._get_llm()
+        # 1. PLANNING PHASE (Manager Brain - DeepSeek)
+        # Skip internal planning if a plan is provided or in fast mode
+        if not plan and mode != "fast":
+            from ..prompts import create_planning_prompt, create_replan_prompt
+            from ..tools.search import WebSearchTool
+            
+            if self.search_tool is None:
+                self.search_tool = WebSearchTool()
+            
+            # Ensure search_tool is not None for the linter
+            search_tool: WebSearchTool = self.search_tool
 
-        # Strategy:
-        # - Ollama Mode: Use Strong Model for everything.
-        # - Hybrid Mode: Strong Model (Plan) -> Local Model (Code).
-        # - Local Mode: Local Model (No Plan) -> Local Model (Code).
-        
-        # Only use strong model for CODE if explicitly in 'ollama' mode.
-        use_strong_model_for_code = settings.MODEL_TYPE == "ollama"
-
-        if use_strong_model_for_code:
+            planning_prompt = create_planning_prompt(instruction, df, catalog=catalog, mode=mode)
+            
+            llm = self._get_llm()
+            plan_text = ""
             if llm:
-                prompt = create_prompt(instruction, df, previous_error=previous_error, catalog=catalog)
                 try:
-                    log.info("Invoking LLM")
-                    response = llm.invoke(prompt)
-                    code = self._extract_code_block(response.content)
+                    log.info("Manager (DeepSeek) is planning...")
+                    plan_response = llm.invoke(planning_prompt).content
+                    
+                    # Check for SEARCH request
+                    if "SEARCH:" in plan_response:
+                        search_match = re.search(r'SEARCH:\s*"(.*?)"', plan_response)
+                        if search_match:
+                            query = search_match.group(1)
+                            log.info("Manager requested search", query=query)
+                            results = self.search_tool.search(query)
+                            
+                            # Re-plan with results
+                            thought = re.search(r"<thought>(.*?)</thought>", plan_response, re.DOTALL)
+                            thought_content = thought.group(1) if thought else "Initial thought"
+                            
+                            replan_prompt = create_replan_prompt(instruction, results, thought_content)
+                            log.info("Manager is re-planning with search results...")
+                            plan_text = llm.invoke(replan_prompt).content
+                        else:
+                            plan_text = plan_response
+                    else:
+                        plan_text = plan_response
+                        
+                    log.info("Final Plan obtained", plan_snippet=plan_text[:100])
                 except Exception as e:
-                    log.error("LLM Invocation failed", error=str(e))
-                    return f"Error communicating with AI Agent: {e}", "", None
+                    log.error("Manager planning/search failed", error=str(e))
+                    plan_text = f"1. Analyze instruction: {instruction}\n2. Generate code using local worker."
+        else:
+            # Use provided plan or a dummy plan for fast mode if instruction is the direct task
+            plan_text = plan if plan else instruction
+            log.info("Bypassing internal planning", source="provided" if plan else "fast_mode")
+
+        # 2. EXECUTION PHASE (Worker Brain - Qwen)
+        # Qwen is the coding specialist.
+        from ..prompts import create_prompt
+        worker_llm = self._get_worker_llm()
+        
+        max_retries = 2
+        previous_error = None
+        
+        for attempt in range(max_retries + 1):
+            # Inject plan into the worker's prompt
+            worker_prompt = create_prompt(instruction, df, plan=plan_text, previous_error=previous_error, catalog=catalog)
+            
+            code = ""
+            if worker_llm:
+                try:
+                    log.info(f"Worker (Qwen) is coding (Attempt {attempt+1})...")
+                    response = worker_llm.invoke(worker_prompt).content
+                    code = self._extract_code_block(response)
+                except Exception as e:
+                    log.error("Worker code generation failed", error=str(e))
+                    return f"Worker error: {e}", "", None
+            
+            if not code:
+                return "Failed to generate code.", "", None
+
+            # 3. EXECUTION & FEEDBACK LOOP
+            result, executed_code, image_base64 = self._process_code(code, df)
+            
+            # Check for errors in the result
+            if "Error executing code" in result or "Traceback" in result:
+                log.warning(f"Execution failed on attempt {attempt+1}", error=result)
+                previous_error = result
+                # On next loop, we retry with the error context
+                continue
             else:
-                log.warning("Strong model requested but unavailable.")
+                # Success!
+                return result, executed_code, image_base64
 
-        # Hybrid or Local or Fallback: Use Local Model for Code
-        if not code and settings.MODEL_TYPE in ["local", "hybrid"]:
-            local_gen = self._get_local_generator()
-            if local_gen:
-                prompt = create_prompt(instruction, df, previous_error=previous_error, catalog=catalog)
-                try:
-                    # Increase token limit slightly for the 'Worker' to write full code
-                    response = local_gen(
-                        prompt, max_new_tokens=512, pad_token_id=50256
-                    )[0]["generated_text"]
-                    code = self._extract_code_block(response.replace(prompt, ""))
-                except Exception as e:
-                    return f"Error with local model: {e}", "", None
-
-        if not code:
-            return "Could not generate code.", "", None
-
-        return self._process_code(code, df)
+        return f"Failed after {max_retries} retries. Final error: {previous_error}", code, None
 
     def _extract_code_block(self, response_text: str) -> str:
         """Robustly extracts code from LLM response."""
@@ -163,8 +182,12 @@ class DataAnalysisAgent:
         if code.startswith("python"):
             code = code[6:].strip()
 
-        # Execute via Sandbox
-        return self._execute_sandboxed(code, df)
+        # Execute via Sandbox with Local Fallback
+        if self.sandbox.client:
+            return self._execute_sandboxed(code, df)
+        else:
+            logger.warning("Docker unavailable, falling back to local execution.")
+            return self._execute_safe(code, df)
 
     def _execute_sandboxed(
         self, code: str, df: pd.DataFrame
@@ -172,9 +195,9 @@ class DataAnalysisAgent:
         """Executes code in a Docker sandbox."""
         logger.info("Executing code in sandbox", code_snippet=code[:50])
         
-        # Serialize DF to pass to sandbox
+        # Serialize DF to pass to sandbox using fastest IPC (Feather)
         buf = io.BytesIO()
-        df.to_csv(buf, index=False)
+        df.to_feather(buf)
         df_bytes = buf.getvalue()
 
         result, image_base64 = self.sandbox.run_code(code, df_bytes)

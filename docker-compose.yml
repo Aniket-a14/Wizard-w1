@@ -3,21 +3,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    user: root
     ports:
       - "8000:8000"
     environment:
       - APP_NAME=${APP_NAME:-Wizard AI Agent}
       - ENV=${ENV:-prod}
       - SYSTEM_PROFILE=${SYSTEM_PROFILE:-server}
-      - MODEL_TYPE=${MODEL_TYPE:-hybrid}
-      - MODEL_NAME=${MODEL_NAME:-deepseek-r1}
-      - MODEL_PATH=${MODEL_PATH:-./models/worker}
-      - MANAGER_MODEL_PATH=${MANAGER_MODEL_PATH:-./models/manager}
+      - MODEL_TYPE=${MODEL_TYPE:-ollama}
+      - MODEL_NAME=${MODEL_NAME:-deepseek-r1:1.5b}
+      - WORKER_MODEL_NAME=${WORKER_MODEL_NAME:-qwen2.5-coder:1.5b}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
-      - ./backend/models:/app/models
       - ./backend:/app/backend:ro
-      - /var/run/docker.sock:/var/run/docker.sock # Required for SandboxManager
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - wizard_net
     restart: always

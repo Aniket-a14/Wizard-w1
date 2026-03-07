@@ -1,4 +1,4 @@
-﻿-i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
+-i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
 fastapi
 uvicorn
 python-multipart
@@ -15,13 +15,9 @@ scipy
 plotly
 langchain
 langchain-ollama
-transformers
-torch
 pytest
 pytest-asyncio
 httpx
 tabulate
-bitsandbytes
-accelerate
 pyarrow
 docker
