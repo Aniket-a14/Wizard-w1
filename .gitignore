@@ -6,6 +6,7 @@ __pycache__/
 # Environments
 .env
 .venv
+.venv_313/
 env/
 venv/
 ENV/
@@ -19,6 +20,7 @@ instruction_code_dataset.csv
 
 # Models & Weights (Excluded from Git - Download Only)
 backend/models/
+backend/hf_cache/
 backend/offload/
 backend/fine_tuned_model/
 backend/results/

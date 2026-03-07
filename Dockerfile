@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Install system dependencies (for matplotlib/scipy if needed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  build-essential \
+  build-essential curl \
   && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
@@ -21,8 +21,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY backend/ . 
 
-# Create non-root user
-RUN adduser --disabled-password --gecos '' appuser
+# Create non-root user and set permissions
+RUN adduser --disabled-password --gecos '' appuser && \
+    chown -R appuser:appuser /app
 USER appuser
 
 # Health Check

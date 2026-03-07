@@ -6,6 +6,7 @@ The frontend of **Wizard w1** is a high-performance, dark-themed dashboard built
 
 - **Glassmorphic UI**: Modern aesthetic with frosted glass effects and fluid animations using `framer-motion`.
 - **Interactive Chat**: Real-time communication with the Scientific Agent.
+- **Agentic Thinking UI**: Live rendering of the Manager (DeepSeek) agent's `<thought>` process as it plans data strategies and performs web searches.
 - **Data Visualization**: Dynamic charts and plots powered by `recharts`.
 - **Responsive Design**: Fully optimized for various screen sizes.
 - **Modern Stack**: Built with React 19 and Next.js 16 (App Router).

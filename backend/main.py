@@ -1,6 +1,10 @@
 import sys
 import os
 import pandas as pd
+import warnings
+
+# Suppress Pydantic V1 compatibility warnings in Python 3.14+
+warnings.filterwarnings("ignore", message=".*Pydantic V1 functionality isn't compatible with Python 3.14.*")
 
 # Ensure backend directory is in python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
