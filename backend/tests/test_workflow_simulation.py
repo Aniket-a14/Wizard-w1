@@ -51,8 +51,8 @@ def test_upload_and_chat_flow(sample_csv):
     assert data["filename"] == "backend/dataset/housing.csv"
     assert data["shape"] == [5, 4]  # 5 rows, 4 cols
     assert "summary" in data
-    assert "Dataset Overview" in data["summary"]
-    assert "Statistical Summary" in data["summary"]
+    assert "<schema>" in data["summary"]
+    assert "<statistical_summary>" in data["summary"]
 
     # 2. Chat
     # Mock the LLM execution to avoid live model dependency
