@@ -10,7 +10,7 @@ import "./globals.css"
 
 export const metadata: Metadata = {
   title: "AI Chat Assistant",
-  description: "Chat with our AI assistant powered by Gemini",
+  description: "Chat with our autonomous data science agent powered by DeepSeek-R1 and Qwen2.5-Coder.",
   generator: "v0.app",
   icons: {
     icon: [
