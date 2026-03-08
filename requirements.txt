@@ -1,7 +1,7 @@
 -i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
 fastapi==0.111.0
 uvicorn==0.30.1
-python-multipart==0.0.9
+python-multipart==0.0.22
 pydantic==2.8.2
 pydantic-settings==2.3.4
 structlog==24.2.0
