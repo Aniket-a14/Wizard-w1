@@ -1,12 +1,12 @@
 # 🧙‍♂️ Wizard w1
 
-> **Advanced Enterprise AI Data Analyst Platform** powered by **DeepSeek-R1**, **Qwen2.5-Coder**, and **Agentic Workflows**.
+> **Advanced AI Data Analyst Platform** powered by **DeepSeek-R1**, **Qwen2.5-Coder**, and **Agentic Workflows**.
 
 ![Status](https://img.shields.io/badge/Status-Production%20Grade-success) ![Version](https://img.shields.io/badge/Version-v2.2.0--Native-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master) ![Cross-Platform](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/cross-platform-check.yml/badge.svg?branch=master) ![Audit](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/dependency-audit.yml/badge.svg?branch=master) ![Secrets](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/secret-scanning.yml/badge.svg?branch=master) ![Docs](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/docs-check.yml/badge.svg?branch=master) ![License](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/license-check.yml/badge.svg?branch=master) ![Bundle](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/bundle-size.yml/badge.svg?branch=master) ![Health](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/health-check.yml/badge.svg?branch=master)
 
 ## 🌟 Overview
 
-**Wizard w1** is not a chatbot. It is a monolithic, autonomous Data Science Agent built specifically for enterprise environments. It accepts raw, messy operational data via natural language instructions, establishes rigorous statistical assumptions, synthesizes deep reasoning chains, and flawlessly writes, tests, and self-corrects the required Python syntaxes. 
+**Wizard w1** is not a chatbot. It is a monolithic, autonomous Data Science Agent built for complex analytical workloads. It accepts raw, messy operational data via natural language instructions, establishes rigorous statistical assumptions, synthesizes deep reasoning chains, and flawlessly writes, tests, and self-corrects the required Python syntaxes. 
 
 Through its native dual-brain architecture, Wizard manages complex analysis, statistical inference, and stunning data layer visualizations safely within a secure, warm Docker container pool.
 
@@ -120,7 +120,7 @@ Once the container initialization is complete:
 
 ## 🔌 REST API Reference
 
-The backend `FastAPI` instance natively supports JSON operations. You can bypass the UI entirely for Enterprise integrations.
+The backend `FastAPI` instance natively supports JSON operations. You can bypass the UI entirely for custom integrations.
 
 ### `<POST> /upload` - Semantic Data Instantiation
 
@@ -134,14 +134,14 @@ Strictly mounts the DataFrame into state. Uses the `CatalogEngine` to automatica
 curl -X POST "http://localhost:8000/upload" \
   -H "accept: application/json" \
   -H "Content-Type: multipart/form-data" \
-  -F "file=@/path/to/enterprise_sales.csv" 
+  -F "file=@/path/to/global_sales.csv" 
 ```
 
 **Response:**
 ```json
 {
   "message": "Dataset loaded and semantically cleaned",
-  "filename": "enterprise_sales.csv",
+  "filename": "global_sales.csv",
   "shape": [4582, 12],
   "columns": ["Date", "Revenue", "Region", "Store ID"],
   "summary": "This dataset comprises sales metadata across multiple international domains. Detected temporal bounds spanning Q1-Q4. Financial integer detection (Revenue) validated. No unencrypted PII located.",
@@ -222,4 +222,4 @@ We accept PRs for `frontend` and `backend` separately. All PRs must pass the `py
 
 ## 📜 License
 
-This codebase is licensed heavily under the constraints of the [BSD 3-Clause License](./LICENSE). It provides frictionless allowance for modification, commercial use, and private enterprise deployment.
+This codebase is licensed heavily under the constraints of the [BSD 3-Clause License](./LICENSE). It provides frictionless allowance for modification, commercial use, and private deployment.
