@@ -31,9 +31,9 @@ jobs:
     - name: Upgrade PIP
       run: python -m pip install --upgrade pip
 
-    - name: Install MSVC Runtime (Windows Only)
+    - name: Set up MSVC (Windows Only)
       if: runner.os == 'Windows'
-      run: pip install msvc-runtime
+      uses: ilammy/msvc-dev-cmd@v1
 
     - name: Install Backend Dependencies
       run: pip install -r requirements.txt
