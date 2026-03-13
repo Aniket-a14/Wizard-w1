@@ -50,6 +50,7 @@ jobs:
       run: npm ci
 
     - name: Basic Smoke Test (Backend)
+      shell: bash
       run: |
         cd backend
         python -m pytest tests/ -m "not slow" || echo "Tests failed but environment is valid"
