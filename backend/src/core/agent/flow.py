@@ -119,7 +119,7 @@ Please execute this plan using Python.
                     plan=plan,
                     code=code,
                     result=result,
-                    meta={"catalog": self.catalog}
+                    meta={"catalog": self.catalog, "quality_score": eval_result["score"]}
                 )
 
                 return result, code, image, thought, "completed"

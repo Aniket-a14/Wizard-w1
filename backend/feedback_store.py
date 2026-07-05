@@ -26,6 +26,27 @@ class FeedbackStore:
             self.feedback_data["successful_examples"].append(example)
             self.save_feedback()
 
+    def get_similar_examples(self, query: str, limit: int = 2) -> list[dict]:
+        """Retrieves successful examples from the feedback file matching the query."""
+        if not self.feedback_data or "successful_examples" not in self.feedback_data:
+            return []
+        
+        query_terms = query.lower().split()
+        scored_examples = []
+        
+        for entry in self.feedback_data["successful_examples"]:
+            score = 0
+            task = entry.get("task", "")
+            content = task.lower()
+            for term in query_terms:
+                if term in content:
+                    score += 1
+            if score > 0:
+                scored_examples.append((score, entry))
+        
+        scored_examples.sort(key=lambda x: x[0], reverse=True)
+        return [entry for score, entry in scored_examples[:limit]]
+
 
 # this block of code is used to save the feedback to a json file
 # the feedback is saved to a json file

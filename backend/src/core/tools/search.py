@@ -25,7 +25,7 @@ class WebSearchTool:
         Internal implementation using DuckDuckGo (requires 'duckduckgo-search' package).
         """
         try:
-            from ddgs import DDGS
+            from duckduckgo_search import DDGS
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=num_results))
                 return [

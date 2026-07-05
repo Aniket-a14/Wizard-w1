@@ -32,12 +32,15 @@ def sample_csv():
     return csv_bytes
 
 
-def test_upload_and_chat_flow(sample_csv):
+@patch("src.core.agent.agent.DataAnalysisAgent.run")
+def test_upload_and_chat_flow(mock_agent_run, sample_csv):
     """
     Simulates the user journey:
     1. Upload dataset -> Get basic info (summary)
     2. Chat -> "show profit... in may" -> Get plotting code/output
     """
+    # Setup mock agent run to bypass live Ollama calls for cleaning
+    mock_agent_run.return_value = ("Dataset cleaned successfully.", "print('cleaned')", None)
 
     # 1. Upload
     files = {"file": ("backend/dataset/housing.csv", sample_csv, "text/csv")}

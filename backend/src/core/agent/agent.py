@@ -17,6 +17,7 @@ from ...utils.logging import logger
 from ..prompts import create_prompt
 from ..tools.stats import StatisticalToolkit
 from ..tools.sandbox import SandboxManager
+from feedback_store import FeedbackStore
 
 
 class DataAnalysisAgent:
@@ -25,6 +26,7 @@ class DataAnalysisAgent:
         self.worker_llm = None
         self.sandbox = SandboxManager()
         self.search_tool = None
+        self.feedback_store = FeedbackStore()
 
     def _get_llm(self):
         """Get or initialize the Manager LLM (Planning & Critique)."""
@@ -126,9 +128,19 @@ class DataAnalysisAgent:
         max_retries = 2
         previous_error = None
         
+        # Retrieve similar examples for dynamic few-shot prompt augmentations
+        few_shot = self.feedback_store.get_similar_examples(instruction)
+        
         for attempt in range(max_retries + 1):
             # Inject plan into the worker's prompt
-            worker_prompt = create_prompt(instruction, df, plan=plan_text, previous_error=previous_error, catalog=catalog)
+            worker_prompt = create_prompt(
+                instruction, 
+                df, 
+                plan=plan_text, 
+                previous_error=previous_error, 
+                catalog=catalog,
+                few_shot_examples=few_shot
+            )
             
             code = ""
             if worker_llm:

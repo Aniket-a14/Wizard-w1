@@ -46,7 +46,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
   }, [])
 
   const handleSend = useCallback(() => {
-    if (!value.trim() || isStreaming || disabled || !isReady) return
+    if (!value.trim() || isStreaming || disabled) return
 
     playClick()
     onSend(value, mode)
@@ -54,7 +54,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
-  }, [value, isStreaming, disabled, onSend, isReady, playClick, mode])
+  }, [value, isStreaming, disabled, onSend, playClick, mode])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -123,8 +123,8 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
                 handleInput()
               }}
               onKeyDown={handleKeyDown}
-              placeholder={isReady ? "Type a message... (Shift+Enter for new line)" : "Please upload a CSV file to start chatting..."}
-              disabled={isStreaming || disabled || !isReady}
+              placeholder={isReady ? "Type a message... (Shift+Enter for new line)" : "Type a message... (Upload a CSV to start data analysis)"}
+              disabled={isStreaming || disabled}
               rows={1}
               className={cn(
                 "flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-stone-800 placeholder:text-stone-400",
@@ -152,10 +152,10 @@ export function Composer({ onSend, onStop, isStreaming, disabled, onUpload, isRe
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!value.trim() || disabled || !isReady}
+                disabled={!value.trim() || disabled}
                 className={cn(
                   "relative h-9 w-9 shrink-0 transition-all rounded-full flex items-center justify-center",
-                  !value.trim() || disabled || !isReady
+                  !value.trim() || disabled
                     ? "opacity-50 cursor-not-allowed"
                     : "cursor-pointer hover:scale-105",
                 )}

@@ -15,7 +15,7 @@ services:
       - WORKER_MODEL_NAME=${WORKER_MODEL_NAME:-qwen2.5-coder:1.5b}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
-      - ./backend:/app/backend:ro
+      - ./backend:/app
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - wizard_net

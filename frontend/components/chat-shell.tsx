@@ -43,11 +43,23 @@ export function ChatShell() {
   // Load messages from sessionStorage on mount
   useEffect(() => {
     try {
-      // Force clear old format messages for this update rollout
-      sessionStorage.removeItem(STORAGE_KEY)
-      setMessages([])
+      const stored = sessionStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored) as Message[]
+        const formatted = parsed.map(m => ({
+          ...m,
+          createdAt: new Date(m.createdAt)
+        }))
+        setMessages(formatted)
+        
+        // Check if a dataset was previously loaded successfully
+        const hasSuccessMsg = formatted.some(m => m.content.includes("loaded successfully!"))
+        if (hasSuccessMsg) {
+          setIsFileUploaded(true)
+        }
+      }
     } catch (e) {
-      console.error("Failed to clear sessionStorage:", e)
+      console.error("Failed to load messages from sessionStorage:", e)
     } finally {
       setIsLoaded(true)
     }
@@ -128,7 +140,7 @@ export function ChatShell() {
   // Send a message to the AI
   const sendMessage = useCallback(
     async (content: string, currentMode: "planning" | "fast" = "planning", isConfirmedPlan: boolean = false) => {
-      if (!content.trim() || isStreaming || !isFileUploaded) return
+      if (!content.trim() || isStreaming) return
 
       setError(null)
 
@@ -139,11 +151,23 @@ export function ChatShell() {
         createdAt: new Date(),
       }
 
-      // Only add user message if it's NOT a confirmation of an existing plan (to avoid clutter)
-      // Actually, typically we do want to show "Confirmed" or similar.
-      // But for simplicity, we just add it.
       if (!isConfirmedPlan) {
         setMessages((prev) => [...prev, userMessage])
+      }
+
+      if (!isFileUploaded) {
+        setIsStreaming(true)
+        setTimeout(() => {
+          const helperMsg: Message = {
+            id: generateId(),
+            role: "assistant",
+            content: "👋 **Welcome to Wizard w1!** I am your autonomous Data Science assistant.\n\nTo begin analyzing, cleaning, or plotting data, **please upload a CSV dataset** by clicking the paperclip icon 📎 below.\n\nOnce loaded, I can help you with operations like:\n- Visualizing correlation matrices\n- Outlier detection and handling\n- Performing hypothesis tests and regression models\n- Semantic cleaning of messy inputs",
+            createdAt: new Date(),
+          }
+          setMessages((prev) => [...prev, helperMsg])
+          setIsStreaming(false)
+        }, 600)
+        return
       }
 
       setIsStreaming(true)

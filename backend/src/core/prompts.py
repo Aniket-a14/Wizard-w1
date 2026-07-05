@@ -122,7 +122,8 @@ def create_prompt(
     df: pd.DataFrame, 
     plan: Optional[str] = None, 
     previous_error: Optional[str] = None, 
-    catalog: Optional[Dict[str, Any]] = None
+    catalog: Optional[Dict[str, Any]] = None,
+    few_shot_examples: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """
     Enterprise Prompt for the Worker (Qwen): The Sandboxed Execution Engine.
@@ -137,10 +138,18 @@ def create_prompt(
     if previous_error:
         error_context = f"\n<previous_error>\n{previous_error}\n</previous_error>\n\n<error_handling_instruction>\nThe previous execution failed. Do NOT apologize. meticulously analyze the Python traceback above line-by-line, identify the exact variable or dataframe syntax causing the crash, and write corrected code that fulfills the original plan.\n</error_handling_instruction>\n"
 
+    few_shot_context = ""
+    if few_shot_examples:
+        few_shot_context = "\n<successful_code_examples>\n"
+        for idx, ex in enumerate(few_shot_examples):
+            few_shot_context += f"Example {idx+1}:\n- Task: {ex.get('task')}\n- Correct Python Code:\n```python\n{ex.get('code')}\n```\n\n"
+        few_shot_context += "</successful_code_examples>\n"
+
     return f"""<role>
 You are an expert Python Code Generator operating inside a secure, headless Data Science sandbox.
 Your sole purpose is to TRANSLATE the `approved_plan` into flawless, executable Python code.
 </role>
+{few_shot_context}
 
 <environment_constraints>
 1. You are running in a non-interactive, headless environment.
