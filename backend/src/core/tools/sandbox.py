@@ -3,15 +3,152 @@ import os
 import io
 import tarfile
 import atexit
+import socket
+import json
+import struct
+import time
 from typing import Tuple, Optional
 from src.config import settings
 from src.utils.logging import logger
 
+# Daemon script to run inside the container for persistent stateful execution
+DAEMON_SCRIPT = """
+import socket
+import json
+import sys
+import io
+import traceback
+import base64
+import os
+import struct
+
+def recvall(sock, n):
+    data = bytearray()
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            return None
+        data.extend(packet)
+    return data
+
+def read_message(sock):
+    raw_msglen = recvall(sock, 4)
+    if not raw_msglen:
+        return None
+    msglen = struct.unpack('>I', raw_msglen)[0]
+    raw_payload = recvall(sock, msglen)
+    if not raw_payload:
+        return None
+    return json.loads(raw_payload.decode('utf-8'))
+
+def send_message(sock, response_dict):
+    msg = json.dumps(response_dict).encode('utf-8')
+    msg = struct.pack('>I', len(msg)) + msg
+    sock.sendall(msg)
+
+def run_server(port=5005):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(('0.0.0.0', port))
+    server.listen(1)
+    
+    # Initialize persistent state namespace
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    exec_globals = {
+        "pd": pd,
+        "np": np,
+        "plt": plt,
+        "sns": sns,
+        "__builtins__": __builtins__
+    }
+    
+    # Preload dataset if exists
+    if os.path.exists('/workspace/dataset.feather'):
+        try:
+            exec_globals["df"] = pd.read_feather('/workspace/dataset.feather')
+            print("Dataset preloaded successfully in exec_globals.")
+        except Exception as e:
+            print(f"Error preloading dataset: {e}")
+
+    print(f"Sandbox daemon listening on port {port}...")
+    
+    while True:
+        try:
+            conn, addr = server.accept()
+            payload = read_message(conn)
+            if not payload:
+                conn.close()
+                continue
+                
+            code = payload.get("code", "")
+            
+            # Setup output capture
+            stdout_buf = io.StringIO()
+            stderr_buf = io.StringIO()
+            sys.stdout = stdout_buf
+            sys.stderr = stderr_buf
+            
+            plot_data = None
+            status = "success"
+            
+            try:
+                # Clear matplotlib plot state
+                plt.clf()
+                plt.close('all')
+                
+                # Exec user code in the persistent namespace
+                exec(code, exec_globals)
+                
+                # Check for plots
+                if plt.get_fignums():
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', bbox_inches='tight')
+                    buf.seek(0)
+                    plot_data = base64.b64encode(buf.read()).decode('utf-8')
+                    plt.close('all')
+            except KeyboardInterrupt:
+                status = "interrupted"
+                print("Execution interrupted by user.", file=sys.stderr)
+            except Exception as e:
+                status = "error"
+                print(traceback.format_exc(), file=sys.stderr)
+            finally:
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+                
+            response = {
+                "status": status,
+                "stdout": stdout_buf.getvalue(),
+                "stderr": stderr_buf.getvalue(),
+                "plot": plot_data
+            }
+            send_message(conn, response)
+            conn.close()
+        except Exception as e:
+            # Prevent server from crashing on connection errors
+            try:
+                conn.close()
+            except:
+                pass
+
+if __name__ == '__main__':
+    run_server()
+"""
+
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+
 class SandboxManager:
     """
-    Manages Docker containers for secure code execution.
-    Optimized with a 'Warmer' container pool to eliminate startup latency.
-    Implemented as a Singleton to prevent resource exhaustion.
+    Manages a stateful Docker container for persistent code execution.
+    Mounts local ./workspace to container /workspace.
     """
     
     _instance = None
@@ -29,198 +166,160 @@ class SandboxManager:
             
         try:
             self.client = docker.from_env()
-            self._warm_pool = []
-            
-            # Adaptive Pool Size based on profile
-            self.pool_size = 1 if settings.SYSTEM_PROFILE == "laptop" else 3 if settings.SYSTEM_PROFILE == "server" else 5
-            self.mem_limit = "512m" if settings.SYSTEM_PROFILE == "laptop" else "2g"
-            self.cpu_limit = 500000000 if settings.SYSTEM_PROFILE == "laptop" else 1000000000 # 0.5 vs 1.0 CPU
+            self.container = None
+            self.port = None
             
             # Ensure Image Exists
             try:
                 self.client.images.get(self.IMAGE_NAME)
             except docker.errors.ImageNotFound:
-                logger.info(f"Image {self.IMAGE_NAME} not found. Attempting to build...")
+                logger.info(f"Image {self.IMAGE_NAME} not found. Building...")
                 self._build_image()
             
             self._prune_orphans()
-            self._initialize_pool()
+            self.start_session()
             
-            # Check if pool was initialized
-            if not self._warm_pool and self.pool_size > 0:
-                logger.warning("Sandbox pool failed to initialize. Disabling Docker client.")
-                self.client = None
-                return
-
-            # Register cleanup on exit
-            atexit.register(self.cleanup_pool)
+            atexit.register(self.cleanup)
             self._initialized = True
         except Exception as e:
-            logger.error("Failed to connect to Docker daemon or initialize sandbox", error=str(e))
+            logger.error("Failed to connect to Docker or initialize session", error=str(e))
             self.client = None
 
     def _build_image(self):
         """Builds the sandbox image from backend/docker/Dockerfile."""
         try:
-            # Resolve Dockerfile path relative to this file
-            # sandbox.py is in backend/src/core/tools/
-            # Dockerfile is in backend/docker/
             current_dir = os.path.dirname(os.path.abspath(__file__))
             docker_context = os.path.abspath(os.path.join(current_dir, "..", "..", "..", "docker"))
-            
             logger.info(f"Building {self.IMAGE_NAME} from {docker_context}...")
             self.client.images.build(path=docker_context, tag=self.IMAGE_NAME, rm=True)
             logger.info(f"Successfully built {self.IMAGE_NAME}")
         except Exception as e:
             logger.error(f"Failed to build sandbox image: {e}")
-            raise  # Re-raise to be caught in __init__
+            raise
 
     def _prune_orphans(self):
-        """Removes any stale containers from previous crashed runs."""
+        """Prunes stale containers."""
         if not self.client:
             return
         try:
             orphans = self.client.containers.list(all=True, filters={"label": "wizard_managed=true"})
-            if orphans:
-                logger.info(f"Pruning {len(orphans)} orphan sandbox containers...")
-                for container in orphans:
-                    try:
-                        container.remove(force=True)
-                    except Exception:
-                        pass
+            for container in orphans:
+                try:
+                    container.remove(force=True)
+                except:
+                    pass
         except Exception as e:
             logger.warning("Failed to prune orphans", error=str(e))
 
-    def _initialize_pool(self):
-        """Pre-starts containers to have them ready."""
+    def start_session(self):
+        """Starts a persistent container session with mounted workspace."""
         if not self.client:
             return
-        logger.info(f"Initializing Sandbox Pool ({settings.SYSTEM_PROFILE} profile)...")
-        for _ in range(self.pool_size):
-            container = self._create_container()
-            if container:
-                self._warm_pool.append(container)
-
-    def _create_container(self):
-        """Creates a fresh container with profile-aware limits."""
+        
         try:
-            container = self.client.containers.run(
+            self.port = find_free_port()
+            logger.info("Starting stateful container session", port=self.port)
+            
+            # Start Docker container
+            self.container = self.client.containers.run(
                 self.IMAGE_NAME,
-                command="tail -f /dev/null", 
-                mem_limit=self.mem_limit,
-                nano_cpus=self.cpu_limit,
-                network_disabled=True,
+                command="sleep 365d",
+                ports={'5005/tcp': self.port},
+                volumes={str(settings.WORKSPACE_DIR): {'bind': '/workspace', 'mode': 'rw'}},
+                working_dir="/workspace",
                 detach=True,
                 labels={"wizard_managed": "true"}
             )
-            return container
+            
+            # Inject daemon script
+            self._put_file(self.container, "/tmp/sandbox_agent_daemon.py", DAEMON_SCRIPT)
+            
+            # Run the daemon inside the container in the background
+            self.container.exec_run("python /tmp/sandbox_agent_daemon.py", detach=True)
+            
+            # Wait briefly for daemon port to open
+            time.sleep(1.0)
         except Exception as e:
-            logger.error("Failed to create sandbox container", error=str(e))
-            return None
+            logger.error("Failed to start container session", error=str(e))
+            if self.container:
+                try:
+                    self.container.remove(force=True)
+                except:
+                    pass
+                self.container = None
 
-    def _get_container(self):
-        """Gets a warm container from the pool or creates a new one."""
-        if self._warm_pool:
-            return self._warm_pool.pop(0)
-        return self._create_container()
-
-    def run_code(self, code: str, df_bytes: bytes, timeout: int = 30) -> Tuple[str, Optional[str]]:
+    def run_code(self, code: str, df_bytes: Optional[bytes] = None) -> Tuple[str, Optional[str]]:
         """
-        Executes code using a warm container from the pool.
+        Runs code inside the persistent session container.
+        df_bytes parameter is kept for backward compatibility but is ignored
+        in favor of workspace preloading.
         """
-        if not self.client:
-            return "Error: Docker not available for sandboxing.", None
+        if not self.client or not self.container:
+            return "Error: Sandbox container session is not running.", None
 
-        container = self._get_container()
-        if not container:
-            return "Error: Failed to acquire sandbox container.", None
-
+        # Connect to container daemon
         try:
-            # Prepare execution script
-            executor_script = f"""
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import io
-import base64
-import sys
-import warnings
-import traceback
-
-# Silence non-essential warnings
-warnings.simplefilter('ignore')
-
-# Load Data optimally using Feather IPC
-df = pd.read_feather(io.BytesIO({df_bytes!r}))
-
-# Execute User Code
-try:
-{self._indent_code(code)}
-    
-    # Check for plots
-    if plt.get_fignums():
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        print("---PLOT_START---")
-        print(base64.b64encode(buf.read()).decode('utf-8'))
-        print("---PLOT_END---")
-except Exception as e:
-    print(f"Error executing code:\\n{{traceback.format_exc()}}", file=sys.stderr)
-"""
-            # 1. Inject script
-            self._put_file(container, "/tmp/executor.py", executor_script)
-
-            # 2. Execute
-            exec_res = container.exec_run("python /tmp/executor.py", demux=True)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect(('127.0.0.1', self.port))
             
-            stdout = exec_res.output[0].decode("utf-8") if exec_res.output[0] else ""
-            stderr = exec_res.output[1].decode("utf-8") if exec_res.output[1] else ""
+            # Send code message
+            payload = json.dumps({"code": code}).encode('utf-8')
+            msg = struct.pack('>I', len(payload)) + payload
+            s.sendall(msg)
             
-            if stderr:
-                return f"Error: {stderr}", None
-
-            # Extract plot
-            image_base64 = None
-            if "---PLOT_START---" in stdout:
-                parts = stdout.split("---PLOT_START---")
-                main_logs = parts[0]
-                plot_part = parts[1].split("---PLOT_END---")
-                image_base64 = plot_part[0].strip()
-                stdout = main_logs + (plot_part[1] if len(plot_part) > 1 else "")
-
-            return stdout.strip(), image_base64
-
+            # Read header
+            raw_msglen = s.recv(4)
+            if not raw_msglen:
+                return "Error: Connection closed by sandbox daemon.", None
+            msglen = struct.unpack('>I', raw_msglen)[0]
+            
+            # Read payload
+            data_bytes = bytearray()
+            while len(data_bytes) < msglen:
+                packet = s.recv(msglen - len(data_bytes))
+                if not packet:
+                    break
+                data_bytes.extend(packet)
+            
+            response = json.loads(data_bytes.decode('utf-8'))
+            s.close()
+            
+            status = response.get("status")
+            stdout = response.get("stdout", "")
+            stderr = response.get("stderr", "")
+            plot = response.get("plot")
+            
+            if status == "interrupted":
+                return "Error: Execution interrupted by user.", None
+            elif status == "error":
+                return f"Error executing code:\n{stderr}", None
+            
+            output = stdout.strip() if stdout else "Executed successfully."
+            return output, plot
         except Exception as e:
-            logger.error("Sandbox execution failed", error=str(e))
-            return f"Sandbox error: {str(e)}", None
-        finally:
-            # Recycling: Instead of removing, we restart it or just replace it
-            # For robustness, we'll replace it to ensure a clean state
-            try:
-                container.remove(force=True)
-            except Exception:
-                pass
-            # Refill pool
-            new_container = self._create_container()
-            if new_container:
-                self._warm_pool.append(new_container)
+            logger.error("Sandbox socket communication failed", error=str(e))
+            return f"Sandbox communication error: {e}", None
 
-    def cleanup_pool(self):
-        """Kills all containers in the warm pool on system shutdown."""
-        if not self._warm_pool:
+    def interrupt(self):
+        """Sends a SIGINT (signal 2) to the main process inside the container to stop execution."""
+        if not self.container:
             return
-        logger.info(f"Shutting down Sandbox Pool ({len(self._warm_pool)} containers)...")
-        while self._warm_pool:
-            container = self._warm_pool.pop()
-            try:
-                container.remove(force=True)
-            except Exception:
-                pass
+        try:
+            logger.info("Interrupting sandbox execution...")
+            # PID 1 is the main daemon execution script in the container
+            self.container.exec_run("kill -2 1")
+        except Exception as e:
+            logger.error("Failed to interrupt execution", error=str(e))
 
-    def _indent_code(self, code: str) -> str:
-        return "\n".join(["    " + line for line in code.split("\n")])
+    def cleanup(self):
+        """Cleans up container session on application shutdown."""
+        if self.container:
+            logger.info("Cleaning up sandbox container session")
+            try:
+                self.container.remove(force=True)
+            except:
+                pass
+            self.container = None
 
     def _put_file(self, container, path: str, content: str):
         tar_stream = io.BytesIO()

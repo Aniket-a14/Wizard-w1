@@ -132,7 +132,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }:
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="absolute inset-0 overflow-y-auto pt-16 pb-32 space-y-4 border-none px-6"
+      className="absolute inset-0 overflow-y-auto pt-4 pb-6 space-y-4 border-none px-6"
       role="log"
       aria-label="Chat messages"
       aria-live="polite"
@@ -200,7 +200,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded }:
       )}
 
       {/* Scroll anchor */}
-      <div ref={bottomRef} aria-hidden="true" className="h-20" />
+      <div ref={bottomRef} aria-hidden="true" className="h-4" />
     </div>
   )
 }

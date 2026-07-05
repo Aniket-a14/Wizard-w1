@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     LOG_DIR: Path = Field(
         default_factory=lambda: Path(__file__).parent.parent / "logs"
     )
+    WORKSPACE_DIR: Path = Field(
+        default_factory=lambda: Path(__file__).parent.parent.parent / "workspace"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -45,3 +48,4 @@ settings = Settings()
 # Ensure directories exist
 settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
 settings.LOG_DIR.mkdir(parents=True, exist_ok=True)
+settings.WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)

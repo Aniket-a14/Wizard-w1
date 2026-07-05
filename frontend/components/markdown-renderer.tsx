@@ -210,31 +210,28 @@ export function MarkdownRenderer({ content, className, isStreaming = false }: Ma
     return elements
   }
 
-  const renderCodeBlock = (part: string, partIndex: number) => {
-    const codeContent = part.slice(3, -3)
-    const firstNewline = codeContent.indexOf("\n")
-    const language = firstNewline > 0 ? codeContent.slice(0, firstNewline).trim() : ""
-    const code = firstNewline > 0 ? codeContent.slice(firstNewline + 1) : codeContent
-
-    return (
-      <pre
-        key={partIndex}
-        className="my-2 p-3 bg-stone-900 text-stone-100 rounded-lg overflow-x-auto text-sm font-mono"
-        style={{
-          boxShadow:
-            "rgba(14, 63, 126, 0.04) 0px 0px 0px 1px, rgba(42, 51, 69, 0.04) 0px 1px 1px -0.5px, rgba(42, 51, 70, 0.04) 0px 3px 3px -1.5px, rgba(42, 51, 70, 0.04) 0px 6px 6px -3px, rgba(14, 63, 126, 0.04) 0px 12px 12px -6px, rgba(14, 63, 126, 0.04) 0px 24px 24px -12px",
-        }}
-      >
-        {language && <span className="text-xs text-stone-400 block mb-2">{language}</span>}
-        <code>{code}</code>
-      </pre>
-    )
+  const renderCodeBlock = (_part: string, _partIndex: number) => {
+    // Don't render raw code blocks in chat — code execution is shown
+    // as a compact status indicator by the chat-shell handler.
+    return null
   }
 
   const renderTable = (text: string, partIndex: number) => {
     const rows = text.trim().split("\n")
     const headerRow = rows[0].split("|").filter((cell) => cell.trim() !== "")
     const bodyRows = rows.slice(2).map((row) => row.split("|").filter((cell) => cell.trim() !== ""))
+
+    // For large tables (>5 data rows or >6 columns), show a compact summary
+    // instead of rendering the full table — users can view data in the Data tab
+    if (bodyRows.length > 5 || headerRow.length > 6) {
+      return (
+        <div key={partIndex} className="my-2 px-3 py-2 bg-stone-50 border border-stone-200/60 rounded-lg text-xs text-stone-500">
+          <span className="font-medium text-stone-600">📊 Table</span>
+          <span className="ml-1.5">{bodyRows.length} rows × {headerRow.length} cols</span>
+          <span className="ml-1.5 text-stone-400">— view in Data tab</span>
+        </div>
+      )
+    }
 
     return (
       <div key={partIndex} className="markdown-table-container">

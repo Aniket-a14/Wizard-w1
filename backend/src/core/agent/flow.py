@@ -27,112 +27,29 @@ class ScientificAgent:
     @trace_agent("ScientificAgent")
     def run(self, instruction: str, df: pd.DataFrame, mode: str = "planning", is_confirmed_plan: bool = False, catalog: dict = None) -> Tuple[str, str, Optional[str], Optional[str], str]:
         """
+        Adapts the original interface to call the new LangGraph-based workflow.
         Returns: (Result, Code, Image, Thought, Status)
-        Status: "completed" or "waiting_confirmation"
         """
-        self.catalog = catalog
-        logger.info("Starting Scientific Workflow", instruction=instruction, mode=mode, confirmed=is_confirmed_plan)
-
-        thought = None
-        plan = ""
-        augmented_instruction = instruction
-
-        # 1. Planning Phase
-        # Skip planning if we are in "fast" mode with a confirmed plan (or just re-executing)
-        # BUT: Simpler logic is:
-        # If is_confirmed_plan -> The instruction IS the plan. Skip planning.
-        # If NOT is_confirmed_plan -> We need to Plan.
+        from src.core.agent.langgraph_agent import langgraph_agent, WorkflowState
         
-        should_plan = not is_confirmed_plan
-
-        if should_plan:
-            raw_plan_response = self._create_plan(instruction, df, mode=mode)
-            
-            # Extract thought and plan
-            thought_match = re.search(r"<thought>(.*?)</thought>", raw_plan_response, re.DOTALL)
-            if thought_match:
-                thought = thought_match.group(1).strip()
-                plan = raw_plan_response.replace(thought_match.group(0), "").strip()
-            else:
-                plan = raw_plan_response
-            
-            logger.info("Plan created", thought_preview=thought[:50] if thought else "None")
-            
-            # CHECKPOINT: If mode is "planning", we stop here and ask for confirmation.
-            if mode == "planning":
-                return plan, "", None, thought, "waiting_confirmation"
-
-            augmented_instruction = f"""
-User Request: {instruction}
-
-Approved Plan:
-{plan}
-
-Please execute this plan using Python.
-"""
-        elif is_confirmed_plan:
-            # The instruction passed in IS the approved plan (plus context)
-            augmented_instruction = instruction
-
-        # 2. Execution Phase with Self-Correction
-        max_retries = 2
-        previous_error = None
+        # Initialize workflow state
+        state = WorkflowState(instruction, df, mode=mode, catalog=catalog)
         
-        for attempt in range(max_retries + 1):
-            result, code, image = self.execution_agent.run(
-                augmented_instruction, 
-                df, 
-                previous_error=previous_error, 
-                catalog=self.catalog, 
-                plan=plan if not is_confirmed_plan else augmented_instruction, 
-                mode=mode
-            )
+        if is_confirmed_plan:
+            # The instruction passed in is the approved plan
+            state.plan = instruction
+            state.status = "executing"
+        else:
+            state.status = "init"
             
-            # 3. Guardrail Check
-            is_safe, reason = GuardrailAgent.scan(code)
-            if not is_safe:
-                logger.warning("Code blocked by guardrails", reason=reason)
-                return reason, code, None, thought, "completed"
-
-            if "Error executing code:" not in result:
-                # 4. Success - Evaluate Quality
-                eval_result = Evaluator.score_execution(result)
-                logger.info("Execution evaluated", score=eval_result["score"], status=eval_result["status"])
-                
-                # 5. Adjudicate with The Council
-                council_feedback = self.council.adjudicate(augmented_instruction, code, result)
-                logger.info("Adjudication complete", reviewer_count=len(council_feedback["reviews"]))
-                
-                # Append council feedback to result for transparency
-                result += "\n\n### 🛡️ The Council's Review\n"
-                for review in council_feedback["reviews"]:
-                    agent_name = review["agent"]
-                    feedback_items = review.get("feedback", [])
-                    if feedback_items:
-                        result += f"- **{agent_name}**: {', '.join(feedback_items)}\n"
-                    else:
-                        result += f"- **{agent_name}**: ✅ No issues detected.\n"
-
-                # Save to Memory
-                working_memory.add_interaction(
-                    instruction=instruction,
-                    plan=plan,
-                    code=code,
-                    result=result,
-                    meta={"catalog": self.catalog, "quality_score": eval_result["score"]}
-                )
-
-                return result, code, image, thought, "completed"
+        final_state = langgraph_agent.execute_workflow(state)
+        
+        # Map statuses
+        ui_status = "completed"
+        if final_state.status == "waiting_approval":
+            ui_status = "waiting_confirmation"
             
-            # Failure - Try to correct
-            logger.warning(f"Execution failed (Attempt {attempt + 1})", error=result)
-            previous_error = result
-            
-            if attempt == max_retries:
-                logger.error("Max retries reached, returning failure.")
-                return result, code, image, thought, "completed"
-
-        return result, code, image, thought, "completed"
+        return final_state.result or final_state.plan, final_state.code, final_state.image, final_state.thought, ui_status
 
     def clean_dataset(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, dict, str]:
         """

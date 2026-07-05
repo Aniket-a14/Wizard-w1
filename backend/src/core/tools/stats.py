@@ -70,7 +70,7 @@ class StatisticalToolkit:
             "column": column,
             "method": method,
             "outlier_count": len(outliers),
-            "outlier_percentage": round(len(outliers) / len(data) * 100, 2),
+            "outlier_percentage": round(len(outliers) / len(data) * 100, 2) if len(data) > 0 else 0.0,
             "threshold_used": threshold,
             "sample_outliers": outliers[:5],  # Limit output size
         }

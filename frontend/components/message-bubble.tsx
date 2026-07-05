@@ -2,10 +2,11 @@
 
 import { cn } from "@/lib/utils"
 import type { Message } from "./chat-shell"
-import { User } from "lucide-react"
+import { User, ChevronDown, Brain } from "lucide-react"
 import { MarkdownRenderer } from "./markdown-renderer"
 import Image from "next/image"
 import { AnimatedOrb } from "./animated-orb"
+import { useState } from "react"
 
 interface MessageBubbleProps {
   message: Message
@@ -19,6 +20,11 @@ function formatTime(date: Date): string {
 
 export function MessageBubble({ message, isStreaming = false }: MessageBubbleProps) {
   const isUser = message.role === "user"
+  const hasActions = message.actions && message.actions.length > 0
+  const [thoughtOpen, setThoughtOpen] = useState(hasActions)
+
+  // During streaming or when approval is active, keep thoughts expanded by default
+  const isThoughtVisible = isStreaming || hasActions || thoughtOpen
 
   return (
     <div
@@ -32,24 +38,21 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
       {/* Avatar */}
       <div
         className={cn(
-          "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
+          "w-7 h-7 rounded-full flex items-center justify-center shrink-0",
           isUser ? "bg-white" : "bg-emerald-600",
           !isUser && isStreaming && "sticky bottom-4 self-end transition-all duration-300",
         )}
         style={{
           boxShadow:
-            "rgba(14, 63, 126, 0.04) 0px 0px 0px 1px, rgba(42, 51, 69, 0.04) 0px 1px 1px -0.5px, rgba(42, 51, 70, 0.04) 0px 3px 3px -1.5px, rgba(42, 51, 70, 0.04) 0px 6px 6px -3px, rgba(14, 63, 126, 0.04) 0px 12px 12px -6px, rgba(14, 63, 126, 0.04) 0px 24px 24px -12px",
+            "rgba(14, 63, 126, 0.04) 0px 0px 0px 1px, rgba(42, 51, 69, 0.04) 0px 1px 1px -0.5px, rgba(42, 51, 70, 0.04) 0px 3px 3px -1.5px",
         }}
         aria-hidden="true"
       >
-        {isUser ? <User className="w-4 h-4 text-stone-800" /> : <AnimatedOrb className="w-8 h-8 shrink-0" />}
+        {isUser ? <User className="w-3.5 h-3.5 text-stone-800" /> : <AnimatedOrb className="w-7 h-7 shrink-0" />}
       </div>
 
       {/* Message content */}
       <div className={cn("flex flex-col", isUser ? "items-end" : "items-start")}>
-        {/* Role label (optional, shown on larger screens) */}
-        <span className="text-xs text-stone-400 mb-1 hidden sm:block mt-2">{isUser ? "You" : "Wizard"}</span>
-
         {/* Bubble */}
         <div
           className={cn(
@@ -60,14 +63,14 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
           )}
           style={{
             boxShadow: isUser
-              ? "rgba(14, 63, 126, 0.04) 0px 0px 0px 1px, rgba(42, 51, 69, 0.04) 0px 1px 1px -0.5px, rgba(42, 51, 70, 0.04) 0px 3px 3px -1.5px, rgba(42, 51, 70, 0.04) 0px 6px 6px -3px, rgba(14, 63, 126, 0.04) 0px 12px 12px -6px, rgba(14, 63, 126, 0.04) 0px 24px 24px -12px"
+              ? "rgba(14, 63, 126, 0.04) 0px 0px 0px 1px, rgba(42, 51, 69, 0.04) 0px 1px 1px -0.5px, rgba(42, 51, 70, 0.04) 0px 3px 3px -1.5px"
               : "none",
             willChange: isStreaming ? "height" : "auto",
             transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
           }}
         >
           <div
-            className={cn(isUser ? "px-4 py-3" : "py-1")}
+            className={cn(isUser ? "px-4 py-2.5" : "py-1")}
             style={{
               transition: "max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease",
             }}
@@ -88,28 +91,46 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
                 <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
               </div>
             ) : (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
+                {/* Thought block — visible live during streaming, collapsible after */}
                 {message.thought && (
-                  <div className="text-xs text-stone-500 italic border-l-2 border-stone-200 pl-3 py-1 mb-2 bg-stone-50/50 rounded-r-md">
-                    <span className="font-semibold not-italic block mb-1 opacity-70">Thinking...</span>
-                    {message.thought}
-                  </div>
+                  <>
+                    <button
+                      onClick={() => !isStreaming && setThoughtOpen(!thoughtOpen)}
+                      className={cn(
+                        "flex items-center gap-1.5 text-[11px] transition-colors py-0.5",
+                        isStreaming
+                          ? "text-indigo-400 cursor-default"
+                          : "text-stone-400 hover:text-stone-500 cursor-pointer"
+                      )}
+                    >
+                      {isStreaming ? (
+                        <Brain className="w-3 h-3 animate-pulse" />
+                      ) : (
+                        <ChevronDown className={cn("w-3 h-3 transition-transform duration-200", thoughtOpen && "rotate-180")} />
+                      )}
+                      <span className="font-medium">
+                        {isStreaming ? "Thinking..." : "Thought process"}
+                      </span>
+                    </button>
+                    {isThoughtVisible && (
+                      <div
+                        className={cn(
+                          "text-[11px] italic border-l-2 pl-2.5 py-1 mb-1 leading-relaxed transition-all duration-300",
+                          isStreaming
+                            ? "text-indigo-400/80 border-indigo-300"
+                            : "text-stone-400 border-stone-200"
+                        )}
+                      >
+                        {message.thought}
+                      </div>
+                    )}
+                  </>
                 )}
                 <MarkdownRenderer content={message.content || " "} isStreaming={isStreaming} />
-                {message.imageData && (
-                  <div className="rounded-xl overflow-hidden border border-stone-200 bg-white shadow-sm mt-2">
-                    <Image
-                      src={message.imageData.startsWith('data:') ? message.imageData : `data:image/png;base64,${message.imageData}`}
-                      alt="Data Visualization"
-                      width={600}
-                      height={400}
-                      className="w-full h-auto"
-                      unoptimized
-                    />
-                  </div>
-                )}
+                {/* Action buttons (Allow/Reject etc.) */}
                 {message.actions && (
-                  <div className="flex gap-2 mt-3 pt-2 border-t border-stone-100">
+                  <div className="flex gap-2 mt-2 pt-2 border-t border-stone-100">
                     {message.actions.map((action, idx) => (
                       <button
                         key={idx}
@@ -132,7 +153,7 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
         </div>
 
         {/* Timestamp */}
-        <span className="text-xs text-stone-400 mt-1">{formatTime(message.createdAt)}</span>
+        <span className="text-[10px] text-stone-400 mt-1">{formatTime(message.createdAt)}</span>
       </div>
     </div>
   )
