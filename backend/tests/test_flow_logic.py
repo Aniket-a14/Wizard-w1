@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pandas as pd
 import sys
 import os
+from types import SimpleNamespace
 
 # Ensure backend can import its modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -25,10 +26,16 @@ class TestScientificFlow:
         """
         mock_settings.MODEL_TYPE = "ollama"
         agent = ScientificAgent()
-        
-        # Mock the plan creation
-        with patch.object(agent, "_create_plan", return_value="<thought>Thinking...</thought> Plan: Do X."):
-            
+
+        with patch("src.core.agent.langgraph_agent.langgraph_agent.execute_workflow") as mock_execute_workflow:
+            mock_execute_workflow.return_value = SimpleNamespace(
+                result="Plan: Do X.",
+                plan="Plan: Do X.",
+                code="",
+                image=None,
+                thought="Thinking...",
+                status="waiting_approval"
+            )
             result, code, image, thought, status = agent.run("Analyze this", mock_df, mode="planning", is_confirmed_plan=False)
             
             assert status == "waiting_confirmation"
@@ -37,8 +44,7 @@ class TestScientificFlow:
             assert code == ""
             
     @patch("src.config.settings")
-    @patch("src.core.agent.flow.DataAnalysisAgent") 
-    def test_run_with_confirmed_plan(self, MockExecutionAgent, mock_settings, mock_df):
+    def test_run_with_confirmed_plan(self, mock_settings, mock_df):
         """
         Test that running with 'is_confirmed_plan=True':
         1. Skips planning.
@@ -47,18 +53,21 @@ class TestScientificFlow:
         """
         mock_settings.MODEL_TYPE = "ollama"
         agent = ScientificAgent()
-        
-        # Setup Mock Execution Agent
-        mock_exec_instance = MockExecutionAgent.return_value
-        mock_exec_instance.run.return_value = ("Success", "print('done')", None)
-        agent.execution_agent = mock_exec_instance # Replace the real one initialized in __init__
-        
-        result, code, image, thought, status = agent.run("Analyze this", mock_df, mode="fast", is_confirmed_plan=True)
+
+        with patch("src.core.agent.langgraph_agent.langgraph_agent.execute_workflow") as mock_execute_workflow:
+            mock_execute_workflow.return_value = SimpleNamespace(
+                result="Success",
+                plan="Analyze this",
+                code="print('done')",
+                image=None,
+                thought="",
+                status="completed"
+            )
+            result, code, image, thought, status = agent.run("Analyze this", mock_df, mode="fast", is_confirmed_plan=True)
         
         assert status == "completed"
         assert "Success" in result
-        # Verify execution was called
-        mock_exec_instance.run.assert_called_once()
+        mock_execute_workflow.assert_called_once()
 
     @patch("src.config.settings")
     def test_manager_initialization(self, mock_settings):
@@ -67,5 +76,4 @@ class TestScientificFlow:
         """
         agent = ScientificAgent()
         assert agent.execution_agent is not None
-
 
