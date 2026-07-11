@@ -306,7 +306,7 @@ class SandboxManager:
             self.container = self.client.containers.run(
                 self.IMAGE_NAME,
                 command="sleep 365d",
-                ports={'5005/tcp': self.port},
+                ports={'5005/tcp': ('127.0.0.1', self.port)},
                 volumes={str(settings.WORKSPACE_DIR): {'bind': '/workspace', 'mode': 'rw'}},
                 working_dir="/workspace",
                 detach=True,
@@ -320,8 +320,23 @@ class SandboxManager:
             # Run the daemon inside the container in the background
             self.container.exec_run("python /tmp/sandbox_agent_daemon.py", detach=True)
             
-            # Wait briefly for daemon port to open
-            time.sleep(1.0)
+            # Wait for daemon port to become available (poll instead of blind sleep)
+            max_wait = 5.0
+            poll_interval = 0.2
+            waited = 0.0
+            while waited < max_wait:
+                try:
+                    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    test_sock.settimeout(0.5)
+                    test_sock.connect(('127.0.0.1', self.port))
+                    test_sock.close()
+                    logger.info("Sandbox daemon is ready", wait_time=round(waited, 2))
+                    break
+                except (ConnectionRefusedError, OSError):
+                    time.sleep(poll_interval)
+                    waited += poll_interval
+            else:
+                logger.warning("Sandbox daemon did not respond within timeout", timeout=max_wait)
         except Exception as e:
             logger.error("Failed to start container session", error=str(e))
             if self.container:
@@ -460,3 +475,8 @@ class SandboxManager:
         
         tar_stream.seek(0)
         container.put_archive(os.path.dirname(path), tar_stream)
+
+
+# Global singleton instance
+sandbox_mgr = SandboxManager()
+

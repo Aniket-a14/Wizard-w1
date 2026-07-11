@@ -1,58 +1,22 @@
-import json
-import os
 import time
-from typing import List, Dict, Any, Optional, Protocol
+from typing import List, Dict, Any, Optional
 from src.utils.logging import logger
-
-class MemoryStore(Protocol):
-    """Protocol for memory storage backends."""
-    def save(self, memories: List[Dict[str, Any]]): ...
-    def load(self) -> List[Dict[str, Any]]: ...
-
-class JSONMemoryStore:
-    """JSON implementation of the memory store."""
-    def __init__(self, storage_path: str):
-        self.storage_path = storage_path
-        self._ensure_storage()
-
-    def _ensure_storage(self):
-        os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-        if not os.path.exists(self.storage_path):
-            with open(self.storage_path, 'w') as f:
-                json.dump([], f)
-
-    def save(self, memories: List[Dict[str, Any]]):
-        try:
-            with open(self.storage_path, 'w') as f:
-                json.dump(memories, f, indent=2)
-        except Exception as e:
-            logger.error("Failed to save memory", error=str(e))
-
-    def load(self) -> List[Dict[str, Any]]:
-        try:
-            if not os.path.exists(self.storage_path):
-                return []
-            with open(self.storage_path, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error("Failed to load memory", error=str(e))
-            return []
+from src.core.database import db_mgr
 
 class WorkingMemory:
     """
     Handles persistent storage and retrieval of agent interactions.
-    Now supports abstract storage backends for professional scalability.
+    Uses SQLite via DatabaseManager for thread-safe concurrent access.
     """
     
-    def __init__(self, store: Optional[MemoryStore] = None):
-        # Default to JSON for now, but easily swappable
-        self.store = store or JSONMemoryStore("backend/data/memory.json")
-        self.memories = self.store.load()
+    def __init__(self):
+        self.memories = db_mgr.get_memories()
 
     def add_interaction(self, instruction: str, plan: str, code: str, result: str, meta: Dict[str, Any] = None):
-        """Adds a new interaction to memory."""
+        """Adds a new interaction to memory (persisted to SQLite)."""
+        ts = time.time()
         memory_entry = {
-            "timestamp": time.time(),
+            "timestamp": ts,
             "instruction": instruction,
             "plan": plan,
             "code": code,
@@ -60,7 +24,7 @@ class WorkingMemory:
             "meta": meta or {}
         }
         self.memories.append(memory_entry)
-        self.store.save(self.memories)
+        db_mgr.save_memory(ts, instruction, plan, code, result, meta)
         logger.info("New interaction saved to memory", interaction_count=len(self.memories))
 
     def search(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
@@ -92,5 +56,5 @@ class WorkingMemory:
             context += f"Key Finding: {entry['result'][:150]}...\n\n"
         return context
 
-# Global Memory Instance initialized with default persistent store
+# Global Memory Instance initialized with SQLite-backed persistent store
 working_memory = WorkingMemory()

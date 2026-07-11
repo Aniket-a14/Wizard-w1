@@ -6,7 +6,7 @@ import warnings
 # Modern Imports (Src Architecture)
 from src.core.agent.flow import science_agent
 from src.config import settings
-from feedback_store import FeedbackStore
+from src.core.feedback_store import FeedbackStore
 
 
 # Suppress Pydantic V1 compatibility warnings in Python 3.14+
@@ -65,9 +65,11 @@ def main():
 
             try:
                 # Synchronous execution via Science Agent
-                result, code, image = science_agent.run(instruction, df)
+                result, code, image, thought, status = science_agent.run(instruction, df)
 
                 print("\nResult:", result)
+                if thought:
+                    print("Thought:", thought)
                 if image:
                     print("(Chart generated and saved)")
 

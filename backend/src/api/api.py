@@ -41,6 +41,35 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+# Simple In-Memory Rate Limiter (no external dependencies)
+from collections import defaultdict
+
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+RATE_LIMIT_MAX_REQUESTS = 30  # per window
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMITED_PATHS = {"/chat", "/upload", "/ws/chat"}
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in RATE_LIMITED_PATHS:
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        # Clean old entries outside the window
+        _rate_limit_store[client_ip] = [
+            t for t in _rate_limit_store[client_ip] 
+            if now - t < RATE_LIMIT_WINDOW_SECONDS
+        ]
+        if len(_rate_limit_store[client_ip]) >= RATE_LIMIT_MAX_REQUESTS:
+            logger.warning("Rate limit exceeded", client_ip=client_ip, path=path)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please wait before retrying."}
+            )
+        _rate_limit_store[client_ip].append(now)
+    return await call_next(request)
+
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -107,8 +136,7 @@ async def upload_file(file: UploadFile = File(...)):
             cleaned_df.to_csv(original_path, index=False)
 
         # Re-initialize sandbox session to load new dataset
-        from src.core.tools.sandbox import SandboxManager
-        sandbox_mgr = SandboxManager()
+        from src.core.tools.sandbox import sandbox_mgr
         if sandbox_mgr.container:
             await asyncio.to_thread(sandbox_mgr.cleanup)
         await asyncio.to_thread(sandbox_mgr.start_session)
@@ -385,16 +413,14 @@ app.mount("/workspace/static", StaticFiles(directory=str(settings.WORKSPACE_DIR)
 
 @app.get("/sandbox/variables")
 async def get_sandbox_variables():
-    from src.core.tools.sandbox import SandboxManager
-    sandbox_mgr = SandboxManager()
+    from src.core.tools.sandbox import sandbox_mgr
     variables = await asyncio.to_thread(sandbox_mgr.inspect_variables)
     return variables
 
 
 @app.post("/sandbox/interrupt")
 async def interrupt_sandbox():
-    from src.core.tools.sandbox import SandboxManager
-    sandbox_mgr = SandboxManager()
+    from src.core.tools.sandbox import sandbox_mgr
     await asyncio.to_thread(sandbox_mgr.interrupt)
     return {"status": "interrupted"}
 
@@ -403,8 +429,7 @@ async def interrupt_sandbox():
 async def export_sandbox_variable(name: str):
     import os
     safe_name = os.path.basename(name)
-    from src.core.tools.sandbox import SandboxManager
-    sandbox_mgr = SandboxManager()
+    from src.core.tools.sandbox import sandbox_mgr
     
     # Verify variable exists in sandbox variables
     variables = await asyncio.to_thread(sandbox_mgr.inspect_variables)

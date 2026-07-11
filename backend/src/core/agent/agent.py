@@ -16,15 +16,15 @@ from ...config import settings
 from ...utils.logging import logger
 from ..prompts import create_prompt
 from ..tools.stats import StatisticalToolkit
-from ..tools.sandbox import SandboxManager
-from feedback_store import FeedbackStore
+from ..tools.sandbox import sandbox_mgr
+from src.core.feedback_store import FeedbackStore
 
 
 class DataAnalysisAgent:
     def __init__(self):
         self.llm = None
         self.worker_llm = None
-        self.sandbox = SandboxManager()
+        self.sandbox = sandbox_mgr
         self.search_tool = None
         self.feedback_store = FeedbackStore()
 

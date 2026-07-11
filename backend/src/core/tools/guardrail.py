@@ -17,7 +17,9 @@ class GuardrailAgent:
         (r"exec\(", "Dangerous exec() call"),
         (r"socket\.", "Network socket access"),
         (r"requests\.", "Network request attempt"),
-        (r"open\(", "Direct file system access")
+        # Note: open() is NOT blocked here because the AST guardrail in
+        # langgraph_agent.py handles it with path-traversal detection,
+        # allowing legitimate workspace file access while blocking escapes.
     ]
 
     @classmethod

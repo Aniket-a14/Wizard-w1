@@ -1,11 +1,8 @@
 from typing import Tuple, Optional
 from src.utils.logging import logger, trace_agent
-from src.utils.cache import response_cache
 from src.core.agent.agent import DataAnalysisAgent
-from src.core.prompts import create_planning_prompt, create_cleaning_prompt
+from src.core.prompts import create_cleaning_prompt
 from src.core.tools.catalog import CatalogEngine
-from src.core.agent.council import TheCouncil
-from src.core.memory import working_memory
 import pandas as pd
 
 
@@ -17,7 +14,6 @@ class ScientificAgent:
 
     def __init__(self):
         self.execution_agent = DataAnalysisAgent()
-        self.council = TheCouncil()
         self.catalog = None
 
 
@@ -68,41 +64,27 @@ class ScientificAgent:
             logger.warning("Cleaning failed, proceeding with raw data", error=result)
             return df, catalog, "No changes applied due to error."
         
-        # The result of the agent execution is effectively the 'cleaning summary' 
-        # (prints or text returned by the execution agent)
-        logger.info("Dataset cleaned successfully")
-        return df, catalog, result
-
-    def _create_plan(self, instruction: str, df: pd.DataFrame, mode: str = "standard") -> str:
-        """Generates a high-level analysis plan (including thoughts)."""
-        # Retrieve Context from Memory
-        memory_context = working_memory.get_context_string(instruction)
+        # 3. Apply the generated cleaning code to produce the cleaned DataFrame
+        if code and code.strip():
+            try:
+                import numpy as np
+                import matplotlib.pyplot as plt
+                import seaborn as sns
+                exec_globals = {"pd": pd, "np": np, "plt": plt, "sns": sns, "df": df.copy()}
+                exec(code, exec_globals)
+                cleaned_df = exec_globals.get("df", df)
+                if isinstance(cleaned_df, pd.DataFrame) and not cleaned_df.empty:
+                    logger.info("Dataset cleaned successfully", original_shape=df.shape, cleaned_shape=cleaned_df.shape)
+                    return cleaned_df, catalog, result
+                else:
+                    logger.warning("Cleaning code did not produce a valid DataFrame, using original")
+                    return df, catalog, result
+            except Exception as e:
+                logger.warning("Failed to apply cleaning code locally, using original", error=str(e))
+                return df, catalog, result
         
-        # Check Cache
-        cache_key = response_cache.generate_key(
-            instruction, str(df.columns.tolist()), str(df.shape), mode
-        )
-        cached_plan = response_cache.get(cache_key)
-        if cached_plan:
-            logger.info("Plan retrieved from cache")
-            return cached_plan
-
-        llm = self.execution_agent._get_llm()
-        if not llm:
-            return "Proceed directly."
-
-        try:
-            prompt = create_planning_prompt(instruction, df, catalog=self.catalog, mode=mode, memory_context=memory_context)
-            
-            response = llm.invoke(prompt)
-            plan = response.content
-
-            # Cache Result
-            response_cache.set(cache_key, plan)
-            return plan
-        except Exception as e:
-            logger.warning("Planning failed, skipping", error=str(e))
-            return "Proceed with analysis."
+        logger.info("No cleaning code generated, using original data")
+        return df, catalog, result
 
 
 # Singleton for the higher-level agent

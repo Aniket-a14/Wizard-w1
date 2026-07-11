@@ -7,7 +7,7 @@ class Evaluator:
     """
 
     @staticmethod
-    def score_execution(result: str, expected_snippet: str = None) -> Dict[str, Any]:
+    def score_execution(result: str, expected_snippet: str = None, instruction: str = None) -> Dict[str, Any]:
         """
         Heuristic-based scoring of an execution result.
         """
@@ -24,12 +24,20 @@ class Evaluator:
             score -= 30
             deductions.append(f"Expected snippet '{expected_snippet}' missing from output.")
 
-        # 3. Scientific Rigour Check
-        scientific_keywords = ["mean", "distribution", "variance", "p-value", "significant"]
-        keyword_matches = sum(1 for kw in scientific_keywords if kw in result.lower())
-        if keyword_matches == 0:
-            score -= 10
-            deductions.append("Low scientific terminology in response.")
+        # 3. Scientific Rigour Check — only applies when query involves analysis/statistics
+        if instruction:
+            analysis_keywords = {"test", "correlation", "regression", "model", "hypothesis", 
+                                "distribution", "stats", "statistical", "significance", "predict"}
+            is_analytical = any(kw in instruction.lower() for kw in analysis_keywords)
+        else:
+            is_analytical = True  # Default to checking if no instruction provided
+            
+        if is_analytical:
+            scientific_keywords = ["mean", "distribution", "variance", "p-value", "significant"]
+            keyword_matches = sum(1 for kw in scientific_keywords if kw in result.lower())
+            if keyword_matches == 0:
+                score -= 10
+                deductions.append("Low scientific terminology in response.")
 
         return {
             "score": max(0, score),

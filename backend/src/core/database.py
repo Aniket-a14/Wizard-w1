@@ -56,6 +56,18 @@ class DatabaseManager:
                         embedding BLOB
                     )
                 """)
+                # 4. Working Memory Table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS working_memory (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp REAL,
+                        instruction TEXT,
+                        plan TEXT,
+                        code TEXT,
+                        result TEXT,
+                        meta TEXT
+                    )
+                """)
                 
                 # Check for migrations
                 # Check semantic_cache
@@ -204,6 +216,44 @@ class DatabaseManager:
                 conn.commit()
         except Exception as e:
             logger.error("Failed to save feedback entry", error=str(e))
+
+    # --- Working Memory ---
+    def get_memories(self) -> List[Dict[str, Any]]:
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT timestamp, instruction, plan, code, result, meta FROM working_memory ORDER BY timestamp ASC"
+                ).fetchall()
+                entries = []
+                for row in rows:
+                    meta = {}
+                    try:
+                        meta = json.loads(row["meta"]) if row["meta"] else {}
+                    except Exception:
+                        pass
+                    entries.append({
+                        "timestamp": row["timestamp"],
+                        "instruction": row["instruction"],
+                        "plan": row["plan"],
+                        "code": row["code"],
+                        "result": row["result"],
+                        "meta": meta
+                    })
+                return entries
+        except Exception as e:
+            logger.error("Failed to fetch working memory from database", error=str(e))
+            return []
+
+    def save_memory(self, timestamp: float, instruction: str, plan: str, code: str, result: str, meta: Dict[str, Any] = None):
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO working_memory (timestamp, instruction, plan, code, result, meta) VALUES (?, ?, ?, ?, ?, ?)",
+                    (timestamp, instruction, plan, code, result, json.dumps(meta or {}))
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error("Failed to save working memory entry", error=str(e))
 
 # Singleton instance
 db_mgr = DatabaseManager()
