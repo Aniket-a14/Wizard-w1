@@ -132,7 +132,7 @@ def run_server(port=5005):
             # Prevent server from crashing on connection errors
             try:
                 conn.close()
-            except:
+            except Exception:
                 pass
 
 if __name__ == '__main__':
@@ -206,7 +206,7 @@ class SandboxManager:
             for container in orphans:
                 try:
                     container.remove(force=True)
-                except:
+                except Exception:
                     pass
         except Exception as e:
             logger.warning("Failed to prune orphans", error=str(e))
@@ -244,7 +244,7 @@ class SandboxManager:
             if self.container:
                 try:
                     self.container.remove(force=True)
-                except:
+                except Exception:
                     pass
                 self.container = None
 
@@ -317,7 +317,7 @@ class SandboxManager:
             logger.info("Cleaning up sandbox container session")
             try:
                 self.container.remove(force=True)
-            except:
+            except Exception:
                 pass
             self.container = None
 

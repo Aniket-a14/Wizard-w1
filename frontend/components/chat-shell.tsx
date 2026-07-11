@@ -160,7 +160,12 @@ export function ChatShell() {
 
   // Send a message to the AI via WebSockets
   const sendMessage = useCallback(
-    async (content: string, currentMode: "planning" | "fast" = "planning", isConfirmedPlan: boolean = false, extraPayload: any = {}) => {
+    async (
+      content: string,
+      currentMode: "planning" | "fast" = "planning",
+      isConfirmedPlan: boolean = false,
+      extraPayload: { approved?: boolean; tool?: string; query?: string } = {}
+    ) => {
       if (!content.trim() || isStreaming) return
 
       setError(null)

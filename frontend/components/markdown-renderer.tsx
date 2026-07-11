@@ -210,7 +210,7 @@ export function MarkdownRenderer({ content, className, isStreaming = false }: Ma
     return elements
   }
 
-  const renderCodeBlock = (_part: string, _partIndex: number) => {
+  const renderCodeBlock = () => {
     // Don't render raw code blocks in chat — code execution is shown
     // as a compact status indicator by the chat-shell handler.
     return null
@@ -271,7 +271,7 @@ export function MarkdownRenderer({ content, className, isStreaming = false }: Ma
       <div className="markdown-content">
         {parts.map((part, partIndex) => {
           if (part.startsWith("```") && part.endsWith("```")) {
-            return renderCodeBlock(part, partIndex)
+            return renderCodeBlock()
           }
 
           // More robust check for tables in the part

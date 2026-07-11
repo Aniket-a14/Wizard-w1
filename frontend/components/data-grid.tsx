@@ -9,7 +9,7 @@ interface DataGridProps {
 }
 
 export function DataGrid({ apiBaseUrl, csvPath }: DataGridProps) {
-  const [data, setData] = useState<any[]>([])
+  const [data, setData] = useState<Record<string, unknown>[]>([])
   const [columns, setColumns] = useState<string[]>([])
   const [page, setPage] = useState(1)
   const [perPage] = useState(50)

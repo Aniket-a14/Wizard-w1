@@ -312,7 +312,7 @@ async def websocket_chat(websocket: WebSocket):
         logger.error("WebSocket chat crashed", error=str(e))
         try:
             await websocket.send_json({"type": "error", "content": f"Server error: {e}"})
-        except:
+        except Exception:
             pass
 
 
