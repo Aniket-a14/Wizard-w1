@@ -116,14 +116,24 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         # strict validation
         df = await validate_csv(file)
+        # Save raw/initial df to mounted workspace folder for sandbox access during cleaning
+        csv_path = settings.WORKSPACE_DIR / "dataset.csv"
+        feather_path = settings.WORKSPACE_DIR / "dataset.feather"
+        df.to_csv(csv_path, index=False)
+        df.to_feather(feather_path)
+
+        # Initialize/start sandbox session so it has the raw 'df' loaded
+        from src.core.tools.sandbox import sandbox_mgr
+        if sandbox_mgr.container:
+            await asyncio.to_thread(sandbox_mgr.cleanup)
+        await asyncio.to_thread(sandbox_mgr.start_session)
+
         # Phase 1: Semantic Cleaning Stage (Offloaded to background thread)
         cleaned_df, catalog, cleaning_summary = await asyncio.to_thread(science_agent.clean_dataset, df)
         state["df"] = cleaned_df
         state["catalog"] = catalog
 
-        # Save to mounted workspace folder for sandbox access and workspace explorer
-        csv_path = settings.WORKSPACE_DIR / "dataset.csv"
-        feather_path = settings.WORKSPACE_DIR / "dataset.feather"
+        # Save the final cleaned_df to the workspace, overwriting the raw version
         cleaned_df.to_csv(csv_path, index=False)
         cleaned_df.to_feather(feather_path)
 
@@ -140,9 +150,7 @@ async def upload_file(file: UploadFile = File(...)):
 
             SchemaRegistry.register_dataframe(clean_filename, cleaned_df)
 
-        # Re-initialize sandbox session to load new dataset
-        from src.core.tools.sandbox import sandbox_mgr
-
+        # Re-initialize sandbox session to load the final cleaned dataset for future user queries
         if sandbox_mgr.container:
             await asyncio.to_thread(sandbox_mgr.cleanup)
         await asyncio.to_thread(sandbox_mgr.start_session)

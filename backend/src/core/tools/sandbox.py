@@ -305,6 +305,18 @@ class SandboxManager:
         except Exception as e:
             logger.warning("Failed to prune orphans", error=str(e))
 
+    def _get_host_workspace_dir(self) -> str:
+        """Determines the host path of the workspace directory."""
+        if os.path.exists('/.dockerenv'):
+            try:
+                container = self.client.containers.get(socket.gethostname())
+                for mount in container.attrs.get('Mounts', []):
+                    if mount.get('Destination') == '/workspace':
+                        return mount.get('Source')
+            except Exception as e:
+                logger.warning("Failed to auto-detect host workspace dir from mounts", error=str(e))
+        return str(settings.WORKSPACE_DIR)
+
     def start_session(self):
         """Starts a persistent container session with mounted workspace."""
         if not self.client:
@@ -315,11 +327,12 @@ class SandboxManager:
             logger.info("Starting stateful container session", port=self.port)
 
             # Start Docker container
+            host_workspace = self._get_host_workspace_dir()
             run_kwargs = {
                 "image": self.IMAGE_NAME,
                 "command": "sleep 365d",
                 "ports": {"5005/tcp": (_get_bind_ip(), self.port)},
-                "volumes": {str(settings.WORKSPACE_DIR): {"bind": "/workspace", "mode": "rw"}},
+                "volumes": {host_workspace: {"bind": "/workspace", "mode": "rw"}},
                 "working_dir": "/workspace",
                 "detach": True,
                 "labels": {"wizard_managed": "true"},
