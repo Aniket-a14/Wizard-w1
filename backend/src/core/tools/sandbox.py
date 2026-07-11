@@ -231,6 +231,14 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _get_host_ip() -> str:
+    return "host.docker.internal" if os.path.exists("/.dockerenv") else "127.0.0.1"
+
+
+def _get_bind_ip() -> str:
+    return "0.0.0.0" if os.path.exists("/.dockerenv") else "127.0.0.1"
+
+
 class SandboxManager:
     """
     Manages a stateful Docker container for persistent code execution.
@@ -310,7 +318,7 @@ class SandboxManager:
             run_kwargs = {
                 "image": self.IMAGE_NAME,
                 "command": "sleep 365d",
-                "ports": {"5005/tcp": ("127.0.0.1", self.port)},
+                "ports": {"5005/tcp": (_get_bind_ip(), self.port)},
                 "volumes": {str(settings.WORKSPACE_DIR): {"bind": "/workspace", "mode": "rw"}},
                 "working_dir": "/workspace",
                 "detach": True,
@@ -337,7 +345,7 @@ class SandboxManager:
                 try:
                     test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     test_sock.settimeout(0.5)
-                    test_sock.connect(("127.0.0.1", self.port))
+                    test_sock.connect((_get_host_ip(), self.port))
                     test_sock.close()
                     logger.info("Sandbox daemon is ready", wait_time=round(waited, 2))
                     break
@@ -369,7 +377,7 @@ class SandboxManager:
         # Connect to container daemon
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(("127.0.0.1", self.port))
+            s.connect((_get_host_ip(), self.port))
 
             # Send code message
             payload = json.dumps({"code": code}).encode("utf-8")
@@ -429,7 +437,7 @@ class SandboxManager:
             return {}
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(("127.0.0.1", self.port))
+            s.connect((_get_host_ip(), self.port))
             payload = json.dumps({"action": "inspect_variables"}).encode("utf-8")
             msg = struct.pack(">I", len(payload)) + payload
             s.sendall(msg)

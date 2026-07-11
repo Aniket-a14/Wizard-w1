@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # Analysis Configuration
     MAX_TOKENS: int = 4096
     TEMPERATURE: float = 0.0
-    LLM_NUM_CTX: int = 4096
+    LLM_NUM_CTX: int = 16384
     LLM_NUM_THREAD: int = 8
 
     # Paths
