@@ -72,6 +72,16 @@ class DatabaseManager:
                         meta TEXT
                     )
                 """)
+                # 5. Schema Registry Table (For multi-file relational schema mapping)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS schema_registry (
+                        filename TEXT PRIMARY KEY,
+                        columns TEXT,
+                        row_count INTEGER,
+                        primary_key TEXT,
+                        meta TEXT
+                    )
+                """)
 
                 # Check for migrations
                 # Check semantic_cache
@@ -327,6 +337,62 @@ class DatabaseManager:
                 conn.commit()
         except Exception as e:
             logger.error("Failed to save working memory entry", error=str(e))
+
+    # --- Schema Registry Operations ---
+    def save_schema(
+        self, filename: str, columns: list[str], row_count: int, primary_key: str, meta: dict[str, Any] = None
+    ):
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO schema_registry (filename, columns, row_count, primary_key, meta) VALUES (?, ?, ?, ?, ?)",
+                    (filename, json.dumps(columns), row_count, primary_key, json.dumps(meta or {})),
+                )
+                conn.commit()
+                logger.info("Saved schema to database registry", filename=filename)
+        except Exception as e:
+            logger.error("Failed to save schema registry entry", error=str(e))
+
+    def get_schemas(self) -> list[dict[str, Any]]:
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT filename, columns, row_count, primary_key, meta FROM schema_registry"
+                ).fetchall()
+                entries = []
+                for row in rows:
+                    cols = []
+                    try:
+                        cols = json.loads(row["columns"]) if row["columns"] else []
+                    except Exception:
+                        pass
+                    meta = {}
+                    try:
+                        meta = json.loads(row["meta"]) if row["meta"] else {}
+                    except Exception:
+                        pass
+                    entries.append(
+                        {
+                            "filename": row["filename"],
+                            "columns": cols,
+                            "row_count": row["row_count"],
+                            "primary_key": row["primary_key"],
+                            "meta": meta,
+                        }
+                    )
+                return entries
+        except Exception as e:
+            logger.error("Failed to fetch schemas from registry", error=str(e))
+            return []
+
+    def delete_schema(self, filename: str):
+        try:
+            with self._get_connection() as conn:
+                conn.execute("DELETE FROM schema_registry WHERE filename = ?", (filename,))
+                conn.commit()
+                logger.info("Deleted schema from registry", filename=filename)
+        except Exception as e:
+            logger.error("Failed to delete schema registry entry", error=str(e))
 
 
 # Singleton instance

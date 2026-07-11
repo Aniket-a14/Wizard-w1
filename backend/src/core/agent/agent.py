@@ -1,23 +1,25 @@
+import ast
+import base64
+import builtins
+import io
+import re
+import sys
+import traceback
+from collections.abc import Callable
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 from langchain_ollama import ChatOllama
-import re
-import io
-import base64
-import ast
-import traceback
-import builtins
-import sys
-from typing import Optional, Callable, Tuple
+
+from src.core.feedback_store import FeedbackStore
 
 from ...config import settings
 from ...utils.logging import logger
 from ..prompts import create_prompt
-from ..tools.stats import StatisticalToolkit
 from ..tools.sandbox import sandbox_mgr
-from src.core.feedback_store import FeedbackStore
+from ..tools.stats import StatisticalToolkit
 
 
 class DataAnalysisAgent:
@@ -32,18 +34,39 @@ class DataAnalysisAgent:
         """Get or initialize the Manager LLM (Planning & Critique)."""
         if self.llm is None:
             try:
-                logger.info("Initializing Manager (ChatOllama)", 
-                            model=settings.MODEL_NAME, 
-                            temp=settings.TEMPERATURE)
-                self.llm = ChatOllama(
-                    model=settings.MODEL_NAME, 
-                    base_url=settings.OLLAMA_BASE_URL,
-                    temperature=settings.TEMPERATURE,
-                    num_predict=settings.MAX_TOKENS,
-                    num_ctx=settings.LLM_NUM_CTX,
-                    num_thread=settings.LLM_NUM_THREAD,
-                    repeat_penalty=1.1
-                )
+                provider = settings.API_PROVIDER
+                if provider == "ollama":
+                    logger.info(
+                        "Initializing Manager (ChatOllama)", model=settings.MODEL_NAME, temp=settings.TEMPERATURE
+                    )
+                    self.llm = ChatOllama(
+                        model=settings.MODEL_NAME,
+                        base_url=settings.OLLAMA_BASE_URL,
+                        temperature=settings.TEMPERATURE,
+                        num_predict=settings.MAX_TOKENS,
+                        num_ctx=settings.LLM_NUM_CTX,
+                        num_thread=settings.LLM_NUM_THREAD,
+                        repeat_penalty=1.1,
+                    )
+                else:
+                    # Gateway / Cloud provider (e.g., openai, custom_gateway)
+                    logger.info(
+                        "Initializing Manager (ChatOpenAI Gateway)",
+                        model=settings.MODEL_NAME,
+                        temp=settings.TEMPERATURE,
+                    )
+                    try:
+                        from langchain_openai import ChatOpenAI
+                    except ImportError:
+                        from langchain_community.chat_models import ChatOpenAI
+
+                    self.llm = ChatOpenAI(
+                        model=settings.MODEL_NAME,
+                        openai_api_base=settings.GATEWAY_API_URL if settings.GATEWAY_API_URL else None,
+                        openai_api_key=settings.GATEWAY_API_KEY if settings.GATEWAY_API_KEY else "dummy",
+                        temperature=settings.TEMPERATURE,
+                        max_tokens=settings.MAX_TOKENS,
+                    )
             except Exception as e:
                 logger.warning("Failed to initialize Manager", error=str(e))
         return self.llm
@@ -52,22 +75,51 @@ class DataAnalysisAgent:
         """Get or initialize the Worker LLM (Coding)."""
         if self.worker_llm is None:
             try:
-                logger.info("Initializing Worker (ChatOllama)", 
-                            model=settings.WORKER_MODEL_NAME,
-                            temp=settings.TEMPERATURE)
-                self.worker_llm = ChatOllama(
-                    model=settings.WORKER_MODEL_NAME, 
-                    base_url=settings.OLLAMA_BASE_URL,
-                    temperature=settings.TEMPERATURE,
-                    num_predict=settings.MAX_TOKENS,
-                    num_ctx=settings.LLM_NUM_CTX,
-                    num_thread=settings.LLM_NUM_THREAD
-                )
+                provider = settings.API_PROVIDER
+                if provider == "ollama":
+                    logger.info(
+                        "Initializing Worker (ChatOllama)", model=settings.WORKER_MODEL_NAME, temp=settings.TEMPERATURE
+                    )
+                    self.worker_llm = ChatOllama(
+                        model=settings.WORKER_MODEL_NAME,
+                        base_url=settings.OLLAMA_BASE_URL,
+                        temperature=settings.TEMPERATURE,
+                        num_predict=settings.MAX_TOKENS,
+                        num_ctx=settings.LLM_NUM_CTX,
+                        num_thread=settings.LLM_NUM_THREAD,
+                    )
+                else:
+                    # Gateway / Cloud provider (e.g., openai, custom_gateway)
+                    logger.info(
+                        "Initializing Worker (ChatOpenAI Gateway)",
+                        model=settings.WORKER_MODEL_NAME,
+                        temp=settings.TEMPERATURE,
+                    )
+                    try:
+                        from langchain_openai import ChatOpenAI
+                    except ImportError:
+                        from langchain_community.chat_models import ChatOpenAI
+
+                    self.worker_llm = ChatOpenAI(
+                        model=settings.WORKER_MODEL_NAME,
+                        openai_api_base=settings.GATEWAY_API_URL if settings.GATEWAY_API_URL else None,
+                        openai_api_key=settings.GATEWAY_API_KEY if settings.GATEWAY_API_KEY else "dummy",
+                        temperature=settings.TEMPERATURE,
+                        max_tokens=settings.MAX_TOKENS,
+                    )
             except Exception as e:
                 logger.warning("Failed to initialize Worker", error=str(e))
         return self.worker_llm
 
-    def run(self, instruction: str, df: pd.DataFrame, previous_error: Optional[str] = None, catalog: Optional[dict] = None, plan: Optional[str] = None, mode: str = "standard") -> Tuple[str, str, Optional[str]]:
+    def run(
+        self,
+        instruction: str,
+        df: pd.DataFrame,
+        previous_error: str | None = None,
+        catalog: dict | None = None,
+        plan: str | None = None,
+        mode: str = "standard",
+    ) -> tuple[str, str, str | None]:
         """
         Refactored main entry point: Plan (DeepSeek) -> Execute (Qwen) -> Critique (DeepSeek).
         """
@@ -79,19 +131,19 @@ class DataAnalysisAgent:
         if not plan and mode != "fast":
             from ..prompts import create_planning_prompt, create_replan_prompt
             from ..tools.search import WebSearchTool
-            
+
             if self.search_tool is None:
                 self.search_tool = WebSearchTool()
-            
+
             planning_prompt = create_planning_prompt(instruction, df, catalog=catalog, mode=mode)
-            
+
             llm = self._get_llm()
             plan_text = ""
             if llm:
                 try:
                     log.info("Manager (DeepSeek) is planning...")
                     plan_response = llm.invoke(planning_prompt).content
-                    
+
                     # Check for SEARCH request
                     if "SEARCH:" in plan_response:
                         search_match = re.search(r'SEARCH:\s*"(.*?)"', plan_response)
@@ -99,11 +151,11 @@ class DataAnalysisAgent:
                             query = search_match.group(1)
                             log.info("Manager requested search", query=query)
                             results = self.search_tool.search(query)
-                            
+
                             # Re-plan with results
                             thought = re.search(r"<thought>(.*?)</thought>", plan_response, re.DOTALL)
                             thought_content = thought.group(1) if thought else "Initial thought"
-                            
+
                             replan_prompt = create_replan_prompt(instruction, results, thought_content)
                             log.info("Manager is re-planning with search results...")
                             plan_text = llm.invoke(replan_prompt).content
@@ -111,7 +163,7 @@ class DataAnalysisAgent:
                             plan_text = plan_response
                     else:
                         plan_text = plan_response
-                        
+
                     log.info("Final Plan obtained", plan_snippet=plan_text[:100])
                 except Exception as e:
                     log.error("Manager planning/search failed", error=str(e))
@@ -124,24 +176,24 @@ class DataAnalysisAgent:
         # 2. EXECUTION PHASE (Worker Brain - Qwen)
         # Qwen is the coding specialist.
         worker_llm = self._get_worker_llm()
-        
+
         max_retries = 2
         previous_error = None
-        
+
         # Retrieve similar examples for dynamic few-shot prompt augmentations
         few_shot = self.feedback_store.get_similar_examples(instruction)
-        
+
         for attempt in range(max_retries + 1):
             # Inject plan into the worker's prompt
             worker_prompt = create_prompt(
-                instruction, 
-                df, 
-                plan=plan_text, 
-                previous_error=previous_error, 
+                instruction,
+                df,
+                plan=plan_text,
+                previous_error=previous_error,
                 catalog=catalog,
-                few_shot_examples=few_shot
+                few_shot_examples=few_shot,
             )
-            
+
             code = ""
             if worker_llm:
                 try:
@@ -151,13 +203,13 @@ class DataAnalysisAgent:
                 except Exception as e:
                     log.error("Worker code generation failed", error=str(e))
                     return f"Worker error: {e}", "", None
-            
+
             if not code:
                 return "Failed to generate code.", "", None
 
             # 3. EXECUTION & FEEDBACK LOOP
             result, executed_code, image_base64 = self._process_code(code, df)
-            
+
             # Check for errors in the result
             if "Error executing code" in result or "Traceback" in result:
                 log.warning(f"Execution failed on attempt {attempt+1}", error=result)
@@ -183,8 +235,8 @@ class DataAnalysisAgent:
         return response_text.strip()
 
     def _process_code(
-        self, code: str, df: pd.DataFrame, on_stdout: Optional[Callable[[str], None]] = None
-    ) -> Tuple[str, str, Optional[str]]:
+        self, code: str, df: pd.DataFrame, on_stdout: Callable[[str], None] | None = None
+    ) -> tuple[str, str, str | None]:
         """Sanitizes and executes code."""
         # Cleanups
         if code.startswith("python"):
@@ -198,23 +250,21 @@ class DataAnalysisAgent:
             return self._execute_safe(code, df)
 
     def _execute_sandboxed(
-        self, code: str, df: pd.DataFrame, on_stdout: Optional[Callable[[str], None]] = None
-    ) -> Tuple[str, str, Optional[str]]:
+        self, code: str, df: pd.DataFrame, on_stdout: Callable[[str], None] | None = None
+    ) -> tuple[str, str, str | None]:
         """Executes code in a Docker sandbox."""
         logger.info("Executing code in sandbox", code_snippet=code[:50])
-        
+
         # Serialize DF to pass to sandbox using fastest IPC (Feather)
         buf = io.BytesIO()
         df.to_feather(buf)
         df_bytes = buf.getvalue()
 
         result, image_base64 = self.sandbox.run_code(code, df_bytes, on_stdout)
-        
+
         return result, code, image_base64
 
-    def _execute_safe(
-        self, code: str, df: pd.DataFrame
-    ) -> Tuple[str, str, Optional[str]]:
+    def _execute_safe(self, code: str, df: pd.DataFrame) -> tuple[str, str, str | None]:
         """Executes code in a sandbox."""
         logger.info("Executing code", code_snippet=code[:50])
 
@@ -231,9 +281,7 @@ class DataAnalysisAgent:
             "df": df,
             "stats": StatisticalToolkit,
             "__builtins__": {
-                k: v
-                for k, v in builtins.__dict__.items()
-                if k not in ["eval", "exec", "open", "exit", "quit"]
+                k: v for k, v in builtins.__dict__.items() if k not in ["eval", "exec", "open", "exit", "quit"]
             },
         }
 
@@ -276,9 +324,7 @@ class DataAnalysisAgent:
                 )
 
         except Exception as e:
-            logger.error(
-                "Execution error", error=str(e), traceback=traceback.format_exc()
-            )
+            logger.error("Execution error", error=str(e), traceback=traceback.format_exc())
             return f"Error executing code: {e}", code, None
         finally:
             if sys.stdout != sys_stdout_backup:

@@ -128,6 +128,19 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
                   </>
                 )}
                 <MarkdownRenderer content={message.content || " "} isStreaming={isStreaming} />
+
+                {/* Console Log execution output */}
+                {message.logs && (
+                  <div className="mt-2.5 p-3 bg-stone-900 border border-stone-800 rounded-xl text-[10px] font-mono text-stone-200 w-full overflow-x-auto whitespace-pre leading-relaxed select-text">
+                    <div className="flex items-center gap-1.5 border-b border-stone-800/60 pb-1.5 mb-1.5 text-[9px] uppercase tracking-wider text-stone-500/80 font-bold select-none">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500/80"></span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500/80"></span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80"></span>
+                      <span className="ml-1">Execution Console Output</span>
+                    </div>
+                    {message.logs}
+                  </div>
+                )}
                 {/* Downloads card */}
                 {message.downloads && message.downloads.length > 0 && (
                   <div className="flex flex-col gap-1.5 mt-2.5 pt-2.5 border-t border-stone-100/50 w-full">

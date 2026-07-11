@@ -15,7 +15,7 @@ select = [
     "UP",  # pyupgrade (modern syntax suggestions)
 ]
 
-ignore = ["E501"]
+ignore = ["E501", "B008", "B904", "B023", "B007"]
 
 # Exclude typical temporary directories
 exclude = [

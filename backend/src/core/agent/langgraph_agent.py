@@ -390,11 +390,27 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             state.status = "completed"
             return state
 
+        # Delete plot.html if exists before code execution to prevent stale charts
+        import os
+
+        from src.config import settings
+
+        host_plot_path = settings.WORKSPACE_DIR / "plot.html"
+        if host_plot_path.exists():
+            try:
+                os.remove(str(host_plot_path))
+            except Exception:
+                pass
+
         # 3. Stateful IPython Execute with stdout streaming callback
         result, _, plot_b64 = self.execution_agent._process_code(state.code, state.df, on_stdout)
 
         state.result = result
-        state.image = plot_b64
+        if settings.PLOT_FORMAT == "html" and host_plot_path.exists():
+            state.image = "plot.html"
+            plot_b64 = None
+        else:
+            state.image = plot_b64
 
         if "Error executing code:" in result or "Traceback" in result:
             state.error = result
@@ -482,9 +498,12 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
 
             # Append Visual Insights if plot is present
             if state.image:
-                logger.info("Plot generated. Fetching visual insights.")
-                vision_desc = self.step_vision_explain(state.image)
-                final_response += f"\n\n### 📊 Visual Insights\n{vision_desc}"
+                if state.image == "plot.html":
+                    final_response += "\n\n### 📊 Visual Insights\nGenerated interactive Plotly chart. You can interact with the plot (hover, zoom, scale) inside the **Plots** panel."
+                else:
+                    logger.info("Plot generated. Fetching visual insights.")
+                    vision_desc = self.step_vision_explain(state.image)
+                    final_response += f"\n\n### 📊 Visual Insights\n{vision_desc}"
 
             final_response += "\n\n### 🛡️ The Council's Review\n"
             for review in council_feedback.get("reviews", []):

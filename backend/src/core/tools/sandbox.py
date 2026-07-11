@@ -1,15 +1,18 @@
-import docker
-import os
-import io
-import tarfile
 import atexit
-import socket
+import io
 import json
+import os
+import socket
 import struct
+import tarfile
 import time
-from typing import Tuple, Optional, Callable
+from collections.abc import Callable
+
+import docker
+
 from src.config import settings
 from src.utils.logging import logger
+
 
 # Daemon script to run inside the container for persistent stateful execution
 DAEMON_SCRIPT = """
@@ -69,13 +72,13 @@ def run_server(port=5005):
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(('0.0.0.0', port))
     server.listen(1)
-    
+
     # Initialize persistent state namespace
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
     import seaborn as sns
-    
+
     exec_globals = {
         "pd": pd,
         "np": np,
@@ -83,7 +86,7 @@ def run_server(port=5005):
         "sns": sns,
         "__builtins__": __builtins__
     }
-    
+
     # Preload dataset if exists
     if os.path.exists('/workspace/dataset.feather'):
         try:
@@ -93,7 +96,7 @@ def run_server(port=5005):
             print(f"Error preloading dataset: {e}")
 
     print(f"Sandbox daemon listening on port {port}...")
-    
+
     while True:
         try:
             conn, addr = server.accept()
@@ -101,21 +104,21 @@ def run_server(port=5005):
             if not payload:
                 conn.close()
                 continue
-                
+
             code = payload.get("code", "")
             action = payload.get("action", "execute")
-            
+
             if action == "inspect_variables":
                 var_info = {}
                 try:
                     for name, val in exec_globals.items():
                         if name.startswith("__") or type(val).__name__ in {"module", "function", "builtin_function_or_method"}:
                             continue
-                        
+
                         type_name = type(val).__name__
                         shape = None
                         preview = ""
-                        
+
                         if isinstance(val, pd.DataFrame):
                             shape = list(val.shape)
                             preview = f"Columns: {list(val.columns[:5])}"
@@ -136,7 +139,7 @@ def run_server(port=5005):
                             preview = str(val)[:100]
                         else:
                             preview = str(val)[:100]
-                            
+
                         var_info[name] = {
                             "type": type_name,
                             "shape": shape,
@@ -148,21 +151,21 @@ def run_server(port=5005):
                 send_message(conn, response)
                 conn.close()
                 continue
-                
+
             # Setup output capture with streaming support
             stdout_stream = SocketStdoutStream(conn)
             stderr_buf = io.StringIO()
             sys.stdout = stdout_stream
             sys.stderr = stderr_buf
-            
+
             plot_data = None
             status = "success"
-            
+
             try:
                 # Clear matplotlib plot state
                 plt.clf()
                 plt.close('all')
-                
+
                 try:
                     # Exec user code in the persistent namespace
                     exec(code, exec_globals)
@@ -179,13 +182,13 @@ def run_server(port=5005):
                     }
                     pkg_to_install = package_mapping.get(missing_module, missing_module)
                     print(f"[Sandbox] Missing module '{missing_module}' detected. Installing package '{pkg_to_install}' dynamically...")
-                    
+
                     # Install dynamically inside the container environment
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", pkg_to_install])
-                    
+
                     # Try re-running the user code block after successful install
                     exec(code, exec_globals)
-                
+
                 # Check for plots
                 if plt.get_fignums():
                     buf = io.BytesIO()
@@ -202,7 +205,7 @@ def run_server(port=5005):
             finally:
                 sys.stdout = sys.__stdout__
                 sys.stderr = sys.__stderr__
-                
+
             response = {
                 "status": status,
                 "stdout": "",  # Already streamed
@@ -221,9 +224,10 @@ if __name__ == '__main__':
     run_server()
 """
 
+
 def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
+        s.bind(("", 0))
         return s.getsockname()[1]
 
 
@@ -232,35 +236,35 @@ class SandboxManager:
     Manages a stateful Docker container for persistent code execution.
     Mounts local ./workspace to container /workspace.
     """
-    
+
     _instance = None
     IMAGE_NAME = "wizard-sandbox:latest"
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(SandboxManager, cls).__new__(cls)
+            cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
-        if getattr(self, '_initialized', False):
+        if getattr(self, "_initialized", False):
             return
-            
+
         try:
             self.client = docker.from_env()
             self.container = None
             self.port = None
-            
+
             # Ensure Image Exists
             try:
                 self.client.images.get(self.IMAGE_NAME)
             except docker.errors.ImageNotFound:
                 logger.info(f"Image {self.IMAGE_NAME} not found. Building...")
                 self._build_image()
-            
+
             self._prune_orphans()
             self.start_session()
-            
+
             atexit.register(self.cleanup)
             self._initialized = True
         except Exception as e:
@@ -297,29 +301,34 @@ class SandboxManager:
         """Starts a persistent container session with mounted workspace."""
         if not self.client:
             return
-        
+
         try:
             self.port = find_free_port()
             logger.info("Starting stateful container session", port=self.port)
-            
+
             # Start Docker container
-            self.container = self.client.containers.run(
-                self.IMAGE_NAME,
-                command="sleep 365d",
-                ports={'5005/tcp': ('127.0.0.1', self.port)},
-                volumes={str(settings.WORKSPACE_DIR): {'bind': '/workspace', 'mode': 'rw'}},
-                working_dir="/workspace",
-                detach=True,
-                labels={"wizard_managed": "true"},
-                network_disabled=settings.SANDBOX_NETWORK_DISABLED
-            )
-            
+            run_kwargs = {
+                "image": self.IMAGE_NAME,
+                "command": "sleep 365d",
+                "ports": {"5005/tcp": ("127.0.0.1", self.port)},
+                "volumes": {str(settings.WORKSPACE_DIR): {"bind": "/workspace", "mode": "rw"}},
+                "working_dir": "/workspace",
+                "detach": True,
+                "labels": {"wizard_managed": "true"},
+                "network_disabled": settings.SANDBOX_NETWORK_DISABLED,
+            }
+            if settings.SANDBOX_DOCKER_RUNTIME:
+                run_kwargs["runtime"] = settings.SANDBOX_DOCKER_RUNTIME
+                logger.info("Applying custom Docker runtime", runtime=settings.SANDBOX_DOCKER_RUNTIME)
+
+            self.container = self.client.containers.run(**run_kwargs)
+
             # Inject daemon script
             self._put_file(self.container, "/tmp/sandbox_agent_daemon.py", DAEMON_SCRIPT)
-            
+
             # Run the daemon inside the container in the background
             self.container.exec_run("python /tmp/sandbox_agent_daemon.py", detach=True)
-            
+
             # Wait for daemon port to become available (poll instead of blind sleep)
             max_wait = 5.0
             poll_interval = 0.2
@@ -328,7 +337,7 @@ class SandboxManager:
                 try:
                     test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     test_sock.settimeout(0.5)
-                    test_sock.connect(('127.0.0.1', self.port))
+                    test_sock.connect(("127.0.0.1", self.port))
                     test_sock.close()
                     logger.info("Sandbox daemon is ready", wait_time=round(waited, 2))
                     break
@@ -346,7 +355,9 @@ class SandboxManager:
                     pass
                 self.container = None
 
-    def run_code(self, code: str, df_bytes: Optional[bytes] = None, on_stdout: Optional[Callable[[str], None]] = None) -> Tuple[str, Optional[str]]:
+    def run_code(
+        self, code: str, df_bytes: bytes | None = None, on_stdout: Callable[[str], None] | None = None
+    ) -> tuple[str, str | None]:
         """
         Runs code inside the persistent session container with real-time stdout streaming.
         df_bytes parameter is kept for backward compatibility but is ignored
@@ -358,23 +369,23 @@ class SandboxManager:
         # Connect to container daemon
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(('127.0.0.1', self.port))
-            
+            s.connect(("127.0.0.1", self.port))
+
             # Send code message
-            payload = json.dumps({"code": code}).encode('utf-8')
-            msg = struct.pack('>I', len(payload)) + payload
+            payload = json.dumps({"code": code}).encode("utf-8")
+            msg = struct.pack(">I", len(payload)) + payload
             s.sendall(msg)
-            
+
             stdout_accumulated = []
             plot_data = None
-            
+
             while True:
                 # Read header
                 raw_msglen = s.recv(4)
                 if not raw_msglen:
                     break
-                msglen = struct.unpack('>I', raw_msglen)[0]
-                
+                msglen = struct.unpack(">I", raw_msglen)[0]
+
                 # Read payload
                 data_bytes = bytearray()
                 while len(data_bytes) < msglen:
@@ -382,10 +393,10 @@ class SandboxManager:
                     if not packet:
                         break
                     data_bytes.extend(packet)
-                    
-                response = json.loads(data_bytes.decode('utf-8'))
+
+                response = json.loads(data_bytes.decode("utf-8"))
                 status = response.get("status")
-                
+
                 if status == "stdout":
                     content = response.get("content", "")
                     stdout_accumulated.append(content)
@@ -396,7 +407,7 @@ class SandboxManager:
                     stdout = "".join(stdout_accumulated) + response.get("stdout", "")
                     stderr = response.get("stderr", "")
                     plot_data = response.get("plot")
-                    
+
                     if status == "interrupted":
                         s.close()
                         return "Error: Execution interrupted by user.", None
@@ -404,7 +415,7 @@ class SandboxManager:
                         s.close()
                         return f"Error executing code:\n{stderr}", None
                     break
-            
+
             s.close()
             output = stdout.strip() if stdout else "Executed successfully."
             return output, plot_data
@@ -418,26 +429,26 @@ class SandboxManager:
             return {}
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(('127.0.0.1', self.port))
-            payload = json.dumps({"action": "inspect_variables"}).encode('utf-8')
-            msg = struct.pack('>I', len(payload)) + payload
+            s.connect(("127.0.0.1", self.port))
+            payload = json.dumps({"action": "inspect_variables"}).encode("utf-8")
+            msg = struct.pack(">I", len(payload)) + payload
             s.sendall(msg)
-            
+
             # Read header
             raw_msglen = s.recv(4)
             if not raw_msglen:
                 s.close()
                 return {}
-            msglen = struct.unpack('>I', raw_msglen)[0]
-            
+            msglen = struct.unpack(">I", raw_msglen)[0]
+
             data_bytes = bytearray()
             while len(data_bytes) < msglen:
                 packet = s.recv(msglen - len(data_bytes))
                 if not packet:
                     break
                 data_bytes.extend(packet)
-                
-            response = json.loads(data_bytes.decode('utf-8'))
+
+            response = json.loads(data_bytes.decode("utf-8"))
             s.close()
             return response.get("variables", {})
         except Exception as e:
@@ -467,16 +478,15 @@ class SandboxManager:
 
     def _put_file(self, container, path: str, content: str):
         tar_stream = io.BytesIO()
-        with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-            content_bytes = content.encode('utf-8')
+        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+            content_bytes = content.encode("utf-8")
             info = tarfile.TarInfo(name=os.path.basename(path))
             info.size = len(content_bytes)
             tar.addfile(info, io.BytesIO(content_bytes))
-        
+
         tar_stream.seek(0)
         container.put_archive(os.path.dirname(path), tar_stream)
 
 
 # Global singleton instance
 sandbox_mgr = SandboxManager()
-

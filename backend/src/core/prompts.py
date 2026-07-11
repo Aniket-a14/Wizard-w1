@@ -1,9 +1,10 @@
-import pandas as pd
 import io
-from typing import Dict, List, Any, Optional
+from typing import Any
+
+import pandas as pd
 
 
-def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] = None) -> str:
+def generate_system_context(df: pd.DataFrame, catalog: dict[str, Any] | None = None) -> str:
     """
     Generates a rich, structured Markdown context description of the dataframe.
     """
@@ -27,7 +28,7 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
         else:
             val_str = ", ".join([f"`{v}`" for v in unique_vals[:5]])
             cat_summary_list.append(f"- **{col}**: {len(unique_vals)} unique values (e.g., {val_str}...)")
-    
+
     cat_summary = "\n".join(cat_summary_list) if cat_summary_list else "*No categorical columns detected.*"
 
     # Semantic Insight from Catalog
@@ -37,34 +38,40 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
             sem_type = meta.get("semantic_type", "unknown")
             missing = meta.get("quality", {}).get("missing_percentage", 0)
             semantic_insight_list.append(f"- **{col}**: `{sem_type}` ({missing}% missing)")
-    
+
     semantic_insight = "\n".join(semantic_insight_list) if semantic_insight_list else ""
 
     # Data Quality Scan
     warnings = []
-    
+
     # 1. Null warnings
     null_pct = df.isnull().mean()
     for col, pct in null_pct.items():
         if pct > 0.1:
-            warnings.append(f"- Column `{col}` has high missing rate ({pct:.1%}). Always handle nulls (e.g., `.dropna()` or `.fillna()`) before math or graphing.")
-            
+            warnings.append(
+                f"- Column `{col}` has high missing rate ({pct:.1%}). Always handle nulls (e.g., `.dropna()` or `.fillna()`) before math or graphing."
+            )
+
     # 2. Zero-division warning
     numeric_cols = df.select_dtypes(include=["number"]).columns
     for col in numeric_cols:
         try:
             if (df[col] == 0).any():
-                warnings.append(f"- Column `{col}` contains zero values. Ensure you guard against division-by-zero errors when dividing by this column.")
+                warnings.append(
+                    f"- Column `{col}` contains zero values. Ensure you guard against division-by-zero errors when dividing by this column."
+                )
         except Exception:
             pass
-            
+
     # 3. Date parsing warning
     object_cols = df.select_dtypes(include=["object", "string"]).columns
     for col in object_cols:
         try:
             sample = df[col].dropna().head(5)
             if not sample.empty and pd.to_datetime(sample, errors="coerce").notnull().all():
-                warnings.append(f"- Column `{col}` contains date-like values. Parse them using `pd.to_datetime()` before sorting or plotting by date.")
+                warnings.append(
+                    f"- Column `{col}` contains date-like values. Parse them using `pd.to_datetime()` before sorting or plotting by date."
+                )
         except Exception:
             pass
 
@@ -74,28 +81,9 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
 
     extra_datasets = ""
     try:
-        import os
-        from src.config import settings
-        # Determine active workspace path based on running environment
-        workspace_path = "/workspace" if os.path.exists("/workspace") else str(settings.WORKSPACE_DIR)
-        
-        if os.path.exists(workspace_path):
-            files = [f for f in os.listdir(workspace_path) if f.endswith((".csv", ".xlsx", ".xls")) and f != "dataset.csv"]
-            if files:
-                extra_datasets = "\n\n### 📂 Additional Datasets in Workspace (Relational Data)\n"
-                for f in files:
-                    full_path = os.path.join(workspace_path, f)
-                    try:
-                        if f.endswith((".xlsx", ".xls")):
-                            temp_df = pd.read_excel(full_path, nrows=3)
-                        else:
-                            temp_df = pd.read_csv(full_path, nrows=3)
-                        
-                        extra_datasets += f"\n* **Dataset File Name: `{f}`**\n"
-                        extra_datasets += f"  - Columns: {list(temp_df.columns)}\n"
-                        extra_datasets += f"  - Schema Sample: {temp_df.head(2).to_string(index=False)}\n"
-                    except Exception as e:
-                        extra_datasets += f"  - Error reading `{f}`: {e}\n"
+        from src.core.tools.schema_registry import SchemaRegistry
+
+        extra_datasets = SchemaRegistry.get_workspace_schema_context()
     except Exception:
         pass
 
@@ -126,12 +114,12 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
     return context
 
 
-def create_cleaning_prompt(df: pd.DataFrame, catalog: Dict[str, Any]) -> str:
+def create_cleaning_prompt(df: pd.DataFrame, catalog: dict[str, Any]) -> str:
     """
     Creates a prompt asking the agent to CLEAN the dataset based on catalog findings.
     """
     context = generate_system_context(df, catalog)
-    
+
     return f"""<role>
 You are an expert Senior Data Engineer. Your task is to rigorously CLEAN the provided dataset according to the highest industry standards.
 </role>
@@ -149,7 +137,7 @@ Ensure your code is correct and safe to execute.
 </instructions>"""
 
 
-def create_simple_prompt(instruction: str, columns: List[str]) -> str:
+def create_simple_prompt(instruction: str, columns: list[str]) -> str:
     """
     Creates a simple prompt for local models (legacy/fallback).
     """
@@ -175,19 +163,19 @@ You have a pandas dataframe `df` with the following columns: {columns}
 
 
 def create_prompt(
-    instruction: str, 
-    df: pd.DataFrame, 
-    plan: Optional[str] = None, 
-    previous_error: Optional[str] = None, 
-    catalog: Optional[Dict[str, Any]] = None,
-    few_shot_examples: Optional[List[Dict[str, str]]] = None,
-    previous_code: Optional[str] = None
+    instruction: str,
+    df: pd.DataFrame,
+    plan: str | None = None,
+    previous_error: str | None = None,
+    catalog: dict[str, Any] | None = None,
+    few_shot_examples: list[dict[str, str]] | None = None,
+    previous_code: str | None = None,
 ) -> str:
     """
     Enterprise Prompt for the Worker (Qwen): The Sandboxed Execution Engine.
     """
     context = generate_system_context(df, catalog=catalog)
-    
+
     plan_context = ""
     if plan:
         plan_context = f"\n<approved_plan>\n{plan}\n</approved_plan>\n"
@@ -207,6 +195,13 @@ def create_prompt(
             few_shot_context += f"Example {idx+1}:\n- Task: {ex.get('task')}\n- Correct Python Code:\n```python\n{ex.get('code')}\n```\n\n"
         few_shot_context += "</successful_code_examples>\n"
 
+    from src.config import settings
+
+    if settings.PLOT_FORMAT == "html":
+        vis_constraint = "6. For Visualizations: You MUST use Plotly (e.g., `import plotly.express as px` or `import plotly.graph_objects as go`). Create the plot and save it as an interactive HTML file to '/workspace/plot.html' using `fig.write_html('/workspace/plot.html', include_plotlyjs='cdn')`. Do NOT print raw HTML strings. Just write the file. If you make multiple plots, write the main one to `/workspace/plot.html`."
+    else:
+        vis_constraint = "6. For Visualizations: You may use `matplotlib.pyplot` (as `plt`) or `seaborn` (as `sns`). The host environment will automatically capture the active figure. You do NOT need to save the figure to a file unless explicitly requested. Just create the plot."
+
     return f"""<role>
 You are an expert Python Code Generator operating inside a secure, headless Data Science sandbox.
 Your sole purpose is to TRANSLATE the `approved_plan` into flawless, executable Python code.
@@ -219,7 +214,7 @@ Your sole purpose is to TRANSLATE the `approved_plan` into flawless, executable 
 3. The dataset is ALREADY loaded into memory as a pandas DataFrame named `df`. DO NOT reload it from disk.
 4. Output must be captured via standard output. If you compute a value, `print()` it.
 5. Do NOT print entire dataframes. ALWAYS use `.head()`, `.tail()`, or `.info()` to prevent token overflow.
-6. For Visualizations: You may use `matplotlib.pyplot` (as `plt`) or `seaborn` (as `sns`). The host environment will automatically capture the active figure. You do NOT need to save the figure to a file unless explicitly requested. Just create the plot.
+{vis_constraint}
 </environment_constraints>
 
 {context}
@@ -231,12 +226,19 @@ Your sole purpose is to TRANSLATE the `approved_plan` into flawless, executable 
 <instructions>
 Write the Python code to implement the approved plan.
 Follow the environment constraints strictly.
-Return ONLY valid Python code inside a ```python ``` block. 
+Return ONLY valid Python code inside a ```python ``` block.
 Do not include markdown explanations outside the code block.
 </instructions>"""
 
 
-def create_planning_prompt(instruction: str, df: pd.DataFrame, catalog: Optional[Dict[str, Any]] = None, mode: str = "standard", memory_context: str = "", previous_code: Optional[str] = None) -> str:
+def create_planning_prompt(
+    instruction: str,
+    df: pd.DataFrame,
+    catalog: dict[str, Any] | None = None,
+    mode: str = "standard",
+    memory_context: str = "",
+    previous_code: str | None = None,
+) -> str:
     """
     Enterprise Prompt for the Manager (DeepSeek): The Staff Data Scientist.
     """
@@ -259,7 +261,7 @@ Skip deep reasoning. Skip web search. Focus purely on the Python implementation 
 </user_request>
 
 <instructions>
-1. Output ONLY a concise, numbered list under the heading "Approved Plan". 
+1. Output ONLY a concise, numbered list under the heading "Approved Plan".
 2. Ensure the plan can be executed by a single Python script.
 </instructions>"""
 
@@ -303,7 +305,7 @@ SEARCH: "your search query here"
 </instructions>"""
 
 
-def create_replan_prompt(instruction: str, search_results: List[Dict[str, Any]], original_thought: str) -> str:
+def create_replan_prompt(instruction: str, search_results: list[dict[str, Any]], original_thought: str) -> str:
     """
     Enterprise Prompt for Manager re-planning after a search.
     """

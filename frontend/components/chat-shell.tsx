@@ -17,6 +17,7 @@ export interface Message {
   createdAt: Date
   imageData?: string
   thought?: string
+  logs?: string
   actions?: {
     label: string
     onClick: () => void
@@ -60,7 +61,7 @@ export function ChatShell() {
           createdAt: new Date(m.createdAt)
         }))
         setMessages(formatted)
-        
+
         // Check if a dataset was previously loaded successfully
         const hasSuccessMsg = formatted.some(m => m.content.includes("loaded successfully!"))
         if (hasSuccessMsg) {
@@ -146,7 +147,7 @@ export function ChatShell() {
 
       setMessages((prev) => [...prev, uploadMessage])
       setIsFileUploaded(true)
-      
+
       // Automatically show dataset in grid preview
       setSelectedCsv("dataset.csv")
       setActiveTab("table")
@@ -226,14 +227,26 @@ export function ChatShell() {
         const data = JSON.parse(event.data)
 
         if (data.type === "status") {
-          // Show live step progression — update the status line
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, content: `${data.content}` }
-                : m
+          const content = data.content || ""
+          if (content.startsWith("💻 Output: ")) {
+            const rawOutput = content.replace("💻 Output: ", "") + "\n"
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMessageId
+                  ? { ...m, logs: (m.logs || "") + rawOutput }
+                  : m
+              )
             )
-          )
+          } else {
+            // Show live step progression — update the status line
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMessageId
+                  ? { ...m, content: `${content}` }
+                  : m
+              )
+            )
+          }
         } else if (data.type === "thought") {
           // Stream thought content — will be shown live during streaming
           setMessages((prev) =>
@@ -342,9 +355,13 @@ export function ChatShell() {
             cleanResponse = "✅ Analysis complete! Check the **Plots** tab for visualizations or the **Data** tab for results."
           }
 
-          // Images go to Plots tab only
+          // Images / HTML plots go to Plots tab
           if (data.image) {
-            setSelectedImage(`data:image/png;base64,${data.image}`)
+            if (data.image.endsWith(".html") || data.image === "plot.html") {
+              setSelectedImage(`${API_BASE_URL}/workspace/static/plot.html?t=${Date.now()}`)
+            } else {
+              setSelectedImage(`data:image/png;base64,${data.image}`)
+            }
             setActiveTab("plots")
           }
 
@@ -356,6 +373,7 @@ export function ChatShell() {
               role: "assistant",
               content: "",
               thought: prev.find((m) => m.id === assistantMessageId)?.thought,
+              logs: prev.find((m) => m.id === assistantMessageId)?.logs,
               createdAt: new Date(),
               downloads: data.downloads
             }
@@ -488,7 +506,7 @@ export function ChatShell() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-stone-100 font-sans antialiased">
-      
+
       {/* LEFT PANEL: Chat Shell (Width: 42%) */}
       <div className="flex flex-col w-[42%] h-full relative bg-stone-50 overflow-hidden">
         {/* Top bar with actions */}
@@ -534,7 +552,7 @@ export function ChatShell() {
 
       {/* RIGHT PANEL: Workspace View (Width: 58%) */}
       <div className="flex-1 flex flex-col h-full workspace-gradient panel-divider overflow-hidden">
-        
+
         {/* Workspace Tab Bar */}
         <div className="flex items-center justify-between border-b border-stone-200/50 px-4 h-13 select-none shrink-0 bg-white/40 backdrop-blur-md">
           <div className="flex items-center gap-1 bg-stone-100/80 rounded-lg p-0.5">
@@ -583,13 +601,23 @@ export function ChatShell() {
           {activeTab === "plots" && (
             <div className="flex flex-col items-center justify-center h-full p-6 bg-stone-950">
               {selectedImage ? (
-                <div className="relative max-w-full max-h-full flex items-center justify-center p-3 rounded-xl bg-stone-900 overflow-auto">
-                  <img
-                    src={selectedImage}
-                    alt="Plot Preview"
-                    className="max-h-[calc(100vh-120px)] object-contain rounded-lg shadow-lg border border-stone-800"
-                  />
-                </div>
+                selectedImage.includes("plot.html") || selectedImage.includes(".html") ? (
+                  <div className="w-full h-full max-h-[calc(100vh-100px)] rounded-xl bg-white shadow-lg overflow-hidden border border-stone-800">
+                    <iframe
+                      src={selectedImage}
+                      className="w-full h-full border-0"
+                      sandbox="allow-scripts allow-same-origin"
+                    />
+                  </div>
+                ) : (
+                  <div className="relative max-w-full max-h-full flex items-center justify-center p-3 rounded-xl bg-stone-900 overflow-auto">
+                    <img
+                      src={selectedImage}
+                      alt="Plot Preview"
+                      className="max-h-[calc(100vh-120px)] object-contain rounded-lg shadow-lg border border-stone-800"
+                    />
+                  </div>
+                )
               ) : (
                 <div className="text-center text-stone-500">
                   <FileImage className="w-12 h-12 mx-auto mb-3 opacity-15" />
@@ -601,7 +629,7 @@ export function ChatShell() {
           )}
         </div>
       </div>
-      
+
     </div>
   )
 }
