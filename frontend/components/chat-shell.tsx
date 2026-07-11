@@ -281,7 +281,8 @@ export function ChatShell() {
                     label: "Allow",
                     variant: "primary" as const,
                     onClick: () => {
-                      sendMessage(content, currentMode, isConfirmedPlan, {
+                      const confirmPlan = data.tool === "execute_plan"
+                      sendMessage(content, currentMode, confirmPlan || isConfirmedPlan, {
                         approved: true,
                         tool: data.tool,
                         query: data.query

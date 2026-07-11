@@ -297,7 +297,7 @@ async def websocket_chat(websocket: WebSocket):
                 workflow_state = await asyncio.to_thread(
                     langgraph_agent.step_execute_search, workflow_state, is_tool_approved
                 )
-            elif is_confirmed_plan:
+            elif is_confirmed_plan or (pending_tool == "execute_plan" and is_tool_approved):
                 # Resuming from plan execution approval
                 workflow_state.plan = message
                 workflow_state.status = "executing"
