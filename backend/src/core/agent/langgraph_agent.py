@@ -79,6 +79,37 @@ class LangGraphAgent:
         self.execution_agent = DataAnalysisAgent()
         self.council = TheCouncil()
 
+    def _is_complex_query(self, instruction: str) -> bool:
+        """Dynamically determines if a query is complex using the fast worker LLM."""
+        llm = self.execution_agent._get_worker_llm()
+        if not llm:
+            return True
+
+        prompt = f"""You are a query classifier. Classify if the user request requires a multi-step planning approach or is a simple, direct command.
+
+A request is SIMPLE (classify as "NO") if it is a direct inspection, preview, or simple function:
+- Showing first/last N rows (e.g. head, tail, print first 10 rows)
+- Describing the dataset or printing columns (e.g. show columns, print shape, describe)
+- Simple math/statistics on columns (e.g. mean of age)
+
+A request is COMPLEX (classify as "YES") if it involves:
+- Multiple data cleaning or formatting steps
+- Creating charts or plots (e.g. scatter plot, histogram)
+- Grouping, filtering, and joining multiple tables
+- Statistical analysis or machine learning modeling
+
+User Request: "{instruction}"
+
+Respond with ONLY the word "YES" or "NO".
+Classification:"""
+        try:
+            response = llm.invoke(prompt).content.strip().upper()
+            logger.info("Dynamic query complexity classification result", instruction=instruction, response=response)
+            return "YES" in response
+        except Exception as e:
+            logger.warning("Failed to classify query complexity, defaulting to complex", error=str(e))
+            return True
+
     def step_plan(self, state: WorkflowState) -> WorkflowState:
         """
         Planning Node (Supervisor). Generates thought process and plan.
@@ -86,12 +117,8 @@ class LangGraphAgent:
         logger.info("LangGraph Node: planning", instruction=state.instruction)
 
         # Check if the query is a simple request that does not need planning
-        simple_keywords = {"show", "print", "display", "head", "tail", "columns", "describe", "preview", "rows"}
-        query_words = set(re.findall(r"\w+", state.instruction.lower()))
-        is_simple_query = len(state.instruction.split()) <= 6 and bool(query_words.intersection(simple_keywords))
-
-        if is_simple_query:
-            logger.info("Simple query detected. Skipping planning stage and proceeding to execution.")
+        if not self._is_complex_query(state.instruction):
+            logger.info("Simple query detected dynamically. Skipping planning stage and proceeding to execution.")
             state.plan = "Direct code execution for simple request: " + state.instruction
             state.thought = "Direct execution bypass for simple request."
             state.status = "executing"
