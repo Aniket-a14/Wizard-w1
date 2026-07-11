@@ -1,4 +1,5 @@
 import re
+import ast
 from typing import Optional
 import pandas as pd
 from src.utils.logging import logger
@@ -8,6 +9,7 @@ from src.core.tools.guardrail import GuardrailAgent
 from src.core.tools.evaluator import Evaluator
 from src.core.agent.council import TheCouncil
 from src.core.memory import working_memory
+from src.core.memory.semantic_cache import semantic_cache
 
 
 class WorkflowState:
@@ -150,6 +152,11 @@ class LangGraphAgent:
         """
         logger.info("LangGraph Node: code_generate", attempt=state.retry_count)
         
+        # Bypasses LLM generation if code is pre-loaded (e.g. from Semantic Cache)
+        if state.code and not state.error:
+            logger.info("Code block already pre-loaded. Bypassing worker LLM code generation.")
+            return state
+        
         worker_llm = self.execution_agent._get_worker_llm()
         few_shot = self.execution_agent.feedback_store.get_similar_examples(state.instruction)
         
@@ -185,7 +192,34 @@ class LangGraphAgent:
             state.status = "error"
             return state
             
-        # 1. Guardrail Check before run
+        # 1. Deterministic AST Syntax & Security Validation
+        try:
+            tree = ast.parse(state.code)
+            
+            # Security Import Scan
+            banned_modules = {"os", "sys", "subprocess", "shutil", "socket"}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split('.')[0] in banned_modules:
+                            logger.warning("AST Guardrail blocked code execution", reason=f"Banned import: {alias.name}")
+                            state.result = f"Blocked by guardrail: Banned import of '{alias.name}' is prohibited."
+                            state.status = "completed"
+                            return state
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module and node.module.split('.')[0] in banned_modules:
+                        logger.warning("AST Guardrail blocked code execution", reason=f"Banned import from: {node.module}")
+                        state.result = f"Blocked by guardrail: Banned import from '{node.module}' is prohibited."
+                        state.status = "completed"
+                        return state
+        except SyntaxError as se:
+            syntax_error_msg = f"Syntax Error: {se.msg} on line {se.lineno}"
+            logger.warning("AST Validation found syntax error", error=syntax_error_msg)
+            state.error = f"Error executing code:\n{syntax_error_msg}"
+            state.status = "correcting"
+            return state
+
+        # 2. Guardrail Check before run
         is_safe, reason = GuardrailAgent.scan(state.code)
         if not is_safe:
             logger.warning("Guardrail blocked code execution", reason=reason)
@@ -193,7 +227,7 @@ class LangGraphAgent:
             state.status = "completed"
             return state
 
-        # 2. Stateful IPython Execute
+        # 3. Stateful IPython Execute
         result, _, plot_b64 = self.execution_agent._process_code(state.code, state.df)
         
         state.result = result
@@ -230,6 +264,10 @@ class LangGraphAgent:
         logger.info("LangGraph Node: evaluate")
         
         try:
+            # Add to semantic cache if execution succeeded
+            if state.code and not state.error:
+                semantic_cache.add(state.instruction, state.df.columns.tolist(), state.code)
+
             # Score execution quality
             eval_result = Evaluator.score_execution(state.result)
             
@@ -264,14 +302,41 @@ class LangGraphAgent:
             
         return state
         
+    def is_simple_query(self, instruction: str) -> bool:
+        """
+        Deterministically identifies simple queries to bypass planning steps.
+        """
+        instruction_lower = instruction.lower().strip()
+        simple_keywords = [
+            "show first", "show top", "show head", "display head", "display first",
+            "show last", "show bottom", "show tail", "display tail", "display last",
+            "show columns", "list columns", "what columns", "column names",
+            "shape of", "how many rows", "number of rows", "dataset dimensions",
+            "show table", "preview dataset", "preview table"
+        ]
+        return any(kw in instruction_lower for kw in simple_keywords)
+
     def execute_workflow(self, state: WorkflowState) -> WorkflowState:
         """
         Run the complete compiled LangGraph flow sequentially.
         If paused at a 'waiting_approval' gateway, execution stops and returns state.
         """
-        # Determine starting node
+        # Determine starting node & perform routing / cache lookup
         if state.status == "init":
-            state.status = "planning"
+            # 1. Semantic Cache Check
+            cached_code = semantic_cache.lookup(state.instruction, state.df.columns.tolist())
+            if cached_code:
+                state.plan = "Bypassed planning (Semantic Cache Hit)."
+                state.code = cached_code
+                state.status = "executing"
+            # 2. Router Check
+            elif self.is_simple_query(state.instruction):
+                logger.info("Router: Simple query detected. Bypassing planner node.")
+                state.plan = f"Retrieve and display the requested rows or dataset columns directly for instruction: {state.instruction}"
+                state.status = "executing"
+            # 3. Default Planning
+            else:
+                state.status = "planning"
             
         # Graph execution loop
         while state.status not in ["completed", "error", "waiting_approval"]:

@@ -69,3 +69,7 @@ results/
 data/
 *.log
 
+# Workspace cache & temporary datasets
+workspace/
+
+
