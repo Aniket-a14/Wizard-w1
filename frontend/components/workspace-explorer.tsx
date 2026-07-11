@@ -19,7 +19,7 @@ interface WorkspaceExplorerProps {
 
 interface WorkspaceVariable {
   type: string
-  shape?: string | number[]
+  shape?: number | number[] | null
   preview?: string
 }
 
