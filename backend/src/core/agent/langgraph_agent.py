@@ -1,6 +1,6 @@
 import re
 import ast
-from typing import Optional
+from typing import Optional, Callable
 import pandas as pd
 import numpy as np
 from src.config import settings
@@ -222,7 +222,7 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             
         return state
 
-    def step_execute_code(self, state: WorkflowState) -> WorkflowState:
+    def step_execute_code(self, state: WorkflowState, on_stdout: Optional[Callable[[str], None]] = None) -> WorkflowState:
         """
         IPython Kernel Sandbox Execution Node.
         """
@@ -241,9 +241,10 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
         try:
             tree = ast.parse(state.code)
             
-            # Security Import Scan
+            # Security Import & Function Trace Scan
             banned_modules = {"os", "sys", "subprocess", "shutil", "socket"}
             for node in ast.walk(tree):
+                # 1. Standard module imports checks
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.split('.')[0] in banned_modules:
@@ -257,6 +258,37 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
                         state.result = f"Blocked by guardrail: Banned import from '{node.module}' is prohibited."
                         state.status = "completed"
                         return state
+                        
+                # 2. Dynamic obfuscation checks (eval, exec, __import__)
+                elif isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name):
+                        func_name = node.func.id
+                        if func_name in {"eval", "exec", "__import__"}:
+                            logger.warning("AST Security block: Dynamic code evaluation detected", function=func_name)
+                            state.result = f"Blocked by guardrail: Use of dynamic code evaluation function '{func_name}' is prohibited."
+                            state.status = "completed"
+                            return state
+                    elif isinstance(node.func, ast.Attribute):
+                        if node.func.attr == "__import__":
+                            logger.warning("AST Security block: Dynamic __import__ attribute lookup detected")
+                            state.result = "Blocked by guardrail: Dynamic import lookup is prohibited."
+                            state.status = "completed"
+                            return state
+                            
+                # 3. Path traversal file open breaks check
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open":
+                    if node.args:
+                        path_node = node.args[0]
+                        if isinstance(path_node, ast.Constant) and isinstance(path_node.value, str):
+                            path_val = path_node.value
+                            import os
+                            clean_path = os.path.abspath(os.path.join("/workspace", path_val))
+                            # Ensure it stays within /workspace or the host equivalent inside /app/workspace
+                            if not (clean_path.startswith("/workspace") or clean_path.startswith("/app/workspace") or clean_path.startswith("/app/backend/workspace")):
+                                logger.warning("AST Security block: File path traversal breakout attempt", path=path_val)
+                                state.result = "Blocked by guardrail: Access to files outside the workspace directory is prohibited."
+                                state.status = "completed"
+                                return state
         except SyntaxError as se:
             syntax_error_msg = f"Syntax Error: {se.msg} on line {se.lineno}"
             logger.warning("AST Validation found syntax error", error=syntax_error_msg)
@@ -272,8 +304,8 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             state.status = "completed"
             return state
 
-        # 3. Stateful IPython Execute
-        result, _, plot_b64 = self.execution_agent._process_code(state.code, state.df)
+        # 3. Stateful IPython Execute with stdout streaming callback
+        result, _, plot_b64 = self.execution_agent._process_code(state.code, state.df, on_stdout)
         
         state.result = result
         state.image = plot_b64

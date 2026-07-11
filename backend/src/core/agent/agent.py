@@ -10,7 +10,7 @@ import ast
 import traceback
 import builtins
 import sys
-from typing import Optional, Tuple
+from typing import Optional, Callable, Tuple
 
 from ...config import settings
 from ...utils.logging import logger
@@ -183,7 +183,7 @@ class DataAnalysisAgent:
         return response_text.strip()
 
     def _process_code(
-        self, code: str, df: pd.DataFrame
+        self, code: str, df: pd.DataFrame, on_stdout: Optional[Callable[[str], None]] = None
     ) -> Tuple[str, str, Optional[str]]:
         """Sanitizes and executes code."""
         # Cleanups
@@ -192,13 +192,13 @@ class DataAnalysisAgent:
 
         # Execute via Sandbox with Local Fallback
         if self.sandbox.client:
-            return self._execute_sandboxed(code, df)
+            return self._execute_sandboxed(code, df, on_stdout)
         else:
             logger.warning("Docker unavailable, falling back to local execution.")
             return self._execute_safe(code, df)
 
     def _execute_sandboxed(
-        self, code: str, df: pd.DataFrame
+        self, code: str, df: pd.DataFrame, on_stdout: Optional[Callable[[str], None]] = None
     ) -> Tuple[str, str, Optional[str]]:
         """Executes code in a Docker sandbox."""
         logger.info("Executing code in sandbox", code_snippet=code[:50])
@@ -208,7 +208,7 @@ class DataAnalysisAgent:
         df.to_feather(buf)
         df_bytes = buf.getvalue()
 
-        result, image_base64 = self.sandbox.run_code(code, df_bytes)
+        result, image_base64 = self.sandbox.run_code(code, df_bytes, on_stdout)
         
         return result, code, image_base64
 

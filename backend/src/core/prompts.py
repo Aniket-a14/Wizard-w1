@@ -72,6 +72,33 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
     if warnings:
         warnings_str = "\n<data_quality_warnings>\n" + "\n".join(warnings) + "\n</data_quality_warnings>\n"
 
+    extra_datasets = ""
+    try:
+        import os
+        from src.config import settings
+        # Determine active workspace path based on running environment
+        workspace_path = "/workspace" if os.path.exists("/workspace") else str(settings.WORKSPACE_DIR)
+        
+        if os.path.exists(workspace_path):
+            files = [f for f in os.listdir(workspace_path) if f.endswith((".csv", ".xlsx", ".xls")) and f != "dataset.csv"]
+            if files:
+                extra_datasets = "\n\n### 📂 Additional Datasets in Workspace (Relational Data)\n"
+                for f in files:
+                    full_path = os.path.join(workspace_path, f)
+                    try:
+                        if f.endswith((".xlsx", ".xls")):
+                            temp_df = pd.read_excel(full_path, nrows=3)
+                        else:
+                            temp_df = pd.read_csv(full_path, nrows=3)
+                        
+                        extra_datasets += f"\n* **Dataset File Name: `{f}`**\n"
+                        extra_datasets += f"  - Columns: {list(temp_df.columns)}\n"
+                        extra_datasets += f"  - Schema Sample: {temp_df.head(2).to_string(index=False)}\n"
+                    except Exception as e:
+                        extra_datasets += f"  - Error reading `{f}`: {e}\n"
+    except Exception:
+        pass
+
     context = f"""<dataset_context>
 <schema>
 ```text
@@ -94,7 +121,7 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
 
 <semantic_analysis>
 {semantic_insight if semantic_insight else "*No detailed semantic analysis available.*"}
-</semantic_analysis>
+</semantic_analysis>{extra_datasets}
 </dataset_context>"""
     return context
 

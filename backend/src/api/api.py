@@ -99,6 +99,12 @@ async def upload_file(file: UploadFile = File(...)):
         feather_path = settings.WORKSPACE_DIR / "dataset.feather"
         cleaned_df.to_csv(csv_path, index=False)
         cleaned_df.to_feather(feather_path)
+        
+        # Also save with original name to support multi-file joins
+        if file.filename:
+            import os
+            original_path = settings.WORKSPACE_DIR / os.path.basename(file.filename)
+            cleaned_df.to_csv(original_path, index=False)
 
         # Re-initialize sandbox session to load new dataset
         from src.core.tools.sandbox import SandboxManager
@@ -281,7 +287,18 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "code", "content": workflow_state.code})
                     
                 await websocket.send_json({"type": "status", "content": "🐳 Running code inside persistent Docker sandbox..."})
-                workflow_state = await asyncio.to_thread(langgraph_agent.step_execute_code, workflow_state)
+                
+                # Define thread-safe stdout streaming callback
+                loop = asyncio.get_running_loop()
+                def stdout_callback(text):
+                    cleaned_text = text.strip()
+                    if cleaned_text:
+                        asyncio.run_coroutine_threadsafe(
+                            websocket.send_json({"type": "status", "content": f"💻 Output: {cleaned_text}"}),
+                            loop
+                        )
+                        
+                workflow_state = await asyncio.to_thread(langgraph_agent.step_execute_code, workflow_state, stdout_callback)
                 
             if workflow_state.status == "error":
                 await websocket.send_json({

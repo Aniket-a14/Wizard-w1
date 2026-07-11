@@ -7,7 +7,7 @@ import socket
 import json
 import struct
 import time
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Callable
 from src.config import settings
 from src.utils.logging import logger
 
@@ -21,6 +21,7 @@ import traceback
 import base64
 import os
 import struct
+import subprocess
 
 def recvall(sock, n):
     data = bytearray()
@@ -45,6 +46,23 @@ def send_message(sock, response_dict):
     msg = json.dumps(response_dict).encode('utf-8')
     msg = struct.pack('>I', len(msg)) + msg
     sock.sendall(msg)
+
+class SocketStdoutStream:
+    def __init__(self, sock):
+        self.sock = sock
+        self.buf = io.StringIO()
+    def write(self, text):
+        self.buf.write(text)
+        try:
+            msg = json.dumps({"status": "stdout", "content": text}).encode('utf-8')
+            packet = struct.pack('>I', len(msg)) + msg
+            self.sock.sendall(packet)
+        except Exception:
+            pass
+    def flush(self):
+        pass
+    def getvalue(self):
+        return self.buf.getvalue()
 
 def run_server(port=5005):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -86,10 +104,10 @@ def run_server(port=5005):
                 
             code = payload.get("code", "")
             
-            # Setup output capture
-            stdout_buf = io.StringIO()
+            # Setup output capture with streaming support
+            stdout_stream = SocketStdoutStream(conn)
             stderr_buf = io.StringIO()
-            sys.stdout = stdout_buf
+            sys.stdout = stdout_stream
             sys.stderr = stderr_buf
             
             plot_data = None
@@ -100,8 +118,28 @@ def run_server(port=5005):
                 plt.clf()
                 plt.close('all')
                 
-                # Exec user code in the persistent namespace
-                exec(code, exec_globals)
+                try:
+                    # Exec user code in the persistent namespace
+                    exec(code, exec_globals)
+                except ModuleNotFoundError as mne:
+                    missing_module = mne.name
+                    package_mapping = {
+                        "sklearn": "scikit-learn",
+                        "bs4": "beautifulsoup4",
+                        "yaml": "pyyaml",
+                        "PIL": "pillow",
+                        "statsmodels": "statsmodels",
+                        "docx": "python-docx",
+                        "openpyxl": "openpyxl"
+                    }
+                    pkg_to_install = package_mapping.get(missing_module, missing_module)
+                    print(f"[Sandbox] Missing module '{missing_module}' detected. Installing package '{pkg_to_install}' dynamically...")
+                    
+                    # Install dynamically inside the container environment
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", pkg_to_install])
+                    
+                    # Try re-running the user code block after successful install
+                    exec(code, exec_globals)
                 
                 # Check for plots
                 if plt.get_fignums():
@@ -122,14 +160,13 @@ def run_server(port=5005):
                 
             response = {
                 "status": status,
-                "stdout": stdout_buf.getvalue(),
+                "stdout": "",  # Already streamed
                 "stderr": stderr_buf.getvalue(),
                 "plot": plot_data
             }
             send_message(conn, response)
             conn.close()
         except Exception as e:
-            # Prevent server from crashing on connection errors
             try:
                 conn.close()
             except Exception:
@@ -248,9 +285,9 @@ class SandboxManager:
                     pass
                 self.container = None
 
-    def run_code(self, code: str, df_bytes: Optional[bytes] = None) -> Tuple[str, Optional[str]]:
+    def run_code(self, code: str, df_bytes: Optional[bytes] = None, on_stdout: Optional[Callable[[str], None]] = None) -> Tuple[str, Optional[str]]:
         """
-        Runs code inside the persistent session container.
+        Runs code inside the persistent session container with real-time stdout streaming.
         df_bytes parameter is kept for backward compatibility but is ignored
         in favor of workspace preloading.
         """
@@ -267,35 +304,49 @@ class SandboxManager:
             msg = struct.pack('>I', len(payload)) + payload
             s.sendall(msg)
             
-            # Read header
-            raw_msglen = s.recv(4)
-            if not raw_msglen:
-                return "Error: Connection closed by sandbox daemon.", None
-            msglen = struct.unpack('>I', raw_msglen)[0]
+            stdout_accumulated = []
+            plot_data = None
             
-            # Read payload
-            data_bytes = bytearray()
-            while len(data_bytes) < msglen:
-                packet = s.recv(msglen - len(data_bytes))
-                if not packet:
+            while True:
+                # Read header
+                raw_msglen = s.recv(4)
+                if not raw_msglen:
                     break
-                data_bytes.extend(packet)
+                msglen = struct.unpack('>I', raw_msglen)[0]
+                
+                # Read payload
+                data_bytes = bytearray()
+                while len(data_bytes) < msglen:
+                    packet = s.recv(msglen - len(data_bytes))
+                    if not packet:
+                        break
+                    data_bytes.extend(packet)
+                    
+                response = json.loads(data_bytes.decode('utf-8'))
+                status = response.get("status")
+                
+                if status == "stdout":
+                    content = response.get("content", "")
+                    stdout_accumulated.append(content)
+                    if on_stdout:
+                        on_stdout(content)
+                else:
+                    # Final response packet
+                    stdout = "".join(stdout_accumulated) + response.get("stdout", "")
+                    stderr = response.get("stderr", "")
+                    plot_data = response.get("plot")
+                    
+                    if status == "interrupted":
+                        s.close()
+                        return "Error: Execution interrupted by user.", None
+                    elif status == "error":
+                        s.close()
+                        return f"Error executing code:\n{stderr}", None
+                    break
             
-            response = json.loads(data_bytes.decode('utf-8'))
             s.close()
-            
-            status = response.get("status")
-            stdout = response.get("stdout", "")
-            stderr = response.get("stderr", "")
-            plot = response.get("plot")
-            
-            if status == "interrupted":
-                return "Error: Execution interrupted by user.", None
-            elif status == "error":
-                return f"Error executing code:\n{stderr}", None
-            
             output = stdout.strip() if stdout else "Executed successfully."
-            return output, plot
+            return output, plot_data
         except Exception as e:
             logger.error("Sandbox socket communication failed", error=str(e))
             return f"Sandbox communication error: {e}", None
