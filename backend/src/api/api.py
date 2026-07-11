@@ -391,6 +391,37 @@ async def get_sandbox_variables():
     return variables
 
 
+@app.post("/sandbox/interrupt")
+async def interrupt_sandbox():
+    from src.core.tools.sandbox import SandboxManager
+    sandbox_mgr = SandboxManager()
+    await asyncio.to_thread(sandbox_mgr.interrupt)
+    return {"status": "interrupted"}
+
+
+@app.post("/sandbox/variables/export/{name}")
+async def export_sandbox_variable(name: str):
+    import os
+    safe_name = os.path.basename(name)
+    from src.core.tools.sandbox import SandboxManager
+    sandbox_mgr = SandboxManager()
+    
+    # Run a small code block inside sandbox to export the variable to workspace
+    export_code = f"""
+import pandas as pd
+if '{safe_name}' in globals():
+    val = globals()['{safe_name}']
+    if isinstance(val, pd.DataFrame):
+        val.to_csv('/workspace/{safe_name}.csv', index=False)
+    elif isinstance(val, pd.Series):
+        val.to_frame().to_csv('/workspace/{safe_name}.csv', index=False)
+    else:
+        pd.DataFrame(list(val) if isinstance(val, (set, list, tuple)) else [val]).to_csv('/workspace/{safe_name}.csv', index=False)
+"""
+    await asyncio.to_thread(sandbox_mgr.run_code, export_code)
+    return {"filename": f"{safe_name}.csv"}
+
+
 @app.delete("/data/files/{filename}")
 async def delete_workspace_file(filename: str):
     import os

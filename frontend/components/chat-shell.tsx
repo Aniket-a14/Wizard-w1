@@ -457,9 +457,17 @@ export function ChatShell() {
     audio.play().catch(() => { })
   }, [])
 
-  const stopStreaming = useCallback(() => {
-    // Abort handler
-  }, [])
+  const stopStreaming = useCallback(async () => {
+    playClick()
+    try {
+      await fetch(`${API_BASE_URL}/sandbox/interrupt`, {
+        method: "POST"
+      })
+    } catch (err) {
+      console.error("Failed to interrupt sandbox:", err)
+    }
+    setIsStreaming(false)
+  }, [playClick, API_BASE_URL])
 
   const clearChat = useCallback(() => {
     playClick()
