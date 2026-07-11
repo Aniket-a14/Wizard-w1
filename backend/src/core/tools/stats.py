@@ -1,6 +1,7 @@
-from typing import Dict, Any, List
-import pandas as pd
+from typing import Any
+
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 
@@ -11,7 +12,7 @@ class StatisticalToolkit:
     """
 
     @staticmethod
-    def check_normality(df: pd.DataFrame, column: str) -> Dict[str, Any]:
+    def check_normality(df: pd.DataFrame, column: str) -> dict[str, Any]:
         """
         Tests if a column is normally distributed using Shapiro-Wilk (N < 5000)
         or D'Agostino's K^2 (N >= 5000).
@@ -37,15 +38,11 @@ class StatisticalToolkit:
             "p_value": p,
             "statistic": stat,
             "test_used": test_name,
-            "interpretation": "Likely Normal"
-            if p > 0.05
-            else "Not Normal (Reject Null)",
+            "interpretation": "Likely Normal" if p > 0.05 else "Not Normal (Reject Null)",
         }
 
     @staticmethod
-    def detect_outliers(
-        df: pd.DataFrame, column: str, method: str = "iqr"
-    ) -> Dict[str, Any]:
+    def detect_outliers(df: pd.DataFrame, column: str, method: str = "iqr") -> dict[str, Any]:
         """
         Detects outliers using IQR or Z-Score.
         """
@@ -76,7 +73,7 @@ class StatisticalToolkit:
         }
 
     @staticmethod
-    def correlation_analysis(df: pd.DataFrame, target_col: str) -> List[Dict[str, Any]]:
+    def correlation_analysis(df: pd.DataFrame, target_col: str) -> list[dict[str, Any]]:
         """
         Finds features most correlated with the target column.
         Automatically handles numeric conversion for correlation check.
@@ -101,11 +98,7 @@ class StatisticalToolkit:
                 {
                     "feature": col,
                     "correlation": round(raw_val, 4),
-                    "strength": "Strong"
-                    if abs(raw_val) > 0.7
-                    else "Moderate"
-                    if abs(raw_val) > 0.3
-                    else "Weak",
+                    "strength": "Strong" if abs(raw_val) > 0.7 else "Moderate" if abs(raw_val) > 0.3 else "Weak",
                 }
             )
 

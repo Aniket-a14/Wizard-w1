@@ -24,7 +24,7 @@ body:
       description: Why does this need to be changed? (e.g. Performance, Readability, Deprecation)
     validations:
       required: true
-      
+
   - type: textarea
     id: proposal
     attributes:

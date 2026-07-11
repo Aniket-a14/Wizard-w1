@@ -15,7 +15,7 @@ jobs:
   # ------------------------------------------------------------------
   backend-qa:
     runs-on: ubuntu-latest
-    
+
     defaults:
       run:
         working-directory: ./backend
@@ -33,7 +33,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         # Install from root requirements since backend uses src layout
-        pip install -r ../requirements.txt 
+        pip install -r ../requirements.txt
         # Install dev tools
         pip install pytest pytest-asyncio pytest-cov check-manifest ruff mypy
 
@@ -95,13 +95,13 @@ jobs:
   docker-build:
     needs: [backend-qa, frontend-qa]
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-    
+
     - name: Build Backend Image
       uses: docker/build-push-action@v5
       with:
@@ -109,7 +109,7 @@ jobs:
         file: Dockerfile
         push: false
         tags: wizard-backend:latest
-        
+
     - name: Build Frontend Image
       uses: docker/build-push-action@v5
       with:

@@ -1,10 +1,11 @@
-from typing import Tuple
 import re
+
 from ...utils.logging import logger
+
 
 class GuardrailAgent:
     """
-    Scans generated code for security risks, malformed syntax, 
+    Scans generated code for security risks, malformed syntax,
     and alignment with user safety policies.
     """
 
@@ -23,7 +24,7 @@ class GuardrailAgent:
     ]
 
     @classmethod
-    def scan(cls, code: str) -> Tuple[bool, str]:
+    def scan(cls, code: str) -> tuple[bool, str]:
         """
         Scans code and returns (is_safe, reason).
         """
@@ -31,7 +32,7 @@ class GuardrailAgent:
             if re.search(pattern, code):
                 logger.warning("Guardrail Triggered", reason=reason)
                 return False, f"Guardrail Violation: {reason} is prohibited."
-        
+
         # Check for empty code
         if not code.strip():
             return False, "Code generation appeared to fail (empty response)."
@@ -39,16 +40,16 @@ class GuardrailAgent:
         return True, "Safe"
 
     @classmethod
-    def audit_scientific_alignment(cls, plan: str, code: str) -> Tuple[bool, str]:
+    def audit_scientific_alignment(cls, plan: str, code: str) -> tuple[bool, str]:
         """
         Verifies if the code actually attempts to execute the plan.
         """
         # Basic keyword alignment
         plan_keywords = re.findall(r"\b\w{4,}\b", plan.lower())
         code_lower = code.lower()
-        
+
         matches = [kw for kw in plan_keywords if kw in code_lower]
         if len(matches) < 2 and len(plan_keywords) > 5:
             return False, "Code does not seem aligned with the proposed plan."
-            
+
         return True, "Aligned"

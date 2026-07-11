@@ -1,8 +1,10 @@
 import os
-import sys
-import pytest
 import sqlite3
+import sys
+
+import pytest
 from fastapi.testclient import TestClient
+
 
 # Ensure backend can import its modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -10,7 +12,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.api.api import app
 from src.config import settings
 from src.core.tools.guardrail import GuardrailAgent
+
+
 client = TestClient(app)
+
 
 # ----------------- Invariant Test 1: Config parameter defaults & integrity -----------------
 def test_config_invariants():
@@ -22,6 +27,7 @@ def test_config_invariants():
     assert hasattr(settings, "OLLAMA_BASE_URL")
     assert hasattr(settings, "SANDBOX_NETWORK_DISABLED")
     assert settings.DATA_DIR is not None
+
 
 # ----------------- Invariant Test 2: Guardrail Contracts (Regex security) -----------------
 @pytest.mark.parametrize(
@@ -40,7 +46,7 @@ def test_config_invariants():
         # Unsafe statements - dynamic execution
         ("eval('1 + 1')", False),
         ("exec('import sys')", False),
-    ]
+    ],
 )
 def test_guardrail_invariant_scans(code_snippet, expected_safe):
     """
@@ -49,7 +55,10 @@ def test_guardrail_invariant_scans(code_snippet, expected_safe):
     Note: open() path-traversal is handled by the AST guardrail, not regex.
     """
     is_safe, reason = GuardrailAgent.scan(code_snippet)
-    assert is_safe == expected_safe, f"Code: {code_snippet} got safety status {is_safe}, expected {expected_safe}. Reason: {reason}"
+    assert (
+        is_safe == expected_safe
+    ), f"Code: {code_snippet} got safety status {is_safe}, expected {expected_safe}. Reason: {reason}"
+
 
 # ----------------- Invariant Test 3: SQLite schema and index configuration -----------------
 def test_sqlite_schema_and_index_invariants():
@@ -58,10 +67,10 @@ def test_sqlite_schema_and_index_invariants():
     """
     db_path = settings.DATA_DIR / "wizard.db"
     assert db_path.exists(), "Database file must exist after DB Manager initialization"
-    
+
     with sqlite3.connect(str(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        
+
         # Verify tables exist
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = [row["name"] for row in cursor.fetchall()]
@@ -69,19 +78,20 @@ def test_sqlite_schema_and_index_invariants():
         assert "trajectories" in tables
         assert "feedbacks" in tables
         assert "working_memory" in tables
-        
+
         # Verify schema hash column presence
         cursor = conn.execute("PRAGMA table_info(semantic_cache)")
         cols = [row["name"] for row in cursor.fetchall()]
         assert "schema_hash" in cols
         assert "columns" in cols
         assert "embedding" in cols
-        
+
         # Verify index configuration exists
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
         indexes = [row["name"] for row in cursor.fetchall()]
         assert "idx_semantic_cache_schema" in indexes
         assert "idx_trajectories_schema" in indexes
+
 
 # ----------------- Invariant Test 4: API Endpoint and Router contracts -----------------
 def test_api_routes_invariants():
@@ -93,16 +103,16 @@ def test_api_routes_invariants():
     resp = client.delete("/data/files/nonexistent_file_987654.csv")
     assert resp.status_code == 404
     assert "error" in resp.json() or "detail" in resp.json()
-    
+
     # 2. Non-existent variable export should return 404 cleanly
     resp = client.post("/sandbox/variables/export/nonexistent_var_987654")
     assert resp.status_code == 404
     assert "error" in resp.json() or "detail" in resp.json()
-    
+
     # 3. GET /sandbox/variables is registered
     resp = client.get("/sandbox/variables")
     assert resp.status_code in (200, 500, 404)
-    
+
     # 4. POST /sandbox/interrupt is registered
     resp = client.post("/sandbox/interrupt")
     assert resp.status_code in (200, 500, 404)

@@ -1,9 +1,11 @@
-import pytest
-import pandas as pd
-import numpy as np
 import os
 import sys
+
 import matplotlib
+import numpy as np
+import pandas as pd
+import pytest
+
 
 # Force Agg backend before importing pyplot
 matplotlib.use("Agg")

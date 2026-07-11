@@ -25,7 +25,7 @@ export function DataGrid({ apiBaseUrl, csvPath }: DataGridProps) {
       if (sortBy) {
         url += `&sort_by=${encodeURIComponent(sortBy)}&sort_order=${sortOrder}`
       }
-      
+
       const res = await fetch(url)
       if (res.ok) {
         const result = await res.json()

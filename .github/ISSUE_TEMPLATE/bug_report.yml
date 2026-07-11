@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report!
-  
+
   - type: textarea
     id: description
     attributes:
@@ -49,7 +49,7 @@ body:
         - "Other"
     validations:
       required: true
-      
+
   - type: textarea
     id: logs
     attributes:

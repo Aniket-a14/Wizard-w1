@@ -24,7 +24,7 @@ body:
       description: Describe the change you'd like to see.
     validations:
       required: true
-      
+
   - type: textarea
     id: context
     attributes:

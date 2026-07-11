@@ -1,8 +1,10 @@
-import pytest
-import sys
 import os
+import sys
 import traceback
 from unittest.mock import patch
+
+import pytest
+
 
 import_error = None
 try:

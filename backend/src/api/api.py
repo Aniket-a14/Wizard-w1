@@ -111,6 +111,21 @@ class ChatResponse(BaseModel):
     status: str = "completed"  # "completed" or "waiting_confirmation"
 
 
+def safe_to_feather(df, path: Path):
+    try:
+        df.to_feather(path)
+    except Exception:
+        # Fallback: convert mixed-type object columns to string to prevent ArrowInvalid
+        df_copy = df.copy()
+        for col in df_copy.columns:
+            if df_copy[col].dtype == "object":
+                try:
+                    df_copy[col] = df_copy[col].astype(str)
+                except Exception:
+                    pass
+        df_copy.to_feather(path)
+
+
 @app.post("/upload", responses={422: {"model": Message}, 400: {"model": Message}})
 async def upload_file(file: UploadFile = File(...)):
     try:
@@ -120,10 +135,11 @@ async def upload_file(file: UploadFile = File(...)):
         csv_path = settings.WORKSPACE_DIR / "dataset.csv"
         feather_path = settings.WORKSPACE_DIR / "dataset.feather"
         df.to_csv(csv_path, index=False)
-        df.to_feather(feather_path)
+        safe_to_feather(df, feather_path)
 
         # Initialize/start sandbox session so it has the raw 'df' loaded
         from src.core.tools.sandbox import sandbox_mgr
+
         if sandbox_mgr.container:
             await asyncio.to_thread(sandbox_mgr.cleanup)
         await asyncio.to_thread(sandbox_mgr.start_session)
@@ -135,7 +151,7 @@ async def upload_file(file: UploadFile = File(...)):
 
         # Save the final cleaned_df to the workspace, overwriting the raw version
         cleaned_df.to_csv(csv_path, index=False)
-        cleaned_df.to_feather(feather_path)
+        safe_to_feather(cleaned_df, feather_path)
 
         # Also save with original name to support multi-file joins
         if file.filename:

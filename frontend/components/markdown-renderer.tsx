@@ -353,4 +353,3 @@ export function MarkdownRenderer({ content, className, isStreaming = false }: Ma
     </div>
   )
 }
-

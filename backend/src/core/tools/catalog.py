@@ -1,6 +1,9 @@
+from typing import Any
+
 import pandas as pd
-from typing import Dict, Any
+
 from .stats import StatisticalToolkit
+
 
 class CatalogEngine:
     """
@@ -13,11 +16,11 @@ class CatalogEngine:
         "currency": r"^[$€£¥]\d+",
         "url": r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+",
         "date": r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}",
-        "phone": r"(\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}"
+        "phone": r"(\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}",
     }
 
     @classmethod
-    def analyze(cls, df: pd.DataFrame) -> Dict[str, Any]:
+    def analyze(cls, df: pd.DataFrame) -> dict[str, Any]:
         """
         Performs a full semantic and quality audit of the dataframe.
         """
@@ -25,8 +28,8 @@ class CatalogEngine:
             "columns": {},
             "global_quality": {
                 "total_missing": int(df.isnull().sum().sum()),
-                "completeness_score": round((1 - df.isnull().sum().sum() / df.size) * 100, 2) if df.size > 0 else 0
-            }
+                "completeness_score": round((1 - df.isnull().sum().sum() / df.size) * 100, 2) if df.size > 0 else 0,
+            },
         }
 
         for col in df.columns:
@@ -35,34 +38,27 @@ class CatalogEngine:
         return catalog
 
     @classmethod
-    def _analyze_column(cls, df: pd.DataFrame, col: str) -> Dict[str, Any]:
+    def _analyze_column(cls, df: pd.DataFrame, col: str) -> dict[str, Any]:
         series = df[col]
         dtype = str(series.dtype)
-        
+
         # 1. Quality Metrics
         missing_pct = round((series.isnull().sum() / len(df)) * 100, 2)
         unique_count = series.nunique()
-        
+
         # 2. Semantic Type Detection
         semantic_type = cls._detect_semantic_type(series)
-        
+
         # 3. Statistical Hints (from existing toolkit)
         outliers = {}
         if pd.api.types.is_numeric_dtype(series.dtype):
             stats_info = StatisticalToolkit.detect_outliers(df, col)
-            outliers = {
-                "count": stats_info["outlier_count"],
-                "percentage": stats_info["outlier_percentage"]
-            }
+            outliers = {"count": stats_info["outlier_count"], "percentage": stats_info["outlier_percentage"]}
 
         return {
             "native_dtype": dtype,
             "semantic_type": semantic_type,
-            "quality": {
-                "missing_percentage": missing_pct,
-                "unique_values": unique_count,
-                "outliers": outliers
-            }
+            "quality": {"missing_percentage": missing_pct, "unique_values": unique_count, "outliers": outliers},
         }
 
     @classmethod

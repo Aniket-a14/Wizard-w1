@@ -257,7 +257,17 @@ class DataAnalysisAgent:
 
         # Serialize DF to pass to sandbox using fastest IPC (Feather)
         buf = io.BytesIO()
-        df.to_feather(buf)
+        try:
+            df.to_feather(buf)
+        except Exception:
+            df_copy = df.copy()
+            for col in df_copy.columns:
+                if df_copy[col].dtype == "object":
+                    try:
+                        df_copy[col] = df_copy[col].astype(str)
+                    except Exception:
+                        pass
+            df_copy.to_feather(buf)
         df_bytes = buf.getvalue()
 
         result, image_base64 = self.sandbox.run_code(code, df_bytes, on_stdout)

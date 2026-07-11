@@ -94,6 +94,19 @@ def run_server(port=5005):
             print("Dataset preloaded successfully in exec_globals.")
         except Exception as e:
             print(f"Error preloading dataset: {e}")
+            if os.path.exists('/workspace/dataset.csv'):
+                try:
+                    exec_globals["df"] = pd.read_csv('/workspace/dataset.csv')
+                    print("Dataset preloaded from CSV as fallback in exec_globals.")
+                except Exception as csv_err:
+                    print(f"Error preloading dataset from CSV: {csv_err}")
+    elif os.path.exists('/workspace/dataset.csv'):
+        try:
+            exec_globals["df"] = pd.read_csv('/workspace/dataset.csv')
+            print("Dataset preloaded from CSV in exec_globals.")
+        except Exception as e:
+            print(f"Error preloading dataset from CSV: {e}")
+
 
     print(f"Sandbox daemon listening on port {port}...")
 
@@ -307,12 +320,12 @@ class SandboxManager:
 
     def _get_host_workspace_dir(self) -> str:
         """Determines the host path of the workspace directory."""
-        if os.path.exists('/.dockerenv'):
+        if os.path.exists("/.dockerenv"):
             try:
                 container = self.client.containers.get(socket.gethostname())
-                for mount in container.attrs.get('Mounts', []):
-                    if mount.get('Destination') == '/workspace':
-                        return mount.get('Source')
+                for mount in container.attrs.get("Mounts", []):
+                    if mount.get("Destination") == "/workspace":
+                        return mount.get("Source")
             except Exception as e:
                 logger.warning("Failed to auto-detect host workspace dir from mounts", error=str(e))
         return str(settings.WORKSPACE_DIR)

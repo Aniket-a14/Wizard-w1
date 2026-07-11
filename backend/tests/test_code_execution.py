@@ -1,6 +1,8 @@
-import sys
 import os
+import sys
+
 import matplotlib
+
 
 matplotlib.use("Agg")
 

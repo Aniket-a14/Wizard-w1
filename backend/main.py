@@ -1,11 +1,12 @@
-import sys
 import os
-import pandas as pd
+import sys
 import warnings
+
+import pandas as pd
+from src.config import settings
 
 # Modern Imports (Src Architecture)
 from src.core.agent.flow import science_agent
-from src.config import settings
 from src.core.feedback_store import FeedbackStore
 
 
@@ -28,9 +29,7 @@ def load_dataset_local(file_path: str) -> pd.DataFrame:
 
 def main():
     try:
-        print(
-            f"\nHi! I'm {settings.APP_NAME}, your data analysis assistant (CLI Mode)."
-        )
+        print(f"\nHi! I'm {settings.APP_NAME}, your data analysis assistant (CLI Mode).")
         print(f"Environment: {settings.ENV}")
 
         file_path = input("Enter dataset file path (CSV): ")
@@ -50,9 +49,7 @@ def main():
         print("\nType 'help' for available commands or 'exit' to quit.")
 
         while True:
-            instruction = input(
-                "\nBot: What data analysis task can I help you with? "
-            ).strip()
+            instruction = input("\nBot: What data analysis task can I help you with? ").strip()
             if instruction.lower() == "exit":
                 break
             elif instruction.lower() == "help":
@@ -85,9 +82,7 @@ def main():
                     feedback_store.add_example(example)
                     print("Great! Added to successful examples.")
                 else:
-                    correct_code = input(
-                        "What would be the correct code? (press enter to skip): "
-                    )
+                    correct_code = input("What would be the correct code? (press enter to skip): ")
                     if correct_code.strip():
                         correct_example = {"task": instruction, "code": correct_code}
                         feedback_store.add_example(correct_example)

@@ -15,7 +15,7 @@ Wizard w1 operates on a decoupled, production-grade **Multi-Agent Architecture**
 4.  **Hardened Sandbox (Docker)**: All code is isolated in zero-trust Docker containers prior to execution to prevent execution bleed.
 
 > [!IMPORTANT]
-> The project architecture is strictly **Local-First & Pure Ollama (v2.3.0+)**. Avoid introducing cloud-based dependencies (e.g., OpenAI bindings) or heavy local mapping tools like `torch` or `transformers` directly into `backend/`. 
+> The project architecture is strictly **Local-First & Pure Ollama (v2.3.0+)**. Avoid introducing cloud-based dependencies (e.g., OpenAI bindings) or heavy local mapping tools like `torch` or `transformers` directly into `backend/`.
 
 ---
 

@@ -1,11 +1,13 @@
 import os
+import shutil
 import subprocess
 import sys
-import shutil
+
 
 def check_ollama():
     """Checks if Ollama CLI is accessible."""
     return shutil.which("ollama") is not None
+
 
 def run_cmd(args):
     """Utility to run a CLI command and print status."""
@@ -16,6 +18,7 @@ def run_cmd(args):
         return False
     print("✅ Success!")
     return True
+
 
 def main():
     print("=" * 60)
@@ -65,7 +68,7 @@ PARAMETER temperature 0.2
     # 4. Create unified speculative model
     print("\nStep 4: Building speculative decoding model profile inside Ollama...")
     success = run_cmd(["ollama", "create", speculative_name, "-f", modelfile_path])
-    
+
     # Cleanup
     if os.path.exists(modelfile_path):
         os.remove(modelfile_path)
@@ -79,6 +82,7 @@ PARAMETER temperature 0.2
         sys.exit(1)
 
     print("=" * 60)
+
 
 if __name__ == "__main__":
     main()

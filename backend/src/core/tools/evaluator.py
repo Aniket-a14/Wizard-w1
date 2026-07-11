@@ -1,4 +1,5 @@
-from typing import Dict, Any
+from typing import Any
+
 
 class Evaluator:
     """
@@ -7,7 +8,7 @@ class Evaluator:
     """
 
     @staticmethod
-    def score_execution(result: str, expected_snippet: str = None, instruction: str = None) -> Dict[str, Any]:
+    def score_execution(result: str, expected_snippet: str = None, instruction: str = None) -> dict[str, Any]:
         """
         Heuristic-based scoring of an execution result.
         """
@@ -26,12 +27,22 @@ class Evaluator:
 
         # 3. Scientific Rigour Check — only applies when query involves analysis/statistics
         if instruction:
-            analysis_keywords = {"test", "correlation", "regression", "model", "hypothesis", 
-                                "distribution", "stats", "statistical", "significance", "predict"}
+            analysis_keywords = {
+                "test",
+                "correlation",
+                "regression",
+                "model",
+                "hypothesis",
+                "distribution",
+                "stats",
+                "statistical",
+                "significance",
+                "predict",
+            }
             is_analytical = any(kw in instruction.lower() for kw in analysis_keywords)
         else:
             is_analytical = True  # Default to checking if no instruction provided
-            
+
         if is_analytical:
             scientific_keywords = ["mean", "distribution", "variance", "p-value", "significant"]
             keyword_matches = sum(1 for kw in scientific_keywords if kw in result.lower())
@@ -39,20 +50,16 @@ class Evaluator:
                 score -= 10
                 deductions.append("Low scientific terminology in response.")
 
-        return {
-            "score": max(0, score),
-            "deductions": deductions,
-            "status": "PASS" if score >= 70 else "FAIL"
-        }
+        return {"score": max(0, score), "deductions": deductions, "status": "PASS" if score >= 70 else "FAIL"}
 
     @staticmethod
-    def evaluate_code_quality(code: str) -> Dict[str, Any]:
+    def evaluate_code_quality(code: str) -> dict[str, Any]:
         """
         Checks code for best practices (imports, comments, safety).
         """
         is_clean = True
         warnings = []
-        
+
         prohibited = ["exec(", "eval(", "os.system", "subprocess"]
         for p in prohibited:
             if p in code:
@@ -65,5 +72,5 @@ class Evaluator:
         return {
             "is_clean": is_clean,
             "warnings": warnings,
-            "quality_rating": "High" if is_clean and not warnings else "Low"
+            "quality_rating": "High" if is_clean and not warnings else "Low",
         }

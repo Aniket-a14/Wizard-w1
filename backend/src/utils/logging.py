@@ -1,12 +1,11 @@
-import structlog
+import inspect
 import logging
 import sys
-
-
 import time
-import asyncio
-import inspect
 from functools import wraps
+
+import structlog
+
 
 def configure_logger():
     # ... (existing config) ...
@@ -33,12 +32,16 @@ def configure_logger():
         cache_logger_on_first_use=True,
     )
 
+
 logger = structlog.get_logger()
+
 
 def trace_agent(agent_name: str):
     """Decorator to trace agent execution time and outcomes. Supports both sync and async functions."""
+
     def decorator(func):
         if inspect.iscoroutinefunction(func):
+
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 start_time = time.time()
@@ -46,19 +49,18 @@ def trace_agent(agent_name: str):
                 try:
                     result = await func(*args, **kwargs)
                     duration = time.time() - start_time
-                    logger.info(f"Agent Finished: {agent_name}", 
-                                status="success", 
-                                duration_sec=round(duration, 3))
+                    logger.info(f"Agent Finished: {agent_name}", status="success", duration_sec=round(duration, 3))
                     return result
                 except Exception as e:
                     duration = time.time() - start_time
-                    logger.error(f"Agent Failed: {agent_name}", 
-                                 status="error", 
-                                 error=str(e),
-                                 duration_sec=round(duration, 3))
+                    logger.error(
+                        f"Agent Failed: {agent_name}", status="error", error=str(e), duration_sec=round(duration, 3)
+                    )
                     raise
+
             return async_wrapper
         else:
+
             @wraps(func)
             def wrapper(*args, **kwargs):
                 start_time = time.time()
@@ -66,16 +68,15 @@ def trace_agent(agent_name: str):
                 try:
                     result = func(*args, **kwargs)
                     duration = time.time() - start_time
-                    logger.info(f"Agent Finished: {agent_name}", 
-                                status="success", 
-                                duration_sec=round(duration, 3))
+                    logger.info(f"Agent Finished: {agent_name}", status="success", duration_sec=round(duration, 3))
                     return result
                 except Exception as e:
                     duration = time.time() - start_time
-                    logger.error(f"Agent Failed: {agent_name}", 
-                                 status="error", 
-                                 error=str(e),
-                                 duration_sec=round(duration, 3))
+                    logger.error(
+                        f"Agent Failed: {agent_name}", status="error", error=str(e), duration_sec=round(duration, 3)
+                    )
                     raise
+
             return wrapper
+
     return decorator

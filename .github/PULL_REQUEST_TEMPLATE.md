@@ -1,7 +1,7 @@
 ## 🧙‍♂️ Pull Request Template
 
 ### Description
-Please include a summary of the changes and the related issue. Please also include relevant motivation and context. 
+Please include a summary of the changes and the related issue. Please also include relevant motivation and context.
 
 ### Type of Change
 - [ ] 🐛 Bug fix (non-breaking change which fixes an issue)
@@ -10,7 +10,7 @@ Please include a summary of the changes and the related issue. Please also inclu
 - [ ] 📝 Documentation update
 
 ### How Has This Been Tested?
-Please describe the tests that you ran to verify your changes. 
+Please describe the tests that you ran to verify your changes.
 - [ ] **The Council verification**: Ensured that the Visualizer, Statistician, and Architect specialist logic is not regressed.
 - [ ] **Sandbox compatibility**: Verified execution in the Docker-isolated sandbox with resource limits.
 - [ ] **RAG persistence**: Confirmed WorkingMemory integrity if changes involve the storage layer.

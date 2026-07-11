@@ -1,5 +1,5 @@
-from typing import Any, Optional
 import hashlib
+from typing import Any
 
 
 class SimpleCache:
@@ -13,7 +13,7 @@ class SimpleCache:
         self.cache = {}
         self.order = []  # Track usage order
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         if key in self.cache:
             # Move to end (recently used)
             self.order.remove(key)

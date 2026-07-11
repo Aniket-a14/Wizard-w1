@@ -1,6 +1,6 @@
-from typing import List
-import pandas as pd
 import io
+
+import pandas as pd
 
 
 def generate_system_context(df: pd.DataFrame) -> str:
@@ -42,7 +42,7 @@ Categorical Columns:
     return context
 
 
-def create_simple_prompt(instruction: str, columns: List[str]) -> str:
+def create_simple_prompt(instruction: str, columns: list[str]) -> str:
     """
     Creates a simple prompt for local models (legacy/fallback).
     """
@@ -52,7 +52,7 @@ You have a pandas dataframe 'df' with the following columns: {columns}
 
 Task: {instruction}
 
-Write python code to compute the result. 
+Write python code to compute the result.
 Assign the result to variables or print it.
 If plotting, use matplotlib.pyplot as plt.
 Do not overwrite 'df'.

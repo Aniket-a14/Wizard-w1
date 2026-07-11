@@ -1,9 +1,10 @@
-import pandas as pd
 import io
-from fastapi import UploadFile, HTTPException
+
+import pandas as pd
+from fastapi import HTTPException, UploadFile
+
 
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
-
 
 
 async def validate_csv(file: UploadFile) -> pd.DataFrame:
@@ -37,31 +38,33 @@ async def validate_csv(file: UploadFile) -> pd.DataFrame:
 
     try:
         content = await file.read()
-        
+
         def parse_data(data: bytes, enc: str):
             # Decode the raw bytes into string strictly
             decoded = data.decode(enc, errors="strict")
             # Strip out any NUL bytes to prevent "line contains NUL" parser errors
             cleaned = decoded.replace("\x00", "")
-            
+
             # Try default comma separator
             try:
                 return pd.read_csv(io.StringIO(cleaned))
             except Exception:
                 # Try semicolon separator
                 try:
-                    return pd.read_csv(io.StringIO(cleaned), sep=';')
+                    return pd.read_csv(io.StringIO(cleaned), sep=";")
                 except Exception:
                     # Try tab separator
                     try:
-                        return pd.read_csv(io.StringIO(cleaned), sep='\t')
+                        return pd.read_csv(io.StringIO(cleaned), sep="\t")
                     except Exception:
                         # Fallback to python engine delimiter auto-detection
-                        return pd.read_csv(io.StringIO(cleaned), sep=None, engine='python')
+                        return pd.read_csv(io.StringIO(cleaned), sep=None, engine="python")
 
         # Prioritize encoding order based on null byte detection.
         # UTF-16 files contain null bytes for ASCII chars, which are absent in standard UTF-8 CSVs.
-        encodings = ["utf-16", "utf-8", "cp1252", "latin-1"] if b"\x00" in content else ["utf-8", "utf-16", "cp1252", "latin-1"]
+        encodings = (
+            ["utf-16", "utf-8", "cp1252", "latin-1"] if b"\x00" in content else ["utf-8", "utf-16", "cp1252", "latin-1"]
+        )
 
         df = None
         last_error = None

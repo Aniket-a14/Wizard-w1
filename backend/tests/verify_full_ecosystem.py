@@ -1,53 +1,60 @@
-import pandas as pd
 import os
 import sys
 
+import pandas as pd
+
+
 # Set up paths
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from unittest.mock import patch
+
 from src.core.agent.flow import ScientificAgent
 from src.core.memory import working_memory
 from src.core.reporting import reporting_engine
 
+
 def verify_ecosystem():
     print("🚀 --- Wizard w1: Full Ecosystem Integration Test (Lightweight) ---")
-    
+
     # Mock LLM to avoid heavy inference on laptop
     mock_plan = "<thought>Verification thought</thought>\n1. Clean data\n2. Analyze Revenue"
     mock_result = "Analysis complete. Revenue is growing. The Council's Review: Good."
     mock_code = "print('Revenue analysis in progress...')\nimport pandas as pd\nimport matplotlib.pyplot as plt\nplt.plot([1,2],[1,2])"
 
-    with patch('src.core.agent.flow.ScientificAgent._create_plan', return_value=mock_plan), \
-         patch('src.core.agent.agent.DataAnalysisAgent.run', return_value=(mock_result, mock_code, None)):
-        
+    with (
+        patch("src.core.agent.flow.ScientificAgent._create_plan", return_value=mock_plan),
+        patch("src.core.agent.agent.DataAnalysisAgent.run", return_value=(mock_result, mock_code, None)),
+    ):
         agent = ScientificAgent()
-        
+
         # 1. Simulate Upload & Cleaning
         print("\n[Step 1] Simulating Data Upload & Semantic Cleaning...")
-        raw_df = pd.DataFrame({
-            "User_ID": [101, 102, 103],
-            "Revenue": ["$1,000", "$2,500", "invalid"],
-            "Signup_Date": ["2023-01-01", "2023-02-01", "2023-03-01"]
-        })
-        
+        raw_df = pd.DataFrame(
+            {
+                "User_ID": [101, 102, 103],
+                "Revenue": ["$1,000", "$2,500", "invalid"],
+                "Signup_Date": ["2023-01-01", "2023-02-01", "2023-03-01"],
+            }
+        )
+
         # Trigger cleaning flow
         cleaned_df, catalog, summary = agent.clean_dataset(raw_df)
-        
+
         print(f"✅ Catalog detected: {list(catalog['columns'].keys())}")
         print(f"✅ Cleaning result: {summary}")
-        
+
         # 2. Simulate Analysis (Full Loop)
         print("\n[Step 2] Simulating Analysis Loop (Plan -> Exec -> Guardrail -> Council)...")
         instruction = "Analyze the revenue trend."
-        
+
         result, code, image, thought, status = agent.run(
-            instruction, 
-            cleaned_df, 
-            mode="fast", # Skip confirmation for test
-            catalog=catalog
+            instruction,
+            cleaned_df,
+            mode="fast",  # Skip confirmation for test
+            catalog=catalog,
         )
-        
+
         print("✅ Execution Result received.")
         if "The Council's Review" in result:
             print("✅ Council Adjudication: FOUND in result.")
@@ -71,6 +78,7 @@ def verify_ecosystem():
             print("❌ Report Generation: FAILED.")
 
     print("\n--- 🏁 Verification Finished (All Systems Connected) ---")
+
 
 if __name__ == "__main__":
     # Ensure Docker is running or we'll get errors
