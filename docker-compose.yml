@@ -13,9 +13,11 @@ services:
       - MODEL_TYPE=${MODEL_TYPE:-ollama}
       - MODEL_NAME=${MODEL_NAME:-deepseek-r1:1.5b}
       - WORKER_MODEL_NAME=${WORKER_MODEL_NAME:-qwen2.5-coder:1.5b}
+      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-llava:7b}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
       - ./backend:/app
+      - ./workspace:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - wizard_net
