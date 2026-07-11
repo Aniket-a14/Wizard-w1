@@ -39,7 +39,8 @@ class ScientificAgent:
         else:
             state.status = "init"
             
-        final_state = langgraph_agent.execute_workflow(state)
+        import asyncio
+        final_state = asyncio.run(langgraph_agent.execute_workflow(state))
         
         # Map statuses
         ui_status = "completed"

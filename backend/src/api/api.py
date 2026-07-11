@@ -295,7 +295,7 @@ async def websocket_chat(websocket: WebSocket):
             # Evaluator & Council
             if workflow_state.status == "evaluating":
                 await websocket.send_json({"type": "status", "content": "🛡️ The Council is reviewing the analysis results..."})
-                workflow_state = await asyncio.to_thread(langgraph_agent.step_evaluate, workflow_state)
+                workflow_state = await langgraph_agent.step_evaluate(workflow_state)
                 
             # Final output
             await websocket.send_json({

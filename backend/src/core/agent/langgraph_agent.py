@@ -310,7 +310,7 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             
         return state
 
-    def step_evaluate(self, state: WorkflowState) -> WorkflowState:
+    async def step_evaluate(self, state: WorkflowState) -> WorkflowState:
         """
         Review/Evaluation Node. Scores result and runs The Council review.
         """
@@ -356,7 +356,7 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             eval_result = Evaluator.score_execution(state.result)
             
             # Adjudicate via specialized council agents
-            council_feedback = self.council.adjudicate(state.plan, state.code, state.result)
+            council_feedback = await self.council.adjudicate(state.plan, state.code, state.result)
             
             # Formulate final response with transparent council reviews
             final_response = state.result
@@ -560,7 +560,7 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
         ]
         return any(kw in instruction_lower for kw in simple_keywords)
 
-    def execute_workflow(self, state: WorkflowState) -> WorkflowState:
+    async def execute_workflow(self, state: WorkflowState) -> WorkflowState:
         """
         Run the complete compiled LangGraph flow sequentially.
         If paused at a 'waiting_approval' gateway, execution stops and returns state.
@@ -593,7 +593,7 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             elif state.status == "correcting":
                 state = self.step_correct_error(state)
             elif state.status == "evaluating":
-                state = self.step_evaluate(state)
+                state = await self.step_evaluate(state)
             else:
                 break
                 
