@@ -406,6 +406,11 @@ async def export_sandbox_variable(name: str):
     from src.core.tools.sandbox import SandboxManager
     sandbox_mgr = SandboxManager()
     
+    # Verify variable exists in sandbox variables
+    variables = await asyncio.to_thread(sandbox_mgr.inspect_variables)
+    if safe_name not in variables:
+        raise HTTPException(status_code=404, detail=f"Variable '{safe_name}' not found in sandbox memory.")
+    
     # Run a small code block inside sandbox to export the variable to workspace
     export_code = f"""
 import pandas as pd

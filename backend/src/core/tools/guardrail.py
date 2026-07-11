@@ -9,8 +9,10 @@ class GuardrailAgent:
     """
 
     PROHIBITED_PATTERNS = [
-        (r"os\.", "OS module access"),
-        (r"subprocess\.", "Subprocess execution"),
+        (r"\bos\b", "OS module access"),
+        (r"\bsubprocess\b", "Subprocess execution"),
+        (r"__import__", "Dynamic import execution"),
+        (r"importlib", "Dynamic import execution"),
         (r"eval\(", "Dangerous eval() call"),
         (r"exec\(", "Dangerous exec() call"),
         (r"socket\.", "Network socket access"),
