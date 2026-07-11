@@ -9,7 +9,7 @@ from src.core.tools.guardrail import GuardrailAgent
 from src.core.tools.evaluator import Evaluator
 from src.core.agent.council import TheCouncil
 from src.core.memory import working_memory
-from src.core.memory.semantic_cache import semantic_cache
+from src.core.semantic_cache import semantic_cache
 
 
 class WorkflowState:
@@ -192,7 +192,11 @@ class LangGraphAgent:
             state.status = "error"
             return state
             
-        # 1. Deterministic AST Syntax & Security Validation
+        # 1. Deterministic AST Syntax & Security Validation with Local Repair
+        success, repaired_code = self.attempt_code_repair(state.code)
+        if success:
+            state.code = repaired_code
+            
         try:
             tree = ast.parse(state.code)
             
@@ -301,6 +305,48 @@ class LangGraphAgent:
             state.status = "completed"
             
         return state
+            
+    def attempt_code_repair(self, code: str) -> tuple[bool, str]:
+        """
+        Attempts deterministic local syntax and dependency auto-repair.
+        Returns (success_flag, repaired_code).
+        """
+        # Pre-clean markdown code block boundaries if present
+        clean_code = code.replace("```python", "").replace("```", "").strip()
+        
+        # 1. Check if the code parses as-is
+        try:
+            ast.parse(clean_code)
+            return True, clean_code
+        except SyntaxError:
+            pass
+
+        # 2. Heal missing common package imports
+        common_imports = {
+            "pd": "import pandas as pd",
+            "np": "import numpy as np",
+            "plt": "import matplotlib.pyplot as plt",
+            "sns": "import seaborn as sns",
+            "px": "import plotly.express as px",
+            "go": "import plotly.graph_objects as go",
+            "stats": "import scipy.stats as stats"
+        }
+        
+        imports_to_add = []
+        for token, imp in common_imports.items():
+            if f"{token}." in clean_code and f"import {token}" not in clean_code and f"from " not in clean_code:
+                imports_to_add.append(imp)
+                
+        if imports_to_add:
+            repaired_code = "\n".join(imports_to_add) + "\n" + clean_code
+            try:
+                ast.parse(repaired_code)
+                logger.info("Healed missing imports in generated code locally", imports=imports_to_add)
+                return True, repaired_code
+            except Exception:
+                pass
+                
+        return False, clean_code
         
     def is_simple_query(self, instruction: str) -> bool:
         """

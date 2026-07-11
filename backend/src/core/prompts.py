@@ -43,6 +43,38 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
     
     semantic_insight = "\n".join(semantic_insight_list) if semantic_insight_list else ""
 
+    # Data Quality Scan
+    warnings = []
+    
+    # 1. Null warnings
+    null_pct = df.isnull().mean()
+    for col, pct in null_pct.items():
+        if pct > 0.1:
+            warnings.append(f"- Column `{col}` has high missing rate ({pct:.1%}). Always handle nulls (e.g., `.dropna()` or `.fillna()`) before math or graphing.")
+            
+    # 2. Zero-division warning
+    numeric_cols = df.select_dtypes(include=["number"]).columns
+    for col in numeric_cols:
+        try:
+            if (df[col] == 0).any():
+                warnings.append(f"- Column `{col}` contains zero values. Ensure you guard against division-by-zero errors when dividing by this column.")
+        except Exception:
+            pass
+            
+    # 3. Date parsing warning
+    object_cols = df.select_dtypes(include=["object", "string"]).columns
+    for col in object_cols:
+        try:
+            sample = df[col].dropna().head(5)
+            if not sample.empty and pd.to_datetime(sample, errors="coerce").notnull().all():
+                warnings.append(f"- Column `{col}` contains date-like values. Parse them using `pd.to_datetime()` before sorting or plotting by date.")
+        except Exception:
+            pass
+
+    warnings_str = ""
+    if warnings:
+        warnings_str = "\n<data_quality_warnings>\n" + "\n".join(warnings) + "\n</data_quality_warnings>\n"
+
     context = f"""<dataset_context>
 <schema>
 ```text
@@ -57,6 +89,7 @@ def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] 
 <statistical_summary>
 {description}
 </statistical_summary>
+{warnings_str}
 
 <categorical_insights>
 {cat_summary}

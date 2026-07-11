@@ -1,6 +1,5 @@
 import json
-
-
+import numpy as np
 from src.config import settings
 
 
@@ -27,10 +26,36 @@ class FeedbackStore:
             self.save_feedback()
 
     def get_similar_examples(self, query: str, limit: int = 2) -> list[dict]:
-        """Retrieves successful examples from the feedback file matching the query."""
-        if not self.feedback_data or "successful_examples" not in self.feedback_data:
+        """Retrieves successful examples from the feedback file matching the query semantically."""
+        if not self.feedback_data or "successful_examples" not in self.feedback_data or not self.feedback_data["successful_examples"]:
             return []
-        
+            
+        try:
+            # Dynamically load semantic cache model if available
+            from src.core.semantic_cache import semantic_cache
+            model = semantic_cache._get_model()
+            if model:
+                query_vector = model.encode(query.strip().lower())
+                scored_examples = []
+                
+                for entry in self.feedback_data["successful_examples"]:
+                    task_text = entry.get("task", "").strip().lower()
+                    if not task_text:
+                        continue
+                    task_vector = model.encode(task_text)
+                    
+                    # Cosine similarity
+                    dot_product = float(np.dot(query_vector, task_vector))
+                    norm_q = float(np.linalg.norm(query_vector))
+                    norm_t = float(np.linalg.norm(task_vector))
+                    sim = dot_product / (norm_q * norm_t) if norm_q > 0 and norm_t > 0 else 0.0
+                    scored_examples.append((sim, entry))
+                    
+                scored_examples.sort(key=lambda x: x[0], reverse=True)
+                return [entry for sim, entry in scored_examples[:limit]]
+        except Exception:
+            pass # Fallback to keyword matching below
+
         query_terms = query.lower().split()
         scored_examples = []
         
