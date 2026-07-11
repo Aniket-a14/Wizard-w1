@@ -1,55 +1,75 @@
 import json
 import numpy as np
 from src.config import settings
-
+from src.core.database import db_mgr
 
 class FeedbackStore:
+    """
+    Manages successful examples (few-shots) utilizing SQLite database storage
+    with semantic vector cosine similarity matching.
+    """
     def __init__(self, filename=None):
+        # Kept for backward compatibility but operations are offloaded to SQLite
         self.filename = filename or settings.FEEDBACK_FILE
-        self.feedback_data = self._load_feedback()
+        self._sync_legacy_file_to_db()
 
-    def _load_feedback(self):
-        try:
-            with open(self.filename, "r") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {"successful_examples": [], "failed_examples": []}
-
-    def save_feedback(self):
-        with open(self.filename, "w") as f:
-            json.dump(self.feedback_data, f, indent=2)
+    def _sync_legacy_file_to_db(self):
+        """Loads legacy JSON feedbacks into the SQLite database on startup if any exist."""
+        import os
+        if os.path.exists(self.filename):
+            try:
+                with open(self.filename, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                successful = data.get("successful_examples", [])
+                for entry in successful:
+                    task = entry.get("task", "")
+                    code = entry.get("code", "")
+                    if task and code:
+                        db_mgr.save_feedback(task, code)
+            except Exception:
+                pass
 
     def add_example(self, example: dict):
-        """Add an example and invalidate cache"""
-        if example not in self.feedback_data["successful_examples"]:
-            self.feedback_data["successful_examples"].append(example)
-            self.save_feedback()
+        """Add a successful example to the database."""
+        task = example.get("task", "")
+        code = example.get("code", "")
+        if task and code:
+            try:
+                from src.core.semantic_cache import semantic_cache
+                model = semantic_cache._get_model()
+                embedding = model.encode(task.strip().lower()) if model else None
+            except Exception:
+                embedding = None
+            db_mgr.save_feedback(task, code, embedding)
 
     def get_similar_examples(self, query: str, limit: int = 2) -> list[dict]:
-        """Retrieves successful examples from the feedback file matching the query semantically."""
-        if not self.feedback_data or "successful_examples" not in self.feedback_data or not self.feedback_data["successful_examples"]:
+        """Retrieves successful examples matching the query semantically from SQLite."""
+        feedbacks = db_mgr.get_feedbacks()
+        if not feedbacks:
             return []
             
         try:
-            # Dynamically load semantic cache model if available
             from src.core.semantic_cache import semantic_cache
             model = semantic_cache._get_model()
             if model:
                 query_vector = model.encode(query.strip().lower())
                 scored_examples = []
                 
-                for entry in self.feedback_data["successful_examples"]:
-                    task_text = entry.get("task", "").strip().lower()
-                    if not task_text:
-                        continue
-                    task_vector = model.encode(task_text)
+                for fb in feedbacks:
+                    task = fb["task"]
+                    code = fb["code"]
+                    task_vector = fb.get("embedding")
                     
-                    # Cosine similarity
+                    if task_vector is None or len(task_vector) == 0:
+                        task_vector = model.encode(task.strip().lower())
+                        # Save embedding back
+                        db_mgr.save_feedback(task, code, task_vector)
+                        
                     dot_product = float(np.dot(query_vector, task_vector))
                     norm_q = float(np.linalg.norm(query_vector))
                     norm_t = float(np.linalg.norm(task_vector))
                     sim = dot_product / (norm_q * norm_t) if norm_q > 0 and norm_t > 0 else 0.0
-                    scored_examples.append((sim, entry))
+                    scored_examples.append((sim, {"task": task, "code": code}))
                     
                 scored_examples.sort(key=lambda x: x[0], reverse=True)
                 return [entry for sim, entry in scored_examples[:limit]]
@@ -59,20 +79,16 @@ class FeedbackStore:
         query_terms = query.lower().split()
         scored_examples = []
         
-        for entry in self.feedback_data["successful_examples"]:
+        for fb in feedbacks:
             score = 0
-            task = entry.get("task", "")
+            task = fb["task"]
+            code = fb["code"]
             content = task.lower()
             for term in query_terms:
                 if term in content:
                     score += 1
             if score > 0:
-                scored_examples.append((score, entry))
+                scored_examples.append((score, {"task": task, "code": code}))
         
         scored_examples.sort(key=lambda x: x[0], reverse=True)
         return [entry for score, entry in scored_examples[:limit]]
-
-
-# this block of code is used to save the feedback to a json file
-# the feedback is saved to a json file
-# the feedback is used in the agent.py file to train the agent

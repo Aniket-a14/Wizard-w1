@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     MODEL_TYPE: Literal["ollama"] = "ollama"
     MODEL_NAME: str = "deepseek-r1:1.5b"
     WORKER_MODEL_NAME: str = "qwen2.5-coder:1.5b"
+    VISION_MODEL_NAME: str = "llava:7b"
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
-    OFFLOAD_FOLDER: str = "offload"
     FEEDBACK_FILE: str = "feedback_data.json"
 
 

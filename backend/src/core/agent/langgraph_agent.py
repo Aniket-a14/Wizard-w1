@@ -2,6 +2,8 @@ import re
 import ast
 from typing import Optional
 import pandas as pd
+import numpy as np
+from src.config import settings
 from src.utils.logging import logger
 from src.core.agent.agent import DataAnalysisAgent
 from src.core.prompts import create_replan_prompt, create_prompt, create_planning_prompt
@@ -30,6 +32,13 @@ class WorkflowState:
         self.status = "init"  # init -> planning -> waiting_approval -> executing -> completed -> error
         self.retry_count = 0
         self.error = None
+        
+        # Iterative Execution & Trajectory Learning fields
+        self.steps = []
+        self.current_step_index = 0
+        self.failed_code = ""
+        self.failed_error = ""
+        self.step_outputs = []
         
         # Details of tool execution if pending user approval
         self.pending_tool_approval = None  # None or {"tool": "web_search", "query": "..."}
@@ -92,6 +101,14 @@ class LangGraphAgent:
                     state.status = "waiting_approval"
                     logger.info("Planning paused for web search approval", query=query)
                     return state
+
+            # Jupyter Step Extraction from generated plan
+            steps = re.findall(r"(?:\d+\.\s+|-\s+)([^\n]+)", state.plan)
+            steps = [s.strip() for s in steps if len(s.strip()) > 5]
+            if len(steps) >= 2:
+                state.steps = steps
+                state.current_step_index = 0
+                logger.info("Plan parsed into iterative steps", steps_count=len(steps))
 
             # If mode is planning, stop here and ask for plan execution approval
             if state.mode == "planning":
@@ -157,12 +174,35 @@ class LangGraphAgent:
             logger.info("Code block already pre-loaded. Bypassing worker LLM code generation.")
             return state
         
+        # Determine the current instruction depending on whether we are executing step-by-step
+        current_instruction = state.instruction
+        if state.steps and state.current_step_index < len(state.steps):
+            step_desc = state.steps[state.current_step_index]
+            logger.info(f"Generating code for Step {state.current_step_index + 1} of {len(state.steps)}: {step_desc}")
+            
+            # Contextualize instruction for the current step in the notebook
+            prior_outputs = "\n".join([f"# Step {idx+1} Output:\n# {out}" for idx, out in enumerate(state.step_outputs)])
+            current_instruction = f"""Query: {state.instruction}
+
+JUPYTER NOTEBOOK STEP {state.current_step_index + 1} of {len(state.steps)}:
+=> {step_desc}
+
+{prior_outputs}
+
+Write python code ONLY for this step. Do not rewrite prior steps, just continue. Keep imports minimal."""
+
         worker_llm = self.execution_agent._get_worker_llm()
         few_shot = self.execution_agent.feedback_store.get_similar_examples(state.instruction)
         
+        # Look up negative trajectories to avoid repeating bugs
+        neg_examples = self._get_negative_examples(state.instruction)
+        instruction_with_warnings = current_instruction
+        if neg_examples:
+            instruction_with_warnings += "\n" + neg_examples
+
         # Setup prompt with appropriate plan and error contexts
         worker_prompt = create_prompt(
-            state.instruction,
+            instruction_with_warnings,
             state.df,
             plan=state.plan,
             previous_error=state.error,
@@ -178,6 +218,7 @@ class LangGraphAgent:
             logger.error("Code generation failed", error=str(e))
             state.error = f"Generation error: {e}"
             state.status = "error"
+            return state
             
         return state
 
@@ -253,6 +294,10 @@ class LangGraphAgent:
         """
         Dynamic self-correction routing (cyclic loop).
         """
+        # Record failed attempt details for trajectory learning
+        state.failed_code = state.code
+        state.failed_error = state.error
+
         state.retry_count += 1
         max_retries = 3
         
@@ -272,9 +317,40 @@ class LangGraphAgent:
         logger.info("LangGraph Node: evaluate")
         
         try:
-            # Add to semantic cache if execution succeeded
+            # Handle intermediate outputs in Jupyter Step loop
+            if state.steps:
+                state.step_outputs.append(state.result)
+                if state.current_step_index < len(state.steps) - 1:
+                    logger.info(f"Finished Step {state.current_step_index + 1}. Transitioning to next step.")
+                    state.current_step_index += 1
+                    state.code = ""
+                    state.error = None
+                    state.retry_count = 0
+                    state.status = "executing"
+                    return state
+
+            # Add to semantic cache if overall execution succeeded
             if state.code and not state.error:
                 semantic_cache.add(state.instruction, state.df.columns.tolist(), state.code)
+                
+                # Save failure recovery trajectory if we healed
+                if state.retry_count > 0 and getattr(state, "failed_code", None):
+                    try:
+                        from src.core.database import db_mgr
+                        from src.core.semantic_cache import semantic_cache as sc
+                        model = sc._get_model()
+                        emb = model.encode(state.instruction.strip().lower()) if model else None
+                        db_mgr.save_trajectory(
+                            instruction=state.instruction,
+                            columns=state.df.columns.tolist(),
+                            failed_code=state.failed_code,
+                            error_message=state.failed_error,
+                            corrected_code=state.code,
+                            embedding=emb
+                        )
+                        logger.info("Saved failure-correction trajectory to SQLite database.")
+                    except Exception as e:
+                        logger.error("Failed to save trajectory to database", error=str(e))
 
             # Score execution quality
             eval_result = Evaluator.score_execution(state.result)
@@ -283,7 +359,15 @@ class LangGraphAgent:
             council_feedback = self.council.adjudicate(state.plan, state.code, state.result)
             
             # Formulate final response with transparent council reviews
-            final_response = state.result + "\n\n### 🛡️ The Council's Review\n"
+            final_response = state.result
+            
+            # Append Visual Insights if plot is present
+            if state.image:
+                logger.info("Plot generated. Fetching visual insights.")
+                vision_desc = self.step_vision_explain(state.image)
+                final_response += f"\n\n### 📊 Visual Insights\n{vision_desc}"
+                
+            final_response += "\n\n### 🛡️ The Council's Review\n"
             for review in council_feedback.get("reviews", []):
                 agent_name = review["agent"]
                 feedback_items = review.get("feedback", [])
@@ -309,6 +393,80 @@ class LangGraphAgent:
             state.status = "completed"
             
         return state
+
+    def _get_negative_examples(self, query: str) -> str:
+        """
+        Retrieves past matching failed trajectories from database as negative examples.
+        """
+        try:
+            from src.core.database import db_mgr
+            from src.core.semantic_cache import semantic_cache as sc
+            entries = db_mgr.get_trajectory_entries()
+            if not entries:
+                return ""
+                
+            model = sc._get_model()
+            if not model:
+                return ""
+                
+            query_vector = model.encode(query.strip().lower())
+            
+            best_match = None
+            max_sim = -1.0
+            
+            for entry in entries:
+                task_vector = entry.get("embedding")
+                if task_vector is None or len(task_vector) == 0:
+                    continue
+                # Cosine similarity
+                dot_product = np.dot(query_vector, task_vector)
+                norm_q = np.linalg.norm(query_vector)
+                norm_t = np.linalg.norm(task_vector)
+                sim = dot_product / (norm_q * norm_t) if norm_q > 0 and norm_t > 0 else 0.0
+                if sim > max_sim:
+                    max_sim = sim
+                    best_match = entry
+                    
+            if max_sim >= 0.90 and best_match:
+                logger.info("Matched negative trajectory memory", similarity=round(max_sim, 4))
+                return f"\n<failed_attempts_to_avoid>\nA similar query previously failed because of a syntax/runtime issue. Do NOT repeat this mistake.\nFailed Code:\n```python\n{best_match['failed_code']}\n```\nCompiler Error:\n{best_match['error_message']}\n\nCorrect Way to solve it:\n```python\n{best_match['corrected_code']}\n```\n</failed_attempts_to_avoid>\n"
+        except Exception as e:
+            logger.error("Error looking up negative trajectories", error=str(e))
+        return ""
+
+    def step_vision_explain(self, base64_image: str) -> str:
+        """
+        Queries local multimodal Ollama model to describe visual plots.
+        """
+        try:
+            from langchain_ollama import ChatOllama
+            from langchain_core.messages import HumanMessage
+            
+            vision_model_name = getattr(settings, "VISION_MODEL_NAME", "llava:7b")
+            logger.info("Initializing Vision Model (ChatOllama)", model=vision_model_name)
+            
+            vision_llm = ChatOllama(
+                model=vision_model_name,
+                base_url=settings.OLLAMA_BASE_URL,
+                temperature=0.2
+            )
+            
+            # Create a multimodal message payload
+            message = HumanMessage(
+                content=[
+                    {"type": "text", "text": "Describe this data visualization chart in 2-3 sentences. Explain the visible trend, the axes, and any key insights."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                    }
+                ]
+            )
+            
+            response = vision_llm.invoke([message]).content
+            return response.strip()
+        except Exception as e:
+            logger.error("Failed to generate visual explanation", error=str(e))
+            return "Generated data visualization plot based on columns."
             
     def attempt_code_repair(self, code: str) -> tuple[bool, str]:
         """
