@@ -1,6 +1,6 @@
 import re
 import ast
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 import pandas as pd
 import numpy as np
 from src.config import settings
@@ -203,7 +203,7 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
         few_shot = self.execution_agent.feedback_store.get_similar_examples(state.instruction)
         
         # Look up negative trajectories to avoid repeating bugs
-        neg_examples = self._get_negative_examples(state.instruction)
+        neg_examples = self._get_negative_examples(state.instruction, state.df.columns.tolist() if state.df is not None else None)
         instruction_with_warnings = current_instruction
         if neg_examples:
             instruction_with_warnings += "\n" + neg_examples
@@ -441,14 +441,14 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             
         return state
 
-    def _get_negative_examples(self, query: str) -> str:
+    def _get_negative_examples(self, query: str, columns: Optional[List[str]] = None) -> str:
         """
         Retrieves past matching failed trajectories from database as negative examples.
         """
         try:
             from src.core.database import db_mgr
             from src.core.semantic_cache import semantic_cache as sc
-            entries = db_mgr.get_trajectory_entries()
+            entries = db_mgr.get_trajectory_entries(columns)
             if not entries:
                 return ""
                 

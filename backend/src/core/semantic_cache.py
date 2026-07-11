@@ -43,7 +43,7 @@ class SemanticCache:
         Looks up a query in the cache database. 
         Returns the cached code if a semantic match is found AND the dataset columns match.
         """
-        entries = db_mgr.get_cache_entries()
+        entries = db_mgr.get_cache_entries(active_columns)
         if not entries:
             return None
             

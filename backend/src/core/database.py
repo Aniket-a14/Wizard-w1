@@ -8,6 +8,7 @@ from src.utils.logging import logger
 class DatabaseManager:
     """
     Unified SQLite database manager for semantic cache, trajectories memory, and feedbacks.
+    Includes schema migration capabilities and schema-hash query indexing.
     """
     def __init__(self):
         self.db_path = settings.DATA_DIR / "wizard.db"
@@ -21,13 +22,14 @@ class DatabaseManager:
         return conn
 
     def _init_db(self):
-        """Creates tables if they do not exist."""
+        """Creates tables if they do not exist, and runs schema migrations if needed."""
         try:
             with self._get_connection() as conn:
                 # 1. Semantic Cache Table
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS semantic_cache (
                         query TEXT PRIMARY KEY,
+                        schema_hash TEXT,
                         columns TEXT,
                         code TEXT,
                         embedding BLOB
@@ -38,6 +40,7 @@ class DatabaseManager:
                     CREATE TABLE IF NOT EXISTS trajectories (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         instruction TEXT,
+                        schema_hash TEXT,
                         columns TEXT,
                         failed_code TEXT,
                         error_message TEXT,
@@ -53,6 +56,26 @@ class DatabaseManager:
                         embedding BLOB
                     )
                 """)
+                
+                # Check for migrations
+                # Check semantic_cache
+                cursor = conn.execute("PRAGMA table_info(semantic_cache)")
+                columns = [row["name"] for row in cursor.fetchall()]
+                if "schema_hash" not in columns:
+                    logger.info("Migrating database: adding schema_hash to semantic_cache")
+                    conn.execute("ALTER TABLE semantic_cache ADD COLUMN schema_hash TEXT")
+                
+                # Check trajectories
+                cursor = conn.execute("PRAGMA table_info(trajectories)")
+                columns = [row["name"] for row in cursor.fetchall()]
+                if "schema_hash" not in columns:
+                    logger.info("Migrating database: adding schema_hash to trajectories")
+                    conn.execute("ALTER TABLE trajectories ADD COLUMN schema_hash TEXT")
+                
+                # Create indexes
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_semantic_cache_schema ON semantic_cache(schema_hash)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_trajectories_schema ON trajectories(schema_hash)")
+                
                 conn.commit()
             logger.info("SQLite database initialized successfully", path=str(self.db_path))
         except Exception as e:
@@ -66,10 +89,18 @@ class DatabaseManager:
         return np.frombuffer(blob, dtype=np.float32)
 
     # --- Semantic Cache ---
-    def get_cache_entries(self) -> List[Dict[str, Any]]:
+    def get_cache_entries(self, active_columns: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         try:
             with self._get_connection() as conn:
-                rows = conn.execute("SELECT query, columns, code, embedding FROM semantic_cache").fetchall()
+                if active_columns is not None:
+                    schema_hash = ",".join(sorted(active_columns))
+                    rows = conn.execute(
+                        "SELECT query, columns, code, embedding FROM semantic_cache WHERE schema_hash = ?",
+                        (schema_hash,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute("SELECT query, columns, code, embedding FROM semantic_cache").fetchall()
+                
                 entries = []
                 for row in rows:
                     entries.append({
@@ -85,23 +116,31 @@ class DatabaseManager:
 
     def save_cache_entry(self, query: str, columns: List[str], code: str, embedding: np.ndarray):
         try:
+            schema_hash = ",".join(sorted(columns))
             with self._get_connection() as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO semantic_cache (query, columns, code, embedding) VALUES (?, ?, ?, ?)",
-                    (query.strip().lower(), json.dumps(columns), code, self._serialize_vector(embedding))
+                    "INSERT OR REPLACE INTO semantic_cache (query, schema_hash, columns, code, embedding) VALUES (?, ?, ?, ?, ?)",
+                    (query.strip().lower(), schema_hash, json.dumps(columns), code, self._serialize_vector(embedding))
                 )
                 conn.commit()
         except Exception as e:
             logger.error("Failed to save semantic cache entry", error=str(e))
 
     # --- Trajectories (Failures Memory) ---
-    def get_trajectory_entries(self) -> List[Dict[str, Any]]:
+    def get_trajectory_entries(self, active_columns: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         try:
             with self._get_connection() as conn:
-                rows = conn.execute("""
-                    SELECT instruction, columns, failed_code, error_message, corrected_code, embedding 
-                    FROM trajectories
-                """).fetchall()
+                if active_columns is not None:
+                    schema_hash = ",".join(sorted(active_columns))
+                    rows = conn.execute("""
+                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding 
+                        FROM trajectories WHERE schema_hash = ?
+                    """, (schema_hash,)).fetchall()
+                else:
+                    rows = conn.execute("""
+                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding 
+                        FROM trajectories
+                    """).fetchall()
                 entries = []
                 for row in rows:
                     entries.append({
@@ -119,12 +158,14 @@ class DatabaseManager:
 
     def save_trajectory(self, instruction: str, columns: List[str], failed_code: str, error_message: str, corrected_code: str, embedding: np.ndarray):
         try:
+            schema_hash = ",".join(sorted(columns))
             with self._get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO trajectories (instruction, columns, failed_code, error_message, corrected_code, embedding)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO trajectories (instruction, schema_hash, columns, failed_code, error_message, corrected_code, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     instruction.strip().lower(),
+                    schema_hash,
                     json.dumps(columns),
                     failed_code,
                     error_message,
