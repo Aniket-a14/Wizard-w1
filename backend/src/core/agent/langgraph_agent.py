@@ -85,6 +85,18 @@ class LangGraphAgent:
         """
         logger.info("LangGraph Node: planning", instruction=state.instruction)
 
+        # Check if the query is a simple request that does not need planning
+        simple_keywords = {"show", "print", "display", "head", "tail", "columns", "describe", "preview", "rows"}
+        query_words = set(re.findall(r"\w+", state.instruction.lower()))
+        is_simple_query = len(state.instruction.split()) <= 6 and bool(query_words.intersection(simple_keywords))
+
+        if is_simple_query:
+            logger.info("Simple query detected. Skipping planning stage and proceeding to execution.")
+            state.plan = "Direct code execution for simple request: " + state.instruction
+            state.thought = "Direct execution bypass for simple request."
+            state.status = "executing"
+            return state
+
         # Retrieve context from working memory
         memory_context = working_memory.get_context_string(state.instruction)
 
