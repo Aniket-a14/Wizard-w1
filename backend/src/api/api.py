@@ -314,13 +314,25 @@ async def websocket_chat(websocket: WebSocket):
                 await websocket.send_json({"type": "status", "content": "🛡️ The Council is reviewing the analysis results..."})
                 workflow_state = await langgraph_agent.step_evaluate(workflow_state)
                 
+            # Scan response text for saved files
+            import re
+            saved_files = []
+            try:
+                matches = re.findall(r"([a-zA-Z0-9_\-\.]+\.(?:csv|xlsx|xls|png|jpg|feather|json))", workflow_state.result)
+                for m in matches:
+                    if (settings.WORKSPACE_DIR / m).exists() and m not in {"dataset.csv", "dataset.feather"}:
+                        saved_files.append(m)
+            except Exception:
+                pass
+
             # Final output
             await websocket.send_json({
                 "type": "final",
                 "response": workflow_state.result,
                 "code": workflow_state.code,
                 "image": workflow_state.image,
-                "status": "completed"
+                "status": "completed",
+                "downloads": list(set(saved_files))
             })
             
     except WebSocketDisconnect:
@@ -369,6 +381,32 @@ async def list_workspace_files():
 
 
 app.mount("/workspace/static", StaticFiles(directory=str(settings.WORKSPACE_DIR)), name="workspace_static")
+
+
+@app.get("/sandbox/variables")
+async def get_sandbox_variables():
+    from src.core.tools.sandbox import SandboxManager
+    sandbox_mgr = SandboxManager()
+    variables = await asyncio.to_thread(sandbox_mgr.inspect_variables)
+    return variables
+
+
+@app.delete("/data/files/{filename}")
+async def delete_workspace_file(filename: str):
+    import os
+    safe_filename = os.path.basename(filename)
+    if safe_filename in {"dataset.csv", "dataset.feather"}:
+        raise HTTPException(status_code=400, detail="Cannot delete core session dataset.")
+    
+    file_path = settings.WORKSPACE_DIR / safe_filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found.")
+    
+    try:
+        os.remove(file_path)
+        return {"message": f"File '{safe_filename}' deleted successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
 
 
 @app.get("/health")

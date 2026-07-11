@@ -103,7 +103,52 @@ def run_server(port=5005):
                 continue
                 
             code = payload.get("code", "")
+            action = payload.get("action", "execute")
             
+            if action == "inspect_variables":
+                var_info = {}
+                try:
+                    for name, val in exec_globals.items():
+                        if name.startswith("__") or type(val).__name__ in {"module", "function", "builtin_function_or_method"}:
+                            continue
+                        
+                        type_name = type(val).__name__
+                        shape = None
+                        preview = ""
+                        
+                        if isinstance(val, pd.DataFrame):
+                            shape = list(val.shape)
+                            preview = f"Columns: {list(val.columns[:5])}"
+                        elif isinstance(val, pd.Series):
+                            shape = list(val.shape)
+                            preview = f"Name: {val.name}, Dtype: {val.dtype}"
+                        elif hasattr(val, "shape"):
+                            try:
+                                shape = list(val.shape)
+                            except Exception:
+                                pass
+                            preview = str(val)[:100]
+                        elif isinstance(val, (list, dict, set, tuple)):
+                            try:
+                                shape = len(val)
+                            except Exception:
+                                pass
+                            preview = str(val)[:100]
+                        else:
+                            preview = str(val)[:100]
+                            
+                        var_info[name] = {
+                            "type": type_name,
+                            "shape": shape,
+                            "preview": preview
+                        }
+                    response = {"status": "success", "variables": var_info}
+                except Exception as e:
+                    response = {"status": "error", "stderr": str(e)}
+                send_message(conn, response)
+                conn.close()
+                continue
+                
             # Setup output capture with streaming support
             stdout_stream = SocketStdoutStream(conn)
             stderr_buf = io.StringIO()
@@ -350,6 +395,38 @@ class SandboxManager:
         except Exception as e:
             logger.error("Sandbox socket communication failed", error=str(e))
             return f"Sandbox communication error: {e}", None
+
+    def inspect_variables(self) -> dict:
+        """Queries the sandbox daemon namespace to inspect active variables."""
+        if not self.client or not self.container:
+            return {}
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect(('127.0.0.1', self.port))
+            payload = json.dumps({"action": "inspect_variables"}).encode('utf-8')
+            msg = struct.pack('>I', len(payload)) + payload
+            s.sendall(msg)
+            
+            # Read header
+            raw_msglen = s.recv(4)
+            if not raw_msglen:
+                s.close()
+                return {}
+            msglen = struct.unpack('>I', raw_msglen)[0]
+            
+            data_bytes = bytearray()
+            while len(data_bytes) < msglen:
+                packet = s.recv(msglen - len(data_bytes))
+                if not packet:
+                    break
+                data_bytes.extend(packet)
+                
+            response = json.loads(data_bytes.decode('utf-8'))
+            s.close()
+            return response.get("variables", {})
+        except Exception as e:
+            logger.error("Failed to inspect sandbox variables", error=str(e))
+            return {}
 
     def interrupt(self):
         """Sends a SIGINT (signal 2) to the main process inside the container to stop execution."""
