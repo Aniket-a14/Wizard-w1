@@ -17,9 +17,15 @@ interface WorkspaceExplorerProps {
   onSelectImage: (url: string) => void
 }
 
+interface WorkspaceVariable {
+  type: string
+  shape?: string | number[]
+  preview?: string
+}
+
 export function WorkspaceExplorer({ apiBaseUrl, onSelectCsv, onSelectImage }: WorkspaceExplorerProps) {
   const [files, setFiles] = useState<WorkspaceFile[]>([])
-  const [variables, setVariables] = useState<Record<string, any>>({})
+  const [variables, setVariables] = useState<Record<string, WorkspaceVariable>>({})
   const [loading, setLoading] = useState(false)
 
   const fetchData = useCallback(async () => {
@@ -273,7 +279,7 @@ export function WorkspaceExplorer({ apiBaseUrl, onSelectCsv, onSelectImage }: Wo
               <p className="text-[10px] mt-1 text-stone-400/50 leading-relaxed max-w-[180px]">Run a code block to initialize DataFrames or structures.</p>
             </div>
           ) : (
-            activeVars.map(([varName, info]: [string, any]) => {
+            activeVars.map(([varName, info]) => {
               const styles = getVariableTypeStyles(info.type)
               return (
                 <div
