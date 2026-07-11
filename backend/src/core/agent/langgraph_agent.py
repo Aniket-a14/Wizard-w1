@@ -240,6 +240,10 @@ class LangGraphAgent:
         if "Error executing code:" in result or "Traceback" in result:
             state.error = result
             state.status = "correcting"
+        elif plot_b64 and self.is_image_blank(plot_b64):
+            logger.warning("Visual Guardrail detected blank/empty plot.")
+            state.error = "Error executing code:\nGenerated visualization canvas is blank/empty. Ensure data is correctly passed to plotting axes (e.g. check variables, verify plt.plot/sns.scatterplot columns, or call plt.tight_layout())."
+            state.status = "correcting"
         else:
             state.status = "evaluating"
             
@@ -334,7 +338,7 @@ class LangGraphAgent:
         
         imports_to_add = []
         for token, imp in common_imports.items():
-            if f"{token}." in clean_code and f"import {token}" not in clean_code and f"from " not in clean_code:
+            if f"{token}." in clean_code and f"import {token}" not in clean_code and "from " not in clean_code:
                 imports_to_add.append(imp)
                 
         if imports_to_add:
@@ -347,6 +351,42 @@ class LangGraphAgent:
                 pass
                 
         return False, clean_code
+        
+    def is_image_blank(self, base64_str: str) -> bool:
+        """
+        Deterministically identifies blank or broken visualizations by analyzing pixel variance.
+        """
+        if not base64_str:
+            return True
+        try:
+            import base64
+            from io import BytesIO
+            from PIL import Image
+            import numpy as np
+            
+            # Decode b64 image
+            img_data = base64.b64decode(base64_str)
+            img = Image.open(BytesIO(img_data)).convert("RGB")
+            
+            # Convert to numpy array for variance analysis
+            img_arr = np.array(img)
+            
+            # Compute standard deviation across all pixels
+            std_dev = np.std(img_arr)
+            
+            # If standard deviation is extremely low, the image has virtually no visual features
+            if std_dev < 1.5:
+                return True
+                
+            # Check unique color count: if there's only 1 or 2 unique colors, it's blank
+            colors = img.getcolors(maxcolors=256)
+            if colors is not None and len(colors) <= 2:
+                return True
+                
+            return False
+        except Exception as e:
+            logger.error("Failed to analyze image quality", error=str(e))
+            return False
         
     def is_simple_query(self, instruction: str) -> bool:
         """

@@ -1,9 +1,6 @@
 import pandas as pd
 import io
-from typing import TYPE_CHECKING, Dict, List, Any, Optional
-
-if TYPE_CHECKING:
-    import pandas as pd
+from typing import Dict, List, Any, Optional
 
 
 def generate_system_context(df: pd.DataFrame, catalog: Optional[Dict[str, Any]] = None) -> str:
