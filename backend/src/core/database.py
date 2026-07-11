@@ -1,15 +1,19 @@
 import json
 import sqlite3
+from typing import Any
+
 import numpy as np
-from typing import List, Dict, Any, Optional
+
 from src.config import settings
 from src.utils.logging import logger
+
 
 class DatabaseManager:
     """
     Unified SQLite database manager for semantic cache, trajectories memory, and feedbacks.
     Includes schema migration capabilities and schema-hash query indexing.
     """
+
     def __init__(self):
         self.db_path = settings.DATA_DIR / "wizard.db"
         # Ensure parent directory exists
@@ -68,7 +72,7 @@ class DatabaseManager:
                         meta TEXT
                     )
                 """)
-                
+
                 # Check for migrations
                 # Check semantic_cache
                 cursor = conn.execute("PRAGMA table_info(semantic_cache)")
@@ -76,18 +80,18 @@ class DatabaseManager:
                 if "schema_hash" not in columns:
                     logger.info("Migrating database: adding schema_hash to semantic_cache")
                     conn.execute("ALTER TABLE semantic_cache ADD COLUMN schema_hash TEXT")
-                
+
                 # Check trajectories
                 cursor = conn.execute("PRAGMA table_info(trajectories)")
                 columns = [row["name"] for row in cursor.fetchall()]
                 if "schema_hash" not in columns:
                     logger.info("Migrating database: adding schema_hash to trajectories")
                     conn.execute("ALTER TABLE trajectories ADD COLUMN schema_hash TEXT")
-                
+
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_semantic_cache_schema ON semantic_cache(schema_hash)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_trajectories_schema ON trajectories(schema_hash)")
-                
+
                 conn.commit()
             logger.info("SQLite database initialized successfully", path=str(self.db_path))
         except Exception as e:
@@ -101,124 +105,144 @@ class DatabaseManager:
         return np.frombuffer(blob, dtype=np.float32)
 
     # --- Semantic Cache ---
-    def get_cache_entries(self, active_columns: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def get_cache_entries(self, active_columns: list[str] | None = None) -> list[dict[str, Any]]:
         try:
             with self._get_connection() as conn:
                 if active_columns is not None:
                     schema_hash = ",".join(sorted(active_columns))
                     rows = conn.execute(
                         "SELECT query, columns, code, embedding FROM semantic_cache WHERE schema_hash = ?",
-                        (schema_hash,)
+                        (schema_hash,),
                     ).fetchall()
                 else:
                     rows = conn.execute("SELECT query, columns, code, embedding FROM semantic_cache").fetchall()
-                
+
                 entries = []
                 for row in rows:
-                    entries.append({
-                        "query": row["query"],
-                        "columns": json.loads(row["columns"]),
-                        "code": row["code"],
-                        "embedding": self._deserialize_vector(row["embedding"])
-                    })
+                    entries.append(
+                        {
+                            "query": row["query"],
+                            "columns": json.loads(row["columns"]),
+                            "code": row["code"],
+                            "embedding": self._deserialize_vector(row["embedding"]),
+                        }
+                    )
                 return entries
         except Exception as e:
             logger.error("Failed to fetch semantic cache from database", error=str(e))
             return []
 
-    def save_cache_entry(self, query: str, columns: List[str], code: str, embedding: np.ndarray):
+    def save_cache_entry(self, query: str, columns: list[str], code: str, embedding: np.ndarray):
         try:
             schema_hash = ",".join(sorted(columns))
             with self._get_connection() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO semantic_cache (query, schema_hash, columns, code, embedding) VALUES (?, ?, ?, ?, ?)",
-                    (query.strip().lower(), schema_hash, json.dumps(columns), code, self._serialize_vector(embedding))
+                    (query.strip().lower(), schema_hash, json.dumps(columns), code, self._serialize_vector(embedding)),
                 )
                 conn.commit()
         except Exception as e:
             logger.error("Failed to save semantic cache entry", error=str(e))
 
     # --- Trajectories (Failures Memory) ---
-    def get_trajectory_entries(self, active_columns: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def get_trajectory_entries(self, active_columns: list[str] | None = None) -> list[dict[str, Any]]:
         try:
             with self._get_connection() as conn:
                 if active_columns is not None:
                     schema_hash = ",".join(sorted(active_columns))
-                    rows = conn.execute("""
-                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding 
+                    rows = conn.execute(
+                        """
+                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding
                         FROM trajectories WHERE schema_hash = ?
-                    """, (schema_hash,)).fetchall()
+                    """,
+                        (schema_hash,),
+                    ).fetchall()
                 else:
                     rows = conn.execute("""
-                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding 
+                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding
                         FROM trajectories
                     """).fetchall()
                 entries = []
                 for row in rows:
-                    entries.append({
-                        "instruction": row["instruction"],
-                        "columns": json.loads(row["columns"]),
-                        "failed_code": row["failed_code"],
-                        "error_message": row["error_message"],
-                        "corrected_code": row["corrected_code"],
-                        "embedding": self._deserialize_vector(row["embedding"])
-                    })
+                    entries.append(
+                        {
+                            "instruction": row["instruction"],
+                            "columns": json.loads(row["columns"]),
+                            "failed_code": row["failed_code"],
+                            "error_message": row["error_message"],
+                            "corrected_code": row["corrected_code"],
+                            "embedding": self._deserialize_vector(row["embedding"]),
+                        }
+                    )
                 return entries
         except Exception as e:
             logger.error("Failed to fetch trajectories from database", error=str(e))
             return []
 
-    def save_trajectory(self, instruction: str, columns: List[str], failed_code: str, error_message: str, corrected_code: str, embedding: np.ndarray):
+    def save_trajectory(
+        self,
+        instruction: str,
+        columns: list[str],
+        failed_code: str,
+        error_message: str,
+        corrected_code: str,
+        embedding: np.ndarray,
+    ):
         try:
             schema_hash = ",".join(sorted(columns))
             with self._get_connection() as conn:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO trajectories (instruction, schema_hash, columns, failed_code, error_message, corrected_code, embedding)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    instruction.strip().lower(),
-                    schema_hash,
-                    json.dumps(columns),
-                    failed_code,
-                    error_message,
-                    corrected_code,
-                    self._serialize_vector(embedding)
-                ))
+                """,
+                    (
+                        instruction.strip().lower(),
+                        schema_hash,
+                        json.dumps(columns),
+                        failed_code,
+                        error_message,
+                        corrected_code,
+                        self._serialize_vector(embedding),
+                    ),
+                )
                 conn.commit()
         except Exception as e:
             logger.error("Failed to save trajectory memory", error=str(e))
 
     # --- Feedbacks ---
-    def get_feedbacks(self) -> List[Dict[str, Any]]:
+    def get_feedbacks(self) -> list[dict[str, Any]]:
         try:
             with self._get_connection() as conn:
                 rows = conn.execute("SELECT task, code, embedding FROM feedbacks").fetchall()
                 entries = []
                 for row in rows:
-                    entries.append({
-                        "task": row["task"],
-                        "code": row["code"],
-                        "embedding": self._deserialize_vector(row["embedding"]) if row["embedding"] else None
-                    })
+                    entries.append(
+                        {
+                            "task": row["task"],
+                            "code": row["code"],
+                            "embedding": self._deserialize_vector(row["embedding"]) if row["embedding"] else None,
+                        }
+                    )
                 return entries
         except Exception as e:
             logger.error("Failed to fetch feedbacks from database", error=str(e))
             return []
 
-    def save_feedback(self, task: str, code: str, embedding: Optional[np.ndarray] = None):
+    def save_feedback(self, task: str, code: str, embedding: np.ndarray | None = None):
         try:
             with self._get_connection() as conn:
                 emb_blob = self._serialize_vector(embedding) if embedding is not None else None
                 conn.execute(
                     "INSERT OR REPLACE INTO feedbacks (task, code, embedding) VALUES (?, ?, ?)",
-                    (task.strip().lower(), code, emb_blob)
+                    (task.strip().lower(), code, emb_blob),
                 )
                 conn.commit()
         except Exception as e:
             logger.error("Failed to save feedback entry", error=str(e))
 
     # --- Working Memory ---
-    def get_memories(self) -> List[Dict[str, Any]]:
+    def get_memories(self) -> list[dict[str, Any]]:
         try:
             with self._get_connection() as conn:
                 rows = conn.execute(
@@ -231,29 +255,79 @@ class DatabaseManager:
                         meta = json.loads(row["meta"]) if row["meta"] else {}
                     except Exception:
                         pass
-                    entries.append({
-                        "timestamp": row["timestamp"],
-                        "instruction": row["instruction"],
-                        "plan": row["plan"],
-                        "code": row["code"],
-                        "result": row["result"],
-                        "meta": meta
-                    })
+                    entries.append(
+                        {
+                            "timestamp": row["timestamp"],
+                            "instruction": row["instruction"],
+                            "plan": row["plan"],
+                            "code": row["code"],
+                            "result": row["result"],
+                            "meta": meta,
+                        }
+                    )
                 return entries
         except Exception as e:
             logger.error("Failed to fetch working memory from database", error=str(e))
             return []
 
-    def save_memory(self, timestamp: float, instruction: str, plan: str, code: str, result: str, meta: Dict[str, Any] = None):
+    def search_memories(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
+        try:
+            query_terms = [f"%{term.strip().lower()}%" for term in query.split() if term.strip()]
+            if not query_terms:
+                return []
+
+            where_clauses = []
+            params = []
+            for term in query_terms:
+                where_clauses.append("(instruction LIKE ? OR plan LIKE ?)")
+                params.extend([term, term])
+
+            sql = f"""
+                SELECT timestamp, instruction, plan, code, result, meta
+                FROM working_memory
+                WHERE {" AND ".join(where_clauses)}
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+            with self._get_connection() as conn:
+                rows = conn.execute(sql, params).fetchall()
+                entries = []
+                for row in rows:
+                    meta = {}
+                    try:
+                        meta = json.loads(row["meta"]) if row["meta"] else {}
+                    except Exception:
+                        pass
+                    entries.append(
+                        {
+                            "timestamp": row["timestamp"],
+                            "instruction": row["instruction"],
+                            "plan": row["plan"],
+                            "code": row["code"],
+                            "result": row["result"],
+                            "meta": meta,
+                        }
+                    )
+                return entries
+        except Exception as e:
+            logger.error("Failed to search working memory in database", error=str(e))
+            return []
+
+    def save_memory(
+        self, timestamp: float, instruction: str, plan: str, code: str, result: str, meta: dict[str, Any] = None
+    ):
         try:
             with self._get_connection() as conn:
                 conn.execute(
                     "INSERT INTO working_memory (timestamp, instruction, plan, code, result, meta) VALUES (?, ?, ?, ?, ?, ?)",
-                    (timestamp, instruction, plan, code, result, json.dumps(meta or {}))
+                    (timestamp, instruction, plan, code, result, json.dumps(meta or {})),
                 )
                 conn.commit()
         except Exception as e:
             logger.error("Failed to save working memory entry", error=str(e))
+
 
 # Singleton instance
 db_mgr = DatabaseManager()

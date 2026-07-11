@@ -1,0 +1,44 @@
+[tool.ruff]
+# Target Python version 3.11 as used in production CI pipeline
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# Enable standard rules
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade (modern syntax suggestions)
+]
+
+ignore = ["E501"]
+
+# Exclude typical temporary directories
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+lines-after-imports = 2
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-v --tb=short"
+testpaths = [
+    "backend/tests",
+]
+pythonpath = [
+    "backend"
+]
+asyncio_mode = "auto"
