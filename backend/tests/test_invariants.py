@@ -10,8 +10,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.api.api import app
 from src.config import settings
 from src.core.tools.guardrail import GuardrailAgent
-from src.core.database import db_mgr
-
 client = TestClient(app)
 
 # ----------------- Invariant Test 1: Config parameter defaults & integrity -----------------
