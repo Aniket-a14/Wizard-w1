@@ -310,7 +310,8 @@ class SandboxManager:
                 volumes={str(settings.WORKSPACE_DIR): {'bind': '/workspace', 'mode': 'rw'}},
                 working_dir="/workspace",
                 detach=True,
-                labels={"wizard_managed": "true"}
+                labels={"wizard_managed": "true"},
+                network_disabled=settings.SANDBOX_NETWORK_DISABLED
             )
             
             # Inject daemon script

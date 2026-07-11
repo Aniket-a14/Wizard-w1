@@ -128,6 +128,27 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
                   </>
                 )}
                 <MarkdownRenderer content={message.content || " "} isStreaming={isStreaming} />
+                {/* Downloads card */}
+                {message.downloads && message.downloads.length > 0 && (
+                  <div className="flex flex-col gap-1.5 mt-2.5 pt-2.5 border-t border-stone-100/50 w-full">
+                    <p className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold">Generated Files</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {message.downloads.map((file) => (
+                        <a
+                          key={file}
+                          href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/workspace/static/${file}`}
+                          download={file}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white border border-stone-200 hover:border-emerald-500 hover:bg-emerald-50/20 text-stone-700 hover:text-emerald-700 transition-all duration-150 text-xs shadow-xs font-medium"
+                        >
+                          <svg className="w-3.5 h-3.5 text-stone-400 group-hover:text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                          </svg>
+                          {file}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {/* Action buttons (Allow/Reject etc.) */}
                 {message.actions && (
                   <div className="flex gap-2 mt-2 pt-2 border-t border-stone-100">

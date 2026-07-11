@@ -22,6 +22,7 @@ export interface Message {
     onClick: () => void
     variant?: "primary" | "secondary"
   }[]
+  downloads?: string[]
 }
 
 // localStorage key for persisting messages
@@ -356,6 +357,7 @@ export function ChatShell() {
               content: "",
               thought: prev.find((m) => m.id === assistantMessageId)?.thought,
               createdAt: new Date(),
+              downloads: data.downloads
             }
             return [...cleaned, finalMsg]
           })

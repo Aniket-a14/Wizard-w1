@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     VISION_MODEL_NAME: str = "llava:7b"
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     FEEDBACK_FILE: str = "feedback_data.json"
+    SANDBOX_NETWORK_DISABLED: bool = False
 
 
 

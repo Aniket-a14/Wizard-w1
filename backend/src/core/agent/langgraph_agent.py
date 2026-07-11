@@ -69,13 +69,21 @@ class LangGraphAgent:
             state.status = "executing"
             return state
             
+        # Check if this is a visualization customization query
+        previous_code = None
+        has_visual_keywords = any(kw in state.instruction.lower() for kw in {"color", "legend", "font", "size", "axis", "label", "grid", "visual", "title", "theme", "style", "plot"})
+        if state.code and has_visual_keywords and ("plt." in state.code or "sns." in state.code):
+            previous_code = state.code
+            logger.info("Customizer: Visual refinement query detected. Feeding previous plot code to planner.")
+            
         try:
             prompt = create_planning_prompt(
                 state.instruction, 
                 state.df, 
                 catalog=state.catalog, 
                 mode=state.mode, 
-                memory_context=memory_context
+                memory_context=memory_context,
+                previous_code=previous_code
             )
             response = llm.invoke(prompt).content
             
@@ -201,13 +209,20 @@ Write python code ONLY for this step. Do not rewrite prior steps, just continue.
             instruction_with_warnings += "\n" + neg_examples
 
         # Setup prompt with appropriate plan and error contexts
+        # Check for visual customization code pass-through
+        previous_code = None
+        has_visual_keywords = any(kw in state.instruction.lower() for kw in {"color", "legend", "font", "size", "axis", "label", "grid", "visual", "title", "theme", "style", "plot"})
+        if state.code and has_visual_keywords and ("plt." in state.code or "sns." in state.code):
+            previous_code = state.code
+
         worker_prompt = create_prompt(
-            instruction_with_warnings,
-            state.df,
-            plan=state.plan,
-            previous_error=state.error,
+            instruction_with_warnings, 
+            state.df, 
+            plan=state.plan, 
+            previous_error=state.error if state.status == "correcting" else None, 
             catalog=state.catalog,
-            few_shot_examples=few_shot
+            few_shot_examples=few_shot,
+            previous_code=previous_code
         )
         
         try:
