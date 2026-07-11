@@ -2,11 +2,11 @@
 
 > **Advanced AI Data Analyst Platform** powered by **DeepSeek-R1**, **Qwen2.5-Coder**, and **Agentic Workflows**.
 
-![Status](https://img.shields.io/badge/Status-Production%20Grade-success) ![Version](https://img.shields.io/badge/Version-v2.2.0--Native-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master) ![Cross-Platform](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/cross-platform-check.yml/badge.svg?branch=master) ![Audit](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/dependency-audit.yml/badge.svg?branch=master) ![Secrets](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/secret-scanning.yml/badge.svg?branch=master) ![Docs](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/docs-check.yml/badge.svg?branch=master) ![License](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/license-check.yml/badge.svg?branch=master) ![Bundle](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/bundle-size.yml/badge.svg?branch=master) ![Health](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/health-check.yml/badge.svg?branch=master)
+![Status](https://img.shields.io/badge/Status-Production%20Grade-success) ![Version](https://img.shields.io/badge/Version-v2.3.0--Studio-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
 
 ## 🌟 Overview
 
-**Wizard w1** is not a chatbot. It is a monolithic, autonomous Data Science Agent built for complex analytical workloads. It accepts raw, messy operational data via natural language instructions, establishes rigorous statistical assumptions, synthesizes deep reasoning chains, and flawlessly writes, tests, and self-corrects the required Python syntaxes. 
+**Wizard w1** is not a chatbot. It is a monolithic, autonomous Data Science Agent built for complex analytical workloads. It accepts raw, messy operational data via natural language instructions, establishes rigorous statistical assumptions, synthesizes deep reasoning chains, and flawlessly writes, tests, and self-corrects the required Python syntaxes.
 
 Through its native dual-brain architecture, Wizard manages complex analysis, statistical inference, and stunning data layer visualizations safely within a secure, warm Docker container pool.
 
@@ -14,11 +14,12 @@ Through its native dual-brain architecture, Wizard manages complex analysis, sta
 
 *   **Deep Reasoning (Manager):** Before writing a single line of code, the DeepSeek-R1 core generates a structured mental model. It predicts schema anomalies, actively queries the internet, and breaks down ambiguous tasks into an explicit mathematical blueprint.
 *   **Precision Execution (Worker):** The generated blueprint is handed to the Qwen2.5-Coder. It is parsed into exact AST-verified Pandas/SciPy operations safely, catching invalid indices and type-mismatches in a virtual runtime before final evaluation.
+*   **Multi-File Schema Knowledge Engine:** The system profiles and registers schemas of all datasets uploaded in the workspace into a local database. It automatically maps relationships and suggests logical primary-key/foreign-key joins so the agent can execute SQL/Pandas merge queries out-of-the-box.
 *   **Auto-Healing Ecosystem:** If a statistical operation fails (e.g. standard deviation calculation on a string column containing "NaN"), the system catches the literal traceback, pipes it back into the LLM context, and repairs its own execution script without user intervention.
 
 ---
 
-## 🏗️ Core Architecture 
+## 🏗️ Core Architecture
 
 Wizard's logic is tightly coordinated by **The Council**, a committee of sub-agents ensuring mathematical and syntactic correctness prior to rendering the output to the client.
 
@@ -30,32 +31,37 @@ graph TD
     classDef sandbox fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#000;
     classDef ext fill:#64748b,stroke:#334155,stroke-width:2px,color:#fff;
 
-    client_UI["Next.js 16 Web Client<br/>(Glassmorphic UI)"]:::client
-    API_Gateway["FastAPI Gateway<br/>(Async REST)"]:::api
-    
-    subgraph "Pure Ollama Engine (Zero-Disk Weights)"
+    client_UI["Next.js 16 Web Client<br/>(Studio Viewport)"]:::client
+    API_Gateway["FastAPI Gateway<br/>(Async WebSockets)"]:::api
+
+    subgraph "Relational Data Catalog"
+        SchemaReg["SQLite Schema Registry<br/>(PK/FK Mapping)"]:::ext
+    end
+
+    subgraph "Flexible LLM Gateway (Local or Cloud VPC)"
         Orchestrator["Scientific Agent"]
-        Manager["Reasoning Brain<br/>DeepSeek-R1"]:::brain
-        Worker["Code Execution Brain<br/>Qwen2.5-Coder"]:::brain
+        Manager["Reasoning Brain<br/>(DeepSeek-R1)"]:::brain
+        Worker["Code Execution Brain<br/>(Qwen2.5-Coder)"]:::brain
         RAG["Memory State"]:::ext
     end
-    
+
     subgraph "Docker Zero-Trust Sandbox"
         CodeCheck["Guardrail Agent<br/>(AST Scan)"]:::sandbox
-        Runtime["Python Runtime<br/>(Pandas & SciPy)"]:::sandbox
+        Runtime["Python Runtime<br/>(IPython Kernel)"]:::sandbox
     end
-    
+
     TheCouncil["The Council<br/>(Adjudication & Feedback)"]:::api
 
-    client_UI <-->|JSON/WebSockets| API_Gateway
+    client_UI <-->|JSON/WebSockets & Live Logs| API_Gateway
     API_Gateway <--> Orchestrator
+    Orchestrator <-->|Lookup Mappings| SchemaReg
     Orchestrator -->|Inject Context| RAG
     Orchestrator -->|1. Plan| Manager
     Manager <-->|Augment Knowledge| Search[(Web Search APIs)]:::ext
     Manager -->|2. Formulate Spec| Worker
     Worker -->|3. Gen Python| CodeCheck
     CodeCheck -->|Safe Code| Runtime
-    Runtime -->|STDOUT / Traceback| TheCouncil
+    Runtime -->|STDOUT Logs / HTML Plots| TheCouncil
     TheCouncil -->|Pass/Fail| Orchestrator
 ```
 
@@ -63,12 +69,15 @@ graph TD
 
 ## 🚀 Key Features
 
-*   **🤖 Double-Blind Generative Orchestration:** 
+*   **🤖 Double-Blind Generative Orchestration:**
     *   **Manager Agent (DeepSeek-R1):** Generates execution logic visually formatted in a `<thought>` bubble UI streaming directly to the frontend.
     *   **Worker Agent (Qwen2.5-Coder):** High execution rigor built strictly to handle Scikit-Learn, Statsmodels, SciPy, and complex Pandas manipulations.
-*   **🛠️ Zero Config Hardware Portability:** Runs entirely on `Ollama`. We decapitated heavy torch dependencies from the codebase. It requires **<500MB runtime memory** allowing for extreme horizontal scaling on standard edge servers.
-*   **⚡ Next.js 16 Turbopack Client:** A blazingly fast graphical user interface featuring Framer Motion state transitions, React Server Components, customized Light/Dark UI schemas, and comprehensive accessibility mapping.
-*   **🔐 AST-Level Sandboxing:** User-generated logic is scanned asynchronously against a blacklisted `eval()`, `exec()`, `os.system` dictionary. Executions happen in sealed Linux containers restricting unapproved local I/O.
+*   **📊 Interactive Data Studio:**
+    *   **Plotly Visualizations:** Renders full HTML interactive charts (zoom, hover tooltips, pans) inside safe iframe views instead of static base64 images.
+    *   **Progressive Console Log Streams:** View the agent's work transparently as it executes code. The frontend streams and accumulates standard output/stderr live in an inline code execution terminal.
+*   **🔌 Universal Enterprise Gateway:** Allows configuration of backend models via `.env`. Seamlessly direct calls to local Ollama endpoints (default) or OpenAI-compatible gateways (like self-hosted corporate APIs or cloud endpoints) without changing code.
+*   **🛡️ Multi-File Schema Registry:** Indexes all csv/feather files uploaded to the workspace in SQLite, profiles dimensions, automatically infers relations, and injects structural primary-key/foreign-key contexts to guide relational data queries.
+*   **🔐 AST-Level Sandboxing:** User-generated logic is scanned asynchronously against a blacklisted `eval()`, `exec()`, `os.system` dictionary. Executions happen in sealed Linux containers (supporting secure runtimes like gVisor `runsc`) restricting unapproved local I/O.
 *   **🌍 Stateful Working Memory:** The agent understands cross-session variables, previously established statistical facts, and implicitly remembers what steps you deemed "correct" throughout your chat flow.
 
 ---
@@ -77,14 +86,17 @@ graph TD
 
 For long-time developers mapping our internal upgrades:
 
-| System Layer | v2.2 (Legacy Native Engine) | v2.3 (Current: Pure Ollama) |
+| System Layer | v2.2 (Legacy Native Engine) | v2.3 (Current: Studio Upgrade) |
 |--------------|-----------------------------|------------------------------|
-| **Core Integration**| HF Transformers (`torch`) | **Ollama** (Ultra-light API) |
+| **Core Integration**| HF Transformers (`torch`) | **Flexible API Gateway** (Ollama, OpenAI, custom models) |
+| **Visualizations**| Static base64 images | **Plotly Interactive HTML Views** (zoom/hover in iframe) |
+| **Stdout Logs** | Suppressed / hidden in response | **Live Progressive Terminal Log Console** |
+| **Data Scope** | Single dataset isolation | **Relational Multi-File Schema Registry Joins** |
 | **Model Size** | Massive Local Weights (~25GB) | **Zero Weight Caching (<100MB)** |
 | **Processing** | Multi-GPU heavy dependencies | **CPU Tolerant / Apple Silicon Native** |
-| **Memory Leakage**| Moderate (Python GC limits) | **Near Zero** (Delegated to Go binaries) |
+| **Memory Leakage**| Moderate (Python GC limits) | **Near Zero** (Delegated to isolated runtime runsc) |
 
-> 💡 **The v2.3 Impact:** You no longer need to run `download_models.py` to freeze HuggingFace repositories. The backend is completely abstracted, pushing LLM logic to standard Ollama ports. This increased REST throughput performance by 500% in our internal evaluations.
+> 💡 **The v2.3 Impact:** You no longer need to run `download_models.py` to freeze HuggingFace repositories. The backend is completely abstracted, pushing LLM logic to standard Ollama ports or custom cloud gateways. This increased REST throughput performance by 500% in our internal evaluations.
 
 ---
 
@@ -134,7 +146,7 @@ Strictly mounts the DataFrame into state. Uses the `CatalogEngine` to automatica
 curl -X POST "http://localhost:8000/upload" \
   -H "accept: application/json" \
   -H "Content-Type: multipart/form-data" \
-  -F "file=@/path/to/global_sales.csv" 
+  -F "file=@/path/to/global_sales.csv"
 ```
 
 **Response:**
@@ -188,11 +200,16 @@ The `docker-compose` stack relies on strict variables injected during runtime.
 |-----|---------|-------------|
 | `APP_NAME` | `Wizard AI Agent` | The global namespace identifier for the stack. |
 | `ENV` | `prod` | `prod`, `dev`, or `test`. Modifies logging verbs. |
-| `MODEL_TYPE` | `ollama` | The active engine format (Keep unmodified for v2.3). |
+| `MODEL_TYPE` | `ollama` | The active engine format (ollama, openai, or custom_gateway). |
 | `MODEL_NAME` | `deepseek-r1:1.5b` | Reasoner / Manager configuration. |
 | `WORKER_MODEL_NAME`| `qwen2.5-coder:1.5b`| Syntax / Runtime code generator constraint. |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434`| The bridge linking the Docker backend to host OSX/Windows/Linux Ollama socket. |
 | `TEMPERATURE` | `0.0` | Determines deterministic output of execution commands. |
+| `API_PROVIDER` | `ollama` | Choice of model engine. Can be: `ollama` (default local), `openai`, or `custom_gateway`. |
+| `GATEWAY_API_URL` | `""` | Endpoint address of custom OpenAI-compatible cloud/VPC inference gateway. |
+| `GATEWAY_API_KEY` | `""` | Security authorization credential for the custom cloud gateway. |
+| `PLOT_FORMAT` | `html` | Visual graphic formats generated: `png` (base64) or `html` (interactive Plotly maps). |
+| `SANDBOX_DOCKER_RUNTIME`| `""` | Sandbox runtime engine parameter (e.g., `runsc` for gVisor virtualization). |
 
 ---
 
@@ -211,7 +228,7 @@ A: In `backend/src/core/agent/flow.py`, `max_retries` is capped at 2. If the pro
 
 ## 💻 Contribution Guidelines
 
-We accept PRs for `frontend` and `backend` separately. All PRs must pass the `pytest` workflows and TS compiling chains defined in `.github/workflows/`. 
+We accept PRs for `frontend` and `backend` separately. All PRs must pass the `pytest` workflows and TS compiling chains defined in `.github/workflows/`.
 
 1. Please fork the repo and create your branch from `master`.
 2. Format your `FastAPI` code utilizing standard `black` formats.
