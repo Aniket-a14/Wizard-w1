@@ -1,42 +1,27 @@
-import type React from "react"
 import type { Metadata, Viewport } from "next"
-// import { Geist, Geist_Mono } from "next/font/google"
-import { Analytics } from "@vercel/analytics/next"
+import type React from "react"
+
 import "./globals.css"
 
-// Geist fonts are not used in the final body class, so we use system fonts
-// const _geist = Geist({ subsets: ["latin"] })
-// const _geistMono = Geist_Mono({ subsets: ["latin"] })
-
 export const metadata: Metadata = {
-  title: "AI Chat Assistant",
-  description: "Chat with our autonomous data science agent powered by DeepSeek-R1 and Qwen2.5-Coder.",
-  generator: "v0.app",
-  icons: {
-    icon: [
-      {
-        url: "/icon-light-32x32.png",
-        media: "(prefers-color-scheme: light)",
-      },
-      {
-        url: "/icon-dark-32x32.png",
-        media: "(prefers-color-scheme: dark)",
-      },
-      {
-        url: "/icon.svg",
-        type: "image/svg+xml",
-      },
-    ],
-    apple: "/apple-icon.png",
-  },
+  title: "Wizard — Data Analysis Agent",
+  description:
+    "Local-first autonomous data analysis. Plans the analysis, writes Python, runs it in a sandbox and explains the result.",
+  // Only the icon that actually exists in /public is declared; the previous
+  // manifest pointed at four files that were never added, so every page load
+  // issued 404s for them.
+  icons: { icon: "/favicon.ico" },
 }
 
 export const viewport: Viewport = {
-  themeColor: "#fafaf9",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // maximumScale/userScalable were pinned, which blocks pinch-zoom and fails
+  // WCAG 1.4.4. Users need to be able to zoom a data table.
 }
 
 export default function RootLayout({
@@ -45,11 +30,23 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body className={`font-sans antialiased`}>
-        {children}
-        <Analytics />
-      </body>
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/*
+          Applies the stored or system theme before first paint so dark-mode
+          users never see a white flash. Inline by necessity: it has to run
+          before React hydrates.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('wizard.theme');" +
+              "var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;" +
+              "if(d)document.documentElement.classList.add('dark');}catch(e){}})();",
+          }}
+        />
+      </head>
+      <body className="font-sans antialiased">{children}</body>
     </html>
   )
 }

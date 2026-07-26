@@ -1,199 +1,173 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Table2, Database } from "lucide-react"
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Loader2, Table2 } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
+
+import { api } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 interface DataGridProps {
-  apiBaseUrl: string
-  csvPath: string | null
+  /** Name of the dataset to preview; falls back to the session's active one. */
+  dataset?: string | null
+  perPage?: number
 }
 
-export function DataGrid({ apiBaseUrl, csvPath }: DataGridProps) {
-  const [data, setData] = useState<Record<string, unknown>[]>([])
+function renderCell(value: unknown): string {
+  if (value === null || value === undefined) return "—"
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(4).replace(/\.?0+$/, "")
+  }
+  if (typeof value === "boolean") return value ? "true" : "false"
+  return String(value)
+}
+
+export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
+  const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [columns, setColumns] = useState<string[]>([])
   const [page, setPage] = useState(1)
-  const [perPage] = useState(50)
   const [totalRows, setTotalRows] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
   const [sortBy, setSortBy] = useState<string | null>(null)
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const fetchData = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
-      let url = `${apiBaseUrl}/data/preview?page=${page}&per_page=${perPage}`
-      if (sortBy) {
-        url += `&sort_by=${encodeURIComponent(sortBy)}&sort_order=${sortOrder}`
-      }
-
-      const res = await fetch(url)
-      if (res.ok) {
-        const result = await res.json()
-        setData(result.data || [])
-        setColumns(result.columns || [])
-        setTotalRows(result.total_rows || 0)
-      }
-    } catch (e) {
-      console.error("Failed to fetch data grid preview:", e)
+      const response = await api.preview({ page, perPage, sortBy, sortOrder, dataset })
+      setRows(response.data)
+      setColumns(response.columns)
+      setTotalRows(response.total_rows)
+      setTotalPages(response.total_pages)
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : "Could not load the preview.")
+      setRows([])
+      setColumns([])
     } finally {
       setLoading(false)
     }
-  }, [apiBaseUrl, page, perPage, sortBy, sortOrder])
+  }, [dataset, page, perPage, sortBy, sortOrder])
 
   useEffect(() => {
-    fetchData()
-  }, [fetchData, csvPath]) // Trigger reload if a new CSV file is selected
+    void load()
+  }, [load])
 
-  const handleSort = (column: string) => {
+  // Switching dataset must not leave the viewer on an out-of-range page.
+  useEffect(() => {
+    setPage(1)
+    setSortBy(null)
+  }, [dataset])
+
+  const toggleSort = (column: string) => {
     if (sortBy === column) {
-      setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))
+      setSortOrder((order) => (order === "asc" ? "desc" : "asc"))
     } else {
       setSortBy(column)
       setSortOrder("asc")
     }
-    setPage(1) // Reset to first page when sorting changes
+    setPage(1)
   }
 
-  const totalPages = Math.ceil(totalRows / perPage)
+  if (error) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 text-center">
+        <p className="text-xs text-muted-foreground">{error}</p>
+      </div>
+    )
+  }
+
+  if (!loading && columns.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center">
+        <Table2 className="mb-1 h-8 w-8 text-muted-foreground/30" />
+        <p className="text-sm font-medium text-muted-foreground">No rows to show</p>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex flex-col h-full bg-white text-stone-700">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-stone-200/60 grid-header">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center">
-            <Table2 className="w-3.5 h-3.5 text-emerald-600" />
-          </div>
-          <div>
-            <h3 className="text-xs font-semibold text-stone-700">
-              {csvPath ? csvPath.split("/").pop() : "Dataset Preview"}
-            </h3>
-            {totalRows > 0 && (
-              <p className="text-[10px] text-stone-400 mt-0.5">
-                Showing {(page - 1) * perPage + 1}–{Math.min(page * perPage, totalRows)} of {totalRows.toLocaleString()} rows
-              </p>
-            )}
-          </div>
-        </div>
-        {totalRows > 0 && (
-          <span className="text-[10px] font-medium text-stone-400 bg-stone-100 px-2 py-0.5 rounded-full">
-            {columns.length} cols
-          </span>
-        )}
-      </div>
-
-      {/* Grid Container */}
-      <div className="flex-1 overflow-auto relative">
-        {loading && (
-          <div className="absolute inset-0 bg-white/70 backdrop-blur-[2px] flex items-center justify-center z-10 transition-opacity">
-            <div className="w-5 h-5 border-2 border-stone-300 border-t-stone-700 rounded-full animate-spin" />
-          </div>
-        )}
-
-        {totalRows === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center px-6">
-            <div className="w-14 h-14 rounded-2xl bg-stone-50 flex items-center justify-center mb-3">
-              <Database className="w-6 h-6 text-stone-200" />
-            </div>
-            <p className="text-xs font-medium text-stone-400">No dataset loaded</p>
-            <p className="text-[11px] text-stone-400/70 mt-1 leading-relaxed max-w-[220px]">Upload a CSV file to inspect and explore your data here.</p>
-          </div>
-        ) : (
-          <table className="w-full text-left border-collapse text-xs select-text">
-            <thead className="grid-header sticky top-0 border-b border-stone-200/60 z-10 select-none">
-              <tr>
-                {columns.map((col) => (
-                  <th
-                    key={col}
-                    onClick={() => handleSort(col)}
-                    className="px-4 py-2.5 font-semibold text-stone-500 hover:text-stone-700 hover:bg-stone-100/60 cursor-pointer select-none transition-colors border-r border-stone-100 last:border-r-0 text-[11px] uppercase tracking-wide"
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-auto">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
+            <tr>
+              <th className="w-10 border-b border-border px-2 py-2 text-right text-[10px] font-normal text-muted-foreground">
+                #
+              </th>
+              {columns.map((column) => (
+                <th key={column} className="border-b border-border px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort(column)}
+                    className="flex items-center gap-1 font-semibold transition-colors hover:text-primary"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate">{col}</span>
-                      {sortBy === col ? (
-                        sortOrder === "asc" ? (
-                          <ArrowUp className="w-3 h-3 text-emerald-600 shrink-0" />
-                        ) : (
-                          <ArrowDown className="w-3 h-3 text-emerald-600 shrink-0" />
-                        )
-                      ) : null}
-                    </div>
-                  </th>
+                    <span className="max-w-[180px] truncate">{column}</span>
+                    {sortBy === column &&
+                      (sortOrder === "asc" ? (
+                        <ArrowUp className="h-3 w-3 shrink-0" />
+                      ) : (
+                        <ArrowDown className="h-3 w-3 shrink-0" />
+                      ))}
+                  </button>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="hover:bg-muted/40">
+                <td className="border-b border-border/50 px-2 py-1.5 text-right text-[10px] text-muted-foreground/60">
+                  {(page - 1) * perPage + rowIndex + 1}
+                </td>
+                {columns.map((column) => (
+                  <td
+                    key={column}
+                    className={cn(
+                      "max-w-[240px] truncate border-b border-border/50 px-3 py-1.5",
+                      typeof row[column] === "number" && "text-right tabular-nums",
+                    )}
+                    title={renderCell(row[column])}
+                  >
+                    {renderCell(row[column])}
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {data.map((row, index) => (
-                <tr
-                  key={index}
-                  className={`transition-colors hover:bg-emerald-50/30 ${index % 2 === 0 ? "bg-white" : "bg-stone-50/40"}`}
-                >
-                  {columns.map((col) => (
-                    <td
-                      key={`${index}-${col}`}
-                      className="px-4 py-2 border-r border-stone-100/60 last:border-r-0 text-stone-600 font-mono text-[11px] truncate max-w-[200px]"
-                      title={row[col] !== null ? String(row[col]) : ""}
-                    >
-                      {row[col] !== null && row[col] !== undefined ? String(row[col]) : <span className="text-stone-300 italic">null</span>}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      {/* Footer Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between px-5 py-2.5 border-t border-stone-100 bg-white select-none">
+      <div className="flex shrink-0 items-center justify-between border-t border-border px-3 py-2">
+        <span className="text-[11px] text-muted-foreground">
+          {loading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            `${totalRows.toLocaleString()} rows · page ${page} of ${totalPages}`
+          )}
+        </span>
+        <div className="flex items-center gap-1">
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
-            className="flex items-center gap-1 text-[11px] font-medium text-stone-500 hover:text-stone-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors px-2.5 py-1.5 rounded-lg hover:bg-stone-50"
+            type="button"
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            disabled={page <= 1 || loading}
+            aria-label="Previous page"
+            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30"
           >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            Prev
+            <ChevronLeft className="h-3.5 w-3.5" />
           </button>
-
-          <div className="flex items-center gap-1">
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              let pageNum: number
-              if (totalPages <= 5) {
-                pageNum = i + 1
-              } else if (page <= 3) {
-                pageNum = i + 1
-              } else if (page >= totalPages - 2) {
-                pageNum = totalPages - 4 + i
-              } else {
-                pageNum = page - 2 + i
-              }
-              return (
-                <button
-                  key={pageNum}
-                  onClick={() => setPage(pageNum)}
-                  className={`w-7 h-7 rounded-md text-[11px] font-medium transition-all duration-150 ${
-                    page === pageNum
-                      ? "bg-stone-900 text-white shadow-sm"
-                      : "text-stone-400 hover:text-stone-600 hover:bg-stone-100"
-                  }`}
-                >
-                  {pageNum}
-                </button>
-              )
-            })}
-          </div>
-
           <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-            className="flex items-center gap-1 text-[11px] font-medium text-stone-500 hover:text-stone-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors px-2.5 py-1.5 rounded-lg hover:bg-stone-50"
+            type="button"
+            onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            disabled={page >= totalPages || loading}
+            aria-label="Next page"
+            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30"
           >
-            Next
-            <ChevronRight className="w-3.5 h-3.5" />
+            <ChevronRight className="h-3.5 w-3.5" />
           </button>
         </div>
-      )}
+      </div>
     </div>
   )
 }
