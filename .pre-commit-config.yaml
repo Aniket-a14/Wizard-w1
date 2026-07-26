@@ -8,8 +8,10 @@ repos:
       - id: check-added-large-files
       - id: check-merge-conflict
 
+  # Kept in step with the pinned version in .github/workflows/ci.yml, so a
+  # commit that passes the hook also passes the lint gate.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.10
+    rev: v0.14.14
     hooks:
       # Run the linter
       - id: ruff

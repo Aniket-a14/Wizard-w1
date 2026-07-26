@@ -20,14 +20,14 @@ import asyncio
 import threading
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from src.config import settings
 from src.utils.logging import logger
 
 
-class LLMRole(str, Enum):
+class LLMRole(StrEnum):
     """Which brain is being addressed. Determines the default model."""
 
     MANAGER = "manager"  # planning, critique, replanning

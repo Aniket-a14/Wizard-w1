@@ -39,7 +39,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install ruff pytest pytest-asyncio pytest-cov
+        # Ruff is pinned deliberately. Unpinned, a release that adds or promotes
+        # a rule fails master with no code change, which is what happened when
+        # UP042 (str+Enum -> StrEnum) started being reported.
+        pip install "ruff==0.14.14" pytest pytest-asyncio pytest-cov
 
     - name: Lint
       run: |

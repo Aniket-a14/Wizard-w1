@@ -11,11 +11,11 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     SESSION = "session"
     STATUS = "status"
     STEP_START = "step_start"
@@ -32,7 +32,7 @@ class EventType(str, Enum):
     FINAL = "final"
 
 
-class Phase(str, Enum):
+class Phase(StrEnum):
     IDLE = "idle"
     PLANNING = "planning"
     AWAITING_APPROVAL = "awaiting_approval"
