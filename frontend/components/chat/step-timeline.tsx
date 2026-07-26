@@ -34,19 +34,24 @@ export function StepTimeline({ steps, code, stdout }: StepTimelineProps) {
   const total = steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0)
 
   return (
-    <div className="mb-3 overflow-hidden rounded-xl border border-border/60 bg-card/50">
+    <div
+      className={cn(
+        "mb-3 overflow-hidden rounded-xl border bg-card/60 transition-colors duration-[var(--duration-base)]",
+        running ? "border-brand/30" : failed ? "border-destructive/25" : "border-border",
+      )}
+    >
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+        className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-[12.5px] font-medium text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:text-foreground"
         aria-expanded={open}
       >
         {running ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-500" />
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-brand" />
         ) : failed ? (
-          <X className="h-3.5 w-3.5 shrink-0 text-rose-500" />
+          <X className="h-3.5 w-3.5 shrink-0 text-destructive" />
         ) : (
-          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+          <Check className="h-3.5 w-3.5 shrink-0 text-success" />
         )}
         <span>
           {running
@@ -54,47 +59,73 @@ export function StepTimeline({ steps, code, stdout }: StepTimelineProps) {
             : `Ran ${steps.length} step${steps.length === 1 ? "" : "s"}`}
         </span>
         {!running && total > 0 && (
-          <span className="text-muted-foreground/60">· {(total / 1000).toFixed(1)}s</span>
+          <span className="tabular text-muted-foreground/70">· {(total / 1000).toFixed(1)}s</span>
         )}
         <ChevronRight
-          className={cn("ml-auto h-3.5 w-3.5 transition-transform duration-200", open && "rotate-90")}
+          className={cn(
+            "ml-auto h-3.5 w-3.5 transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
+            open && "rotate-90",
+          )}
         />
       </button>
 
       {open && (
-        <div className="space-y-3 border-t border-border/60 px-3 py-3">
-          <ol className="space-y-1.5">
+        <div className="space-y-3.5 border-t border-border px-3.5 py-3.5">
+          {/* A rail down the left connects the steps into one run rather than
+              leaving them as an unrelated list of icons. */}
+          <ol className="relative space-y-2.5 before:absolute before:bottom-2 before:left-[5.5px] before:top-2 before:w-px before:bg-border">
             {steps.map((step) => {
               const Icon = ICONS[step.kind] ?? Play
               return (
-                <li key={`${step.id}-${step.label}`} className="flex items-center gap-2 text-xs">
-                  <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <li key={`${step.id}-${step.label}`} className="relative flex items-center gap-2.5 text-[12.5px]">
                   <span
                     className={cn(
-                      step.status === "failed" && "text-rose-500",
-                      step.status === "running" && "text-indigo-500",
+                      "z-10 flex h-3 w-3 shrink-0 items-center justify-center rounded-full bg-card ring-2 ring-card",
+                      step.status === "failed"
+                        ? "text-destructive"
+                        : step.status === "running"
+                          ? "text-brand"
+                          : "text-muted-foreground",
+                    )}
+                  >
+                    <Icon className="h-3 w-3" />
+                  </span>
+                  <span
+                    className={cn(
+                      step.status === "failed" && "text-destructive",
+                      step.status === "running" && "text-brand",
                     )}
                   >
                     {step.label}
                   </span>
-                  {step.status === "running" && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {step.status === "running" && <Loader2 className="h-3 w-3 animate-spin text-brand" />}
+                  {step.durationMs ? (
+                    <span className="tabular ml-auto text-[11px] text-muted-foreground/70">
+                      {(step.durationMs / 1000).toFixed(1)}s
+                    </span>
+                  ) : null}
                 </li>
               )
             })}
           </ol>
 
           {code && (
-            <pre className="max-h-72 overflow-auto rounded-lg bg-muted/70 p-3 text-[11.5px] leading-relaxed">
-              <code className="font-mono">{code}</code>
-            </pre>
+            <div>
+              <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                Generated code
+              </p>
+              <pre className="max-h-72 overflow-auto rounded-lg border border-border bg-muted/60 p-3 text-[11.5px] leading-relaxed">
+                <code className="font-mono">{code}</code>
+              </pre>
+            </div>
           )}
 
           {stdout?.trim() && (
             <div>
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                 Output
               </p>
-              <pre className="max-h-56 overflow-auto rounded-lg bg-stone-950 p-3 text-[11.5px] leading-relaxed text-stone-200">
+              <pre className="max-h-56 overflow-auto rounded-lg bg-[oklch(0.19_0.012_275)] p-3 text-[11.5px] leading-relaxed text-[oklch(0.9_0.01_85)]">
                 <code className="font-mono">{stdout}</code>
               </pre>
             </div>

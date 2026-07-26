@@ -139,7 +139,7 @@ export function ModelPicker() {
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-50 mt-1 w-80 overflow-hidden rounded-xl border border-border bg-popover shadow-lg"
+          className="absolute right-0 z-50 mt-1.5 w-80 overflow-hidden rounded-xl border border-border bg-popover shadow-lg reveal-in"
         >
           <div className="flex items-center gap-1 border-b border-border p-1.5">
             {ROLES.map((role) => (
@@ -177,7 +177,7 @@ export function ModelPicker() {
                   onClick={() => void showProvider(provider.id)}
                   title={provider.base_url || "No endpoint configured"}
                   className={cn(
-                    "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                    "rounded-md px-2 py-1 text-[11px] font-medium transition-colors duration-[var(--duration-fast)]",
                     shownProvider === provider.id
                       ? "bg-foreground text-background"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -192,7 +192,7 @@ export function ModelPicker() {
 
           <div className="max-h-72 overflow-y-auto p-1.5">
             {data?.error && (
-              <div className="flex items-start gap-2 px-2 py-3 text-xs text-amber-600 dark:text-amber-400">
+              <div className="flex items-start gap-2 px-2 py-3 text-[12px] leading-relaxed text-warning">
                 <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>{data.error}</span>
               </div>
@@ -209,13 +209,13 @@ export function ModelPicker() {
                 key={model.name}
                 type="button"
                 onClick={() => void select(model.name)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors duration-[var(--duration-fast)] hover:bg-accent/60"
               >
                 <Check
                   className={cn(
                     "h-3.5 w-3.5 shrink-0",
                     model.name === current && shownProvider === roleProvider
-                      ? "text-emerald-500"
+                      ? "text-success"
                       : "text-transparent",
                   )}
                 />

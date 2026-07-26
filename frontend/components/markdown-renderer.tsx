@@ -163,12 +163,12 @@ function Block({ block }: { block: Block }) {
 
     case "table":
       return (
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-muted/60">
+        <div className="overflow-x-auto rounded-xl border border-border shadow-xs">
+          <table className="w-full text-left text-[12.5px]">
+            <thead className="bg-muted">
               <tr>
                 {block.header.map((cell, index) => (
-                  <th key={index} className="whitespace-nowrap px-3 py-2 font-semibold">
+                  <th key={index} className="whitespace-nowrap px-3 py-2.5 font-semibold">
                     <Inline text={cell} />
                   </th>
                 ))}
@@ -176,9 +176,9 @@ function Block({ block }: { block: Block }) {
             </thead>
             <tbody>
               {block.rows.map((row, rowIndex) => (
-                <tr key={rowIndex} className="border-t border-border/60">
+                <tr key={rowIndex} className="border-t border-border transition-colors duration-75 hover:bg-accent/40">
                   {row.map((cell, cellIndex) => (
-                    <td key={cellIndex} className="whitespace-nowrap px-3 py-1.5 tabular-nums">
+                    <td key={cellIndex} className="tabular whitespace-nowrap px-3 py-2">
                       <Inline text={cell} />
                     </td>
                   ))}
@@ -190,10 +190,10 @@ function Block({ block }: { block: Block }) {
       )
 
     case "heading": {
-      const sizes = ["text-xl", "text-lg", "text-base", "text-sm", "text-sm", "text-xs"]
+      const sizes = ["text-[19px]", "text-[17px]", "text-[15px]", "text-[14px]", "text-[13px]", "text-[12px]"]
       const Tag = `h${Math.min(block.level, 6)}` as "h1"
       return (
-        <Tag className={cn("font-semibold", sizes[block.level - 1] ?? "text-sm")}>
+        <Tag className={cn("font-semibold tracking-[-0.02em]", sizes[block.level - 1] ?? "text-[14px]")}>
           <Inline text={block.content} />
         </Tag>
       )
@@ -204,7 +204,7 @@ function Block({ block }: { block: Block }) {
       return (
         <Tag
           className={cn(
-            "space-y-1 pl-5 marker:text-muted-foreground",
+            "space-y-1.5 pl-5 marker:text-brand/60",
             block.ordered ? "list-decimal" : "list-disc",
           )}
         >
@@ -219,7 +219,7 @@ function Block({ block }: { block: Block }) {
 
     case "quote":
       return (
-        <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">
+        <blockquote className="border-l-2 border-brand/40 pl-3.5 text-muted-foreground">
           <Inline text={block.content} />
         </blockquote>
       )
@@ -240,9 +240,9 @@ function CodeBlock({ language, content }: { language: string; content: string })
   const [copied, setCopied] = useState(false)
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-muted/50">
+    <div className="overflow-hidden rounded-xl border border-border bg-muted/50 shadow-xs">
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
           {language || "code"}
         </span>
         <button
@@ -253,10 +253,10 @@ function CodeBlock({ language, content }: { language: string; content: string })
               setTimeout(() => setCopied(false), 1600)
             })
           }}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:text-foreground"
           aria-label="Copy code"
         >
-          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
         </button>
       </div>
       <pre className="max-h-96 overflow-auto p-3 text-[12px] leading-relaxed">
@@ -278,7 +278,7 @@ function Inline({ text }: { text: string }): ReactNode {
           return (
             <code
               key={index}
-              className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground"
+              className="rounded-md border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground"
             >
               {part.slice(1, -1)}
             </code>
@@ -309,7 +309,7 @@ function Inline({ text }: { text: string }): ReactNode {
               href={link[2]}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-primary underline underline-offset-2"
+              className="text-brand underline decoration-brand/30 underline-offset-2 transition-colors hover:decoration-brand"
             >
               {link[1]}
             </a>

@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowUp, Loader2, Paperclip, Square, Zap } from "lucide-react"
+import { ArrowUp, Loader2, Paperclip, Square, UploadCloud } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { cn } from "@/lib/utils"
@@ -20,6 +20,19 @@ interface ComposerProps {
 
 const MAX_HEIGHT = 200
 
+const MODES = [
+  {
+    key: "planning" as const,
+    label: "Plan first",
+    title: "Drafts a plan and waits for your approval before running anything",
+  },
+  {
+    key: "fast" as const,
+    label: "Direct",
+    title: "Skips the approval gate and executes immediately",
+  },
+]
+
 export function Composer({
   onSend,
   onStop,
@@ -34,6 +47,7 @@ export function Composer({
 }: ComposerProps) {
   const [value, setValue] = useState("")
   const [dragging, setDragging] = useState(false)
+  const [focused, setFocused] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -63,10 +77,16 @@ export function Composer({
   )
 
   const accept = acceptedFormats.map((extension) => `.${extension.replace(/^\./, "")}`).join(",")
+  const canSend = Boolean(value.trim()) && !disabled
 
   return (
-    <div className="px-4 pb-4">
+    <div className="px-4 pb-5">
       <div
+        id="composer"
+        // The skip link lands here, so the wrapper takes focus and the textarea
+        // is the very next stop rather than the target itself (which would
+        // bypass the attach control).
+        tabIndex={-1}
         onDragOver={(event) => {
           event.preventDefault()
           setDragging(true)
@@ -78,15 +98,30 @@ export function Composer({
           handleFiles(event.dataTransfer.files)
         }}
         className={cn(
-          "mx-auto w-full max-w-3xl rounded-2xl border bg-card shadow-sm transition-colors",
-          dragging ? "border-primary bg-primary/5" : "border-border",
+          "relative mx-auto w-full max-w-3xl rounded-2xl border bg-card",
+          "transition-[border-color,box-shadow] duration-[var(--duration-base)] ease-[var(--ease-out-quart)]",
+          dragging
+            ? "border-brand shadow-brand"
+            : focused
+              ? "border-brand/50 shadow-md"
+              : "border-border shadow-sm",
         )}
       >
-        <div className="flex items-end gap-2 px-3 pt-3">
+        {/* Drop target overlay. Covers the composer only while a file is over it. */}
+        {dragging && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center gap-2.5 rounded-2xl bg-brand-soft/80 backdrop-blur-sm">
+            <UploadCloud className="h-4 w-4 text-brand" />
+            <span className="text-[13.5px] font-medium text-brand">Drop to load this file</span>
+          </div>
+        )}
+
+        <div className="flex items-end gap-2 px-3.5 pt-3.5">
           <textarea
             ref={textareaRef}
             value={value}
             onChange={(event) => setValue(event.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault()
@@ -96,12 +131,10 @@ export function Composer({
             rows={1}
             disabled={disabled}
             placeholder={
-              hasData
-                ? "Ask anything about your data…"
-                : `Drop a file or click the clip to begin (${acceptedFormats.slice(0, 4).join(", ")}…)`
+              hasData ? "Ask anything about your data…" : "Attach a dataset, then ask away…"
             }
             aria-label="Message"
-            className="max-h-[200px] flex-1 resize-none bg-transparent py-1.5 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
+            className="max-h-[200px] flex-1 resize-none bg-transparent py-1 text-[15px] leading-7 placeholder:text-muted-foreground/70 focus:outline-none disabled:opacity-50"
           />
 
           {isRunning ? (
@@ -109,7 +142,7 @@ export function Composer({
               type="button"
               onClick={onStop}
               aria-label="Stop generating"
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-transform hover:scale-105"
+              className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-foreground text-background transition-transform duration-[var(--duration-fast)] hover:scale-105 active:scale-95"
             >
               <Square className="h-3 w-3" fill="currentColor" />
             </button>
@@ -117,13 +150,14 @@ export function Composer({
             <button
               type="button"
               onClick={submit}
-              disabled={!value.trim() || disabled}
+              disabled={!canSend}
               aria-label="Send message"
               className={cn(
-                "mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all",
-                value.trim() && !disabled
-                  ? "bg-foreground text-background hover:scale-105"
-                  : "cursor-not-allowed bg-muted text-muted-foreground",
+                "mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+                "transition-all duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
+                canSend
+                  ? "bg-[linear-gradient(120deg,var(--brand),var(--brand-2))] text-brand-foreground shadow-brand hover:scale-105 active:scale-95"
+                  : "cursor-not-allowed bg-muted text-muted-foreground/60",
               )}
             >
               <ArrowUp className="h-4 w-4" />
@@ -131,7 +165,7 @@ export function Composer({
           )}
         </div>
 
-        <div className="flex items-center justify-between px-3 pb-2.5 pt-1.5">
+        <div className="flex items-center justify-between gap-2 px-3.5 pb-3 pt-2">
           <div className="flex items-center gap-1">
             <input
               ref={fileInputRef}
@@ -149,39 +183,53 @@ export function Composer({
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading || disabled}
               aria-label="Attach a dataset"
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+              title={`Attach a dataset (${acceptedFormats.slice(0, 6).join(", ")})`}
+              className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-muted hover:text-foreground disabled:opacity-40"
             >
               {isUploading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Paperclip className="h-3.5 w-3.5" />
               )}
+              <span className="hidden sm:inline">{isUploading ? "Reading…" : "Attach"}</span>
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onModeChange(mode === "planning" ? "fast" : "planning")}
-            title={
-              mode === "planning"
-                ? "Planning mode: review the plan before it runs"
-                : "Fast mode: execute immediately"
-            }
-            className={cn(
-              "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
-              mode === "planning"
-                ? "bg-indigo-500/10 text-indigo-600 hover:bg-indigo-500/20 dark:text-indigo-400"
-                : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400",
-            )}
+          {/*
+            A segmented control rather than a toggle button. The old version
+            showed only the *current* mode, so the other one — and the fact that
+            a choice existed at all — was invisible until you clicked it.
+          */}
+          <div
+            className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5"
+            role="radiogroup"
+            aria-label="Execution mode"
           >
-            <Zap className="h-3 w-3" />
-            {mode === "planning" ? "Plan first" : "Fast"}
-          </button>
+            {MODES.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                role="radio"
+                aria-checked={mode === option.key}
+                onClick={() => onModeChange(option.key)}
+                title={option.title}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-[11.5px] font-medium",
+                  "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)]",
+                  mode === option.key
+                    ? "bg-card text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">
-        Generated code runs in an isolated sandbox. Verify results before relying on them.
+      <p className="mx-auto mt-2.5 max-w-3xl text-center text-[11px] text-muted-foreground/80">
+        Generated code runs in an isolated sandbox. Check results before you rely on them.
       </p>
     </div>
   )

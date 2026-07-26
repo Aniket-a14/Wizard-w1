@@ -1,31 +1,48 @@
 "use client"
 
-import {
-  AlertTriangle,
-  BarChart3,
-  Database,
-  PanelRightOpen,
-  Plus,
-  Sparkles,
-  WifiOff,
-} from "lucide-react"
+import { AlertTriangle, Database, PanelRight, Plus, ShieldAlert, WifiOff } from "lucide-react"
+import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
+import { AnimatedOrb } from "@/components/animated-orb"
 import { ArtifactsPanel, type ArtifactTab } from "@/components/chat/artifacts-panel"
 import { Composer } from "@/components/chat/composer"
 import { Message } from "@/components/chat/message"
 import { ModelPicker } from "@/components/chat/model-picker"
+import { SoundToggle } from "@/components/sound-toggle"
 import { api, clearStoredSessionId } from "@/lib/api"
 import type { Artifact, DatasetSummary, ServerConfig } from "@/lib/types"
 import { useChatStream } from "@/lib/use-chat-stream"
+import { preloadSounds, useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
 
-const SUGGESTIONS = [
-  "Summarise this dataset and flag data quality issues",
-  "Show the distribution of each numeric column",
-  "Which columns are most correlated with each other?",
-  "Find outliers and explain what they represent",
-]
+/*
+  Openers are phrased as things an analyst would actually type, and each one
+  exercises a different capability — profiling, distributions, relationships,
+  anomalies — so the first click also demonstrates the range.
+*/
+const OPENERS = [
+  {
+    title: "Profile this dataset",
+    prompt: "Summarise this dataset and flag anything that looks like a data quality problem",
+    hint: "Types, ranges, missingness",
+  },
+  {
+    title: "Show me the shape of it",
+    prompt: "Plot the distribution of every numeric column and describe what each one looks like",
+    hint: "Distributions, skew, tails",
+  },
+  {
+    title: "Find what moves together",
+    prompt: "Which columns are most strongly correlated, and is any of it likely to be spurious?",
+    hint: "Correlation, with caveats",
+  },
+  {
+    title: "Show me the odd ones",
+    prompt: "Find the outliers, explain what makes each one unusual, and tell me if they look like errors",
+    hint: "Anomalies, explained",
+  },
+] as const
 
 export function ChatShell() {
   const [config, setConfig] = useState<ServerConfig | null>(null)
@@ -42,6 +59,7 @@ export function ChatShell() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedToBottom = useRef(true)
+  const { playSound } = useSound()
 
   const onArtifact = useCallback((artifact: Artifact) => {
     if (artifact.kind === "plot_html") {
@@ -72,6 +90,7 @@ export function ChatShell() {
   }, [])
 
   useEffect(() => {
+    preloadSounds()
     void api.config().then(setConfig).catch(() => setConfig(null))
     void refreshSession()
   }, [refreshSession])
@@ -99,13 +118,14 @@ export function ChatShell() {
         await refreshSession()
         setPanelTab("data")
         setPanelOpen(true)
+        playSound("click")
       } catch (exception) {
         setUploadError(exception instanceof Error ? exception.message : "Upload failed.")
       } finally {
         setUploading(false)
       }
     },
-    [refreshSession],
+    [playSound, refreshSession],
   )
 
   const handleActivateDataset = useCallback(
@@ -116,7 +136,16 @@ export function ChatShell() {
     [refreshSession],
   )
 
+  const handleSend = useCallback(
+    (content: string, sendMode: "planning" | "fast") => {
+      playSound("click")
+      sendMessage(content, sendMode)
+    },
+    [playSound, sendMessage],
+  )
+
   const handleNewChat = useCallback(async () => {
+    playSound("click")
     clear()
     setChartVersion(0)
     setChartImage(null)
@@ -128,7 +157,7 @@ export function ChatShell() {
     }
     clearStoredSessionId()
     await refreshSession()
-  }, [clear, refreshSession])
+  }, [clear, playSound, refreshSession])
 
   const hasData = Boolean(activeDataset)
   const activeSummary = useMemo(
@@ -137,16 +166,36 @@ export function ChatShell() {
   )
 
   return (
-    <div className="flex h-screen w-full flex-col bg-background text-foreground">
-      <header className="flex h-13 shrink-0 items-center justify-between border-b border-border px-3">
-        <div className="flex min-w-0 items-center gap-2">
+    <div className="flex h-screen w-full flex-col text-foreground">
+      {/* Without this a keyboard user tabs the entire header — brand, new chat,
+          dataset, model picker, sound, panel — before reaching the input. */}
+      <a
+        href="#composer"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-[60] focus:rounded-lg focus:bg-primary focus:px-3 focus:py-2 focus:text-[13px] focus:font-medium focus:text-primary-foreground focus:shadow-md"
+      >
+        Skip to the message box
+      </a>
+
+      <header className="glass flex h-14 shrink-0 items-center justify-between border-b border-border px-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-1">
+          <Link
+            href="/"
+            aria-label="Wizard home"
+            className="mr-1 flex items-center gap-2 rounded-lg px-1.5 py-1 transition-opacity hover:opacity-80"
+          >
+            <AnimatedOrb size={22} />
+            <span className="hidden text-[14px] font-semibold tracking-[-0.02em] sm:inline">Wizard</span>
+          </Link>
+
+          <span className="mx-1 hidden h-4 w-px bg-border sm:block" />
+
           <button
             type="button"
             onClick={() => void handleNewChat()}
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-muted hover:text-foreground"
           >
             <Plus className="h-3.5 w-3.5" />
-            New chat
+            <span className="hidden sm:inline">New</span>
           </button>
 
           {activeSummary && (
@@ -156,12 +205,13 @@ export function ChatShell() {
                 setPanelTab("data")
                 setPanelOpen(true)
               }}
-              className="flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="group flex min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] shadow-xs transition-colors duration-[var(--duration-fast)] hover:border-brand/40"
+              title={`${activeSummary.rows.toLocaleString()} rows × ${activeSummary.column_count} columns`}
             >
-              <Database className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-              <span className="max-w-[220px] truncate">{activeSummary.name}</span>
-              <span className="shrink-0 text-muted-foreground/60">
-                {activeSummary.rows.toLocaleString()}×{activeSummary.column_count}
+              <Database className="h-3.5 w-3.5 shrink-0 text-success" />
+              <span className="max-w-[180px] truncate font-medium">{activeSummary.name}</span>
+              <span className="tabular hidden shrink-0 text-[11.5px] text-muted-foreground sm:inline">
+                {activeSummary.rows.toLocaleString()} × {activeSummary.column_count}
               </span>
             </button>
           )}
@@ -170,47 +220,57 @@ export function ChatShell() {
         <div className="flex items-center gap-1">
           {connection !== "open" && (
             <span
-              className="flex items-center gap-1 rounded-lg bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400"
+              className="flex items-center gap-1.5 rounded-lg bg-warning/12 px-2.5 py-1 text-[11.5px] font-medium text-warning"
               role="status"
             >
               <WifiOff className="h-3 w-3" />
-              {connection === "connecting" ? "Connecting…" : "Reconnecting…"}
+              <span className="hidden sm:inline">
+                {connection === "connecting" ? "Connecting" : "Reconnecting"}
+              </span>
             </span>
           )}
 
           {config && !config.sandbox_available && (
             <span
-              className="flex items-center gap-1 rounded-lg bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400"
-              title="Docker is unreachable, so code runs in a restricted local interpreter."
+              className="flex items-center gap-1.5 rounded-lg bg-warning/12 px-2.5 py-1 text-[11.5px] font-medium text-warning"
+              title="Docker is unreachable, so generated code runs in a restricted in-process interpreter with weaker isolation."
             >
-              <AlertTriangle className="h-3 w-3" />
-              No sandbox
+              <ShieldAlert className="h-3 w-3" />
+              <span className="hidden sm:inline">No sandbox</span>
             </span>
           )}
 
           <ModelPicker />
+          <SoundToggle />
 
           <button
             type="button"
             onClick={() => setPanelOpen((value) => !value)}
-            aria-label="Toggle workspace"
+            aria-label="Toggle workspace panel"
+            aria-pressed={panelOpen}
             className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg transition-colors",
+              "flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-[var(--duration-fast)]",
               panelOpen ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted",
             )}
           >
-            <PanelRightOpen className="h-4 w-4" />
+            <PanelRight className="h-4 w-4" />
           </button>
         </div>
       </header>
 
-      <div className={cn("flex min-h-0 flex-1 flex-col transition-[margin] duration-300", panelOpen && "lg:mr-[560px]")}>
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col transition-[margin] duration-[var(--duration-slow)] ease-[var(--ease-out-expo)]",
+          panelOpen && "lg:mr-[560px]",
+        )}
+      >
         <div ref={scrollRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl pb-6 pt-4">
             {messages.length === 0 ? (
               <EmptyState
                 hasData={hasData}
-                onPick={(prompt) => sendMessage(prompt, mode)}
+                datasetName={activeSummary?.name ?? null}
+                onPick={(prompt) => handleSend(prompt, mode)}
                 formats={config?.supported_formats ?? ["csv"]}
               />
             ) : (
@@ -225,7 +285,7 @@ export function ChatShell() {
             )}
 
             {uploadError && (
-              <div className="mx-4 mt-3 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-300">
+              <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-xl border border-destructive/25 bg-destructive/8 p-3.5 text-sm text-destructive">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{uploadError}</span>
               </div>
@@ -234,7 +294,7 @@ export function ChatShell() {
         </div>
 
         <Composer
-          onSend={sendMessage}
+          onSend={handleSend}
           onStop={cancel}
           onUpload={(file) => void handleUpload(file)}
           isRunning={isRunning}
@@ -261,38 +321,63 @@ export function ChatShell() {
   )
 }
 
+/* -------------------------------------------------------------------------- */
+
 function EmptyState({
   hasData,
+  datasetName,
   onPick,
   formats,
 }: {
   hasData: boolean
+  datasetName: string | null
   onPick: (prompt: string) => void
   formats: string[]
 }) {
   return (
-    <div className="flex flex-col items-center px-6 py-16 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg">
-        <Sparkles className="h-6 w-6" />
+    <div className="flex flex-col items-center px-6 py-14 text-center sm:py-20">
+      <div className="reveal-scale mb-8">
+        <AnimatedOrb size={64} className="float-slow" />
       </div>
-      <h1 className="text-2xl font-semibold tracking-tight">What should we analyse?</h1>
-      <p className="mt-2 max-w-md text-sm text-muted-foreground">
-        {hasData
-          ? "Your data is loaded. Ask a question and I will plan the analysis, write the Python, run it in a sandbox and explain the result."
-          : `Attach a dataset to begin — ${formats.slice(0, 6).join(", ")} are supported.`}
+
+      <h1
+        className="reveal text-balance text-[clamp(1.75rem,4.5vw,2.5rem)] font-semibold leading-[1.05] tracking-[-0.035em]"
+        style={{ animationDelay: "120ms" }}
+      >
+        {hasData ? "What do you want to know?" : "Bring me some data."}
+      </h1>
+
+      <p
+        className="reveal mt-4 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground"
+        style={{ animationDelay: "200ms" }}
+      >
+        {hasData ? (
+          <>
+            <span className="font-medium text-foreground">{datasetName}</span> is loaded. Ask in plain
+            language — the plan, the code and the output all stay on screen.
+          </>
+        ) : (
+          <>
+            Drop a file below to begin. {formats.slice(0, 5).join(", ")} and more are read natively;
+            nothing is uploaded anywhere.
+          </>
+        )}
       </p>
 
       {hasData && (
-        <div className="mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-2">
-          {SUGGESTIONS.map((suggestion) => (
+        <div className="stagger mt-11 grid w-full max-w-2xl gap-2.5 sm:grid-cols-2">
+          {OPENERS.map((opener, index) => (
             <button
-              key={suggestion}
+              key={opener.title}
               type="button"
-              onClick={() => onPick(suggestion)}
-              className="rounded-xl border border-border bg-card px-3.5 py-3 text-left text-[13px] leading-snug transition-colors hover:border-primary/40 hover:bg-muted"
+              onClick={() => onPick(opener.prompt)}
+              style={{ "--i": index + 3 } as React.CSSProperties}
+              className="lift group rounded-xl border border-border bg-card p-4 text-left shadow-xs hover:border-brand/40"
             >
-              <BarChart3 className="mb-1.5 h-3.5 w-3.5 text-emerald-600" />
-              {suggestion}
+              <p className="text-[14px] font-medium tracking-[-0.01em]">{opener.title}</p>
+              <p className="mt-1.5 font-mono text-[11px] text-muted-foreground transition-colors duration-[var(--duration-base)] group-hover:text-brand">
+                {opener.hint}
+              </p>
             </button>
           ))}
         </div>

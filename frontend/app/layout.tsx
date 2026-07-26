@@ -4,20 +4,25 @@ import type React from "react"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Wizard — Data Analysis Agent",
+  title: "Wizard — Local-first data analysis agent",
   description:
-    "Local-first autonomous data analysis. Plans the analysis, writes Python, runs it in a sandbox and explains the result.",
+    "Ask a question, watch it think. Wizard plans the analysis, writes the Python, runs it in a sandbox and explains the result — on your machine, with your models.",
   // Only the icon that actually exists in /public is declared; the previous
   // manifest pointed at four files that were never added, so every page load
   // issued 404s for them.
   icons: { icon: "/favicon.ico" },
+  openGraph: {
+    title: "Wizard — Local-first data analysis agent",
+    description: "Plans the analysis, writes the Python, runs it in a sandbox, explains the result.",
+    type: "website",
+  },
 }
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
+  // Light only: one committed look, so the browser chrome is told exactly one
+  // colour rather than being handed a scheme it can second-guess.
+  themeColor: "#fdfcfb",
+  colorScheme: "light",
   width: "device-width",
   initialScale: 1,
   // maximumScale/userScalable were pinned, which blocks pinch-zoom and fails
@@ -30,23 +35,12 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        {/*
-          Applies the stored or system theme before first paint so dark-mode
-          users never see a white flash. Inline by necessity: it has to run
-          before React hydrates.
-        */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html:
-              "(function(){try{var t=localStorage.getItem('wizard.theme');" +
-              "var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;" +
-              "if(d)document.documentElement.classList.add('dark');}catch(e){}})();",
-          }}
-        />
-      </head>
-      <body className="font-sans antialiased">{children}</body>
+    <html lang="en">
+      <body className="font-sans antialiased">
+        {/* Ambient wash. Fixed and inert, behind every route. */}
+        <div className="aurora" aria-hidden="true" />
+        {children}
+      </body>
     </html>
   )
 }

@@ -97,30 +97,34 @@ export function ArtifactsPanel({
           type="button"
           aria-label="Close workspace"
           onClick={onClose}
-          className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] lg:hidden"
+          className="fixed inset-0 z-30 bg-foreground/15 backdrop-blur-[3px] lg:hidden"
         />
       )}
 
       <aside
         className={cn(
-          "fixed right-0 top-0 z-40 flex h-full w-full max-w-[560px] flex-col border-l border-border bg-background shadow-xl transition-transform duration-300 ease-out",
+          "fixed right-0 top-0 z-40 flex h-full w-full max-w-[560px] flex-col border-l border-border bg-background shadow-lg",
+          "transition-transform duration-[var(--duration-slow)] ease-[var(--ease-out-expo)]",
           open ? "translate-x-0" : "translate-x-full",
         )}
         aria-hidden={!open}
       >
-        <div className="flex h-13 shrink-0 items-center justify-between border-b border-border px-3 py-2">
-          <div className="flex items-center gap-0.5 rounded-lg bg-muted/60 p-0.5">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-3">
+          <div className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5" role="tablist">
             {TABS.map((entry) => {
               const Icon = entry.icon
               return (
                 <button
                   key={entry.key}
                   type="button"
+                  role="tab"
+                  aria-selected={tab === entry.key}
                   onClick={() => onTabChange(entry.key)}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                    "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium",
+                    "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)]",
                     tab === entry.key
-                      ? "bg-background text-foreground shadow-sm"
+                      ? "bg-card text-foreground shadow-xs"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
@@ -181,9 +185,9 @@ export function ArtifactsPanel({
                       type="button"
                       onClick={() => onActivateDataset(dataset.name)}
                       className={cn(
-                        "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                        "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors duration-[var(--duration-fast)]",
                         dataset.name === activeDataset
-                          ? "bg-primary text-primary-foreground"
+                          ? "bg-primary text-primary-foreground shadow-xs"
                           : "bg-muted text-muted-foreground hover:text-foreground",
                       )}
                     >
@@ -205,7 +209,7 @@ export function ArtifactsPanel({
           {tab === "files" && (
             <div className="h-full overflow-y-auto p-3">
               <div className="mb-2 flex items-center justify-between">
-                <p className="text-xs font-medium text-muted-foreground">
+                <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
                   {files.length} file{files.length === 1 ? "" : "s"}
                 </p>
                 <button
@@ -234,11 +238,11 @@ export function ArtifactsPanel({
                     <a
                       href={workspaceFileUrl(file.path)}
                       download={file.name}
-                      className="flex items-center gap-2 rounded-lg border border-transparent px-2 py-2 transition-colors hover:border-border hover:bg-muted/60"
+                      className="flex items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-2 transition-colors duration-[var(--duration-fast)] hover:border-border hover:bg-accent/50"
                     >
                       <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate text-xs">{file.name}</span>
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                      <span className="min-w-0 flex-1 truncate text-[12.5px]">{file.name}</span>
+                      <span className="tabular shrink-0 text-[10.5px] text-muted-foreground">
                         {formatBytes(file.size)}
                       </span>
                       <Download className="h-3 w-3 shrink-0 text-muted-foreground" />
@@ -264,10 +268,12 @@ function EmptyPanel({
   hint: string
 }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center">
-      <Icon className="mb-1 h-8 w-8 text-muted-foreground/30" />
-      <p className="text-sm font-medium text-muted-foreground">{title}</p>
-      <p className="max-w-[220px] text-xs text-muted-foreground/70">{hint}</p>
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+      <span className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-card shadow-xs">
+        <Icon className="h-5 w-5 text-muted-foreground/50" />
+      </span>
+      <p className="text-[14px] font-medium">{title}</p>
+      <p className="max-w-[240px] text-[12.5px] leading-relaxed text-muted-foreground">{hint}</p>
     </div>
   )
 }

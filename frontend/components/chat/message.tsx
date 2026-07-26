@@ -1,16 +1,9 @@
 "use client"
 
-import {
-  AlertTriangle,
-  BarChart3,
-  Check,
-  Copy,
-  Download,
-  Sparkles,
-  TriangleAlert,
-} from "lucide-react"
+import { AlertTriangle, BarChart3, Check, Copy, Download, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 
+import { AnimatedOrb } from "@/components/animated-orb"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { ReasoningPanel } from "@/components/chat/reasoning-panel"
 import { StepTimeline } from "@/components/chat/step-timeline"
@@ -35,10 +28,10 @@ function CopyButton({ value }: { value: string }) {
           setTimeout(() => setCopied(false), 1600)
         })
       }}
-      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-muted hover:text-foreground"
       aria-label="Copy message"
     >
-      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
       {copied ? "Copied" : "Copy"}
     </button>
   )
@@ -54,8 +47,8 @@ function CopyButton({ value }: { value: string }) {
 export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end px-4 py-2">
-        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm">
+      <div className="reveal-in flex justify-end px-4 py-2.5">
+        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-[14.5px] leading-relaxed text-primary-foreground shadow-sm">
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         </div>
       </div>
@@ -68,8 +61,10 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
   return (
     <div className="group px-4 py-3">
       <div className="flex gap-3">
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
-          <Sparkles className="h-3.5 w-3.5" />
+        {/* The orb doubles as the assistant avatar and as the "working" indicator:
+            it is always in motion, so a static frame never looks stalled. */}
+        <div className="mt-0.5">
+          <AnimatedOrb size={26} />
         </div>
 
         <div className="min-w-0 flex-1">
@@ -84,8 +79,8 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
           <StepTimeline steps={message.steps} code={message.code} stdout={message.stdout} />
 
           {message.plan && !message.content && (
-            <div className="mb-3 rounded-xl border border-border/60 bg-card p-3">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="mb-3 rounded-xl border border-border bg-card p-3.5 shadow-xs">
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-brand">
                 Proposed plan
               </p>
               <MarkdownRenderer content={message.plan} />
@@ -93,12 +88,14 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
           )}
 
           {waitingForFirstToken && (
-            <div className="flex items-center gap-1.5 py-1" role="status" aria-label="Working">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:0ms]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:150ms]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:300ms]" />
+            <div className="flex items-center gap-2 py-1" role="status" aria-label="Working">
+              <span className="flex items-center gap-1">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand/60 [animation-delay:0ms]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand/60 [animation-delay:150ms]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand/60 [animation-delay:300ms]" />
+              </span>
               {message.statusLabel && (
-                <span className="ml-2 text-xs text-muted-foreground">{message.statusLabel}</span>
+                <span className="text-[12.5px] text-muted-foreground">{message.statusLabel}</span>
               )}
             </div>
           )}
@@ -106,9 +103,9 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
           {message.content && (
             <div className="text-[15px] leading-7">
               <MarkdownRenderer content={message.content} />
-              {showCursor && (
-                <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-foreground align-text-bottom" />
-              )}
+              {/* Marks where the stream has reached. The text itself arrives token
+                  by token from the socket — this is not a reveal animation. */}
+              {showCursor && <span className="caret" aria-hidden="true" />}
             </div>
           )}
 
@@ -119,9 +116,9 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
                 const plot = message.artifacts.find((artifact) => artifact.kind.startsWith("plot"))
                 if (plot) onOpenArtifact(plot)
               }}
-              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium transition-colors hover:bg-muted"
+              className="lift mt-3 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-[12.5px] font-medium shadow-xs hover:border-brand/40"
             >
-              <BarChart3 className="h-3.5 w-3.5 text-emerald-600" />
+              <BarChart3 className="h-3.5 w-3.5 text-brand" />
               View chart
             </button>
           )}
@@ -133,7 +130,7 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
                   key={file}
                   href={workspaceFileUrl(file)}
                   download={file}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs transition-colors hover:bg-muted"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px] shadow-xs transition-colors duration-[var(--duration-fast)] hover:border-brand/40 hover:bg-accent"
                 >
                   <Download className="h-3 w-3 text-muted-foreground" />
                   {file}
@@ -143,11 +140,11 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
           )}
 
           {message.warnings.length > 0 && (
-            <ul className="mt-3 space-y-1">
+            <ul className="mt-3 space-y-1.5">
               {message.warnings.map((warning, index) => (
                 <li
                   key={`${index}-${warning.slice(0, 24)}`}
-                  className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400"
+                  className="flex items-start gap-2 text-[12.5px] leading-relaxed text-warning"
                 >
                   <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />
                   <span>{warning}</span>
@@ -157,27 +154,30 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
           )}
 
           {message.error && (
-            <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-300">
+            <div className="mt-3 flex items-start gap-2.5 rounded-xl border border-destructive/25 bg-destructive/8 p-3.5 text-[13.5px] leading-relaxed text-destructive">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{message.error}</span>
             </div>
           )}
 
           {message.approval && (
-            <div className="mt-3 rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-3">
-              <p className="mb-2.5 text-sm">{message.approval.prompt}</p>
+            <div className="ring-gradient mt-3 rounded-xl p-4 shadow-sm">
+              <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-brand">
+                Waiting on you
+              </p>
+              <p className="mb-3.5 text-[14px] leading-relaxed">{message.approval.prompt}</p>
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => onApprove(message, true)}
-                  className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                  className="rounded-lg bg-[linear-gradient(120deg,var(--brand),var(--brand-2))] px-3.5 py-2 text-[12.5px] font-medium text-brand-foreground shadow-brand transition-all duration-[var(--duration-fast)] hover:brightness-105 active:scale-[0.985]"
                 >
                   {message.approval.tool === "web_search" ? "Allow search" : "Run it"}
                 </button>
                 <button
                   type="button"
                   onClick={() => onApprove(message, false)}
-                  className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  className="rounded-lg border border-border px-3.5 py-2 text-[12.5px] font-medium transition-colors duration-[var(--duration-fast)] hover:bg-muted"
                 >
                   Cancel
                 </button>

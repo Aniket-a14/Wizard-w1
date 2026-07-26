@@ -81,8 +81,10 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
   if (!loading && columns.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center">
-        <Table2 className="mb-1 h-8 w-8 text-muted-foreground/30" />
-        <p className="text-sm font-medium text-muted-foreground">No rows to show</p>
+        <span className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-card shadow-xs">
+          <Table2 className="h-5 w-5 text-muted-foreground/50" />
+        </span>
+        <p className="text-[14px] font-medium">No rows to show</p>
       </div>
     )
   }
@@ -90,18 +92,18 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full border-collapse text-left text-xs">
-          <thead className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
+        <table className="w-full border-collapse text-left text-[12px]">
+          <thead className="glass sticky top-0 z-10">
             <tr>
-              <th className="w-10 border-b border-border px-2 py-2 text-right text-[10px] font-normal text-muted-foreground">
+              <th className="w-10 border-b border-border px-2 py-2.5 text-right font-mono text-[10px] font-normal text-muted-foreground">
                 #
               </th>
               {columns.map((column) => (
-                <th key={column} className="border-b border-border px-3 py-2">
+                <th key={column} className="border-b border-border px-3 py-2.5">
                   <button
                     type="button"
                     onClick={() => toggleSort(column)}
-                    className="flex items-center gap-1 font-semibold transition-colors hover:text-primary"
+                    className="flex items-center gap-1 font-semibold transition-colors duration-[var(--duration-fast)] hover:text-brand"
                   >
                     <span className="max-w-[180px] truncate">{column}</span>
                     {sortBy === column &&
@@ -117,16 +119,17 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} className="hover:bg-muted/40">
-                <td className="border-b border-border/50 px-2 py-1.5 text-right text-[10px] text-muted-foreground/60">
+              <tr key={rowIndex} className="transition-colors duration-75 hover:bg-accent/50">
+                <td className="tabular border-b border-border/60 px-2 py-1.5 text-right font-mono text-[10px] text-muted-foreground/70">
                   {(page - 1) * perPage + rowIndex + 1}
                 </td>
                 {columns.map((column) => (
                   <td
                     key={column}
                     className={cn(
-                      "max-w-[240px] truncate border-b border-border/50 px-3 py-1.5",
-                      typeof row[column] === "number" && "text-right tabular-nums",
+                      "max-w-[240px] truncate border-b border-border/60 px-3 py-1.5",
+                      typeof row[column] === "number" && "tabular text-right",
+                      row[column] === null && "text-muted-foreground/50",
                     )}
                     title={renderCell(row[column])}
                   >
@@ -140,7 +143,7 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
       </div>
 
       <div className="flex shrink-0 items-center justify-between border-t border-border px-3 py-2">
-        <span className="text-[11px] text-muted-foreground">
+        <span className="tabular text-[11.5px] text-muted-foreground">
           {loading ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
@@ -153,7 +156,7 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
             onClick={() => setPage((value) => Math.max(1, value - 1))}
             disabled={page <= 1 || loading}
             aria-label="Previous page"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-muted hover:text-foreground disabled:opacity-30"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
           </button>
@@ -162,7 +165,7 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
             onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
             disabled={page >= totalPages || loading}
             aria-label="Next page"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-muted hover:text-foreground disabled:opacity-30"
           >
             <ChevronRight className="h-3.5 w-3.5" />
           </button>
