@@ -1,21 +1,23 @@
+import { GeistMono } from "geist/font/mono"
+import { GeistSans } from "geist/font/sans"
 import type { Metadata, Viewport } from "next"
 import type React from "react"
+
+import { AppShell } from "@/components/app-shell"
 
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Wizard — Local-first data analysis agent",
+  title: {
+    default: "Wizard",
+    template: "%s · Wizard",
+  },
   description:
     "Ask a question, watch it think. Wizard plans the analysis, writes the Python, runs it in a sandbox and explains the result — on your machine, with your models.",
   // Only the icon that actually exists in /public is declared; the previous
   // manifest pointed at four files that were never added, so every page load
   // issued 404s for them.
   icons: { icon: "/favicon.ico" },
-  openGraph: {
-    title: "Wizard — Local-first data analysis agent",
-    description: "Plans the analysis, writes the Python, runs it in a sandbox, explains the result.",
-    type: "website",
-  },
 }
 
 export const viewport: Viewport = {
@@ -35,11 +37,17 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    /*
+      Geist ships its own woff2 files inside the npm package, so the type is
+      self-hosted and `next build` never reaches the network for it. That
+      matters: `npm run build` is a CI gate, and `next/font/google` would have
+      made it fail whenever Google Fonts was unreachable.
+    */
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body className="font-sans antialiased">
         {/* Ambient wash. Fixed and inert, behind every route. */}
         <div className="aurora" aria-hidden="true" />
-        {children}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   )

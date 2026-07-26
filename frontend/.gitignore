@@ -63,7 +63,12 @@ backend/data/
 coverage.xml
 
 # General Logs & Results
-logs/
-results/
-data/
+#
+# Anchored with a leading slash so they match only this directory. Unanchored,
+# `data/` matched `app/data/` and silently kept the /data route out of the
+# repository — the build passed locally and would have failed in CI with a
+# missing module.
+/logs/
+/results/
+/data/
 *.log

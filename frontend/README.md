@@ -1,71 +1,63 @@
-# 🎨 Wizard w1: Frontend
+# Wizard — frontend
 
-The frontend of **Wizard w1** is a high-performance, dark-themed dashboard built with **Next.js 16** and **TailwindCSS v4**. It provides a glassmorphic interface for interacting with the AI Data Analyst agent.
+The client for [Wizard](../Readme.md): a Next.js 16 app that opens straight into
+the workspace. There is no marketing page in front of it — this is a tool you
+open, not a product you are sold.
 
-## 🚀 Key Features
-
-- **Glassmorphic UI**: Modern aesthetic with frosted glass effects and fluid animations using `framer-motion`.
-- **Interactive Chat**: Real-time communication with the Scientific Agent.
-- **Agentic Thinking UI**: Live rendering of the Manager (DeepSeek) agent's `<thought>` process as it plans data strategies and performs web searches.
-- **Data Visualization**: Dynamic charts and plots powered by `recharts`.
-- **Responsive Design**: Fully optimized for various screen sizes.
-- **Modern Stack**: Built with React 19 and Next.js 16 (App Router).
-
-## 🛠️ Tech Stack
-
-- **Framework**: [Next.js 16](https://nextjs.org/) (App Router)
-- **Styling**: [TailwindCSS v4](https://tailwindcss.com/)
-- **Components**: [Radix UI](https://www.radix-ui.com/) & [Shadcn UI](https://ui.shadcn.com/)
-- **Charts**: [Recharts](https://recharts.org/)
-- **Icons**: [Lucide React](https://lucide.dev/)
-- **Animations**: [Framer Motion](https://www.framer.com/motion/)
-- **Type Safety**: [TypeScript](https://www.typescriptlang.org/)
-
-## 📦 Getting Started
-
-### 1. Installation
-
-From the `frontend` directory, install the dependencies:
+## Run it
 
 ```bash
-npm install
+npm ci
+npm run dev            # http://localhost:3000
+
+npm run lint && npx tsc --noEmit && npm run build   # the three CI gates
 ```
 
-### 2. Development
+The backend is expected at `http://localhost:8000`. Point elsewhere with
+`NEXT_PUBLIC_API_URL`.
 
-Run the development server:
+## Pages
 
-```bash
-npm run dev
-```
+| Route       | What it is                                                          |
+|-------------|---------------------------------------------------------------------|
+| `/`         | The conversation: streamed reasoning, generated code, live output    |
+| `/data`     | Datasets in this session — load, inspect, switch, remove             |
+| `/models`   | Every provider and installed model, and which role each one fills    |
+| `/settings` | Session controls, interface preferences, resolved server diagnostics |
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+[`app-shell.tsx`](components/app-shell.tsx) renders the rail once in the root
+layout, so moving between pages never rebuilds it and the chat WebSocket is
+never disturbed by a route change.
 
-### 3. Production Build
+## Streaming
 
-Create an optimized production build:
+[`use-chat-stream.ts`](lib/use-chat-stream.ts) owns one persistent WebSocket with
+a heartbeat and exponential-backoff reconnect, appending each `*_delta` frame to
+the live message. This is real token streaming — do not reintroduce a
+timer-based word reveal on top of it.
 
-```bash
-npm run build
-npm run start
-```
+The session id lives in `localStorage` and is sent on every request, so a reload
+rejoins the same server-side session, dataset and sandbox container.
 
-## 📂 Project Structure
+## Design system
 
-- `app/`: Next.js App Router (pages and layouts).
-- `components/`: Reusable UI components (Chat, Visualizer, Sidebar).
-- `lib/`: Utility functions and shared logic.
-- `public/`: Static assets (images, icons).
-- `styles/`: Global CSS and Tailwind configuration.
+All of it lives in [`app/globals.css`](app/globals.css) as tokens — colour,
+elevation, duration, easing. Components reference tokens, never raw values.
 
-## ⚙️ Environment Variables
+- **Light only.** There is no dark palette and no `dark` variant; the ambient
+  washes, the orb's glow and the shadow ramp are all tuned against a warm white
+  ground. `dark:` classes will silently do nothing.
+- **Type** is [Geist](https://vercel.com/font), self-hosted from the `geist`
+  package. Deliberately not `next/font/google`: that downloads at build time,
+  which would make `npm run build` — a CI gate — fail whenever Google Fonts was
+  unreachable.
+- **Motion** is blur plus a small rise, never a long slide. `prefers-reduced-motion`
+  neutralises entrances to their end state rather than merely shortening them.
 
-The frontend connects to the backend API. Ensure the following variable is configured in a `.env.local` file if necessary:
+## Stack
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | The URL of the FastAPI backend. |
+Next.js 16 (App Router, Turbopack) · React 19 · Tailwind CSS v4 · Radix
+primitives · lucide-react · Geist.
 
----
-
-Developed as part of the **Wizard w1** project.
+Charts are produced by the **backend** — matplotlib or Plotly HTML, rendered in
+the artifacts panel. There is no client-side charting library.

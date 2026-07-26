@@ -1,7 +1,6 @@
 "use client"
 
 import { AlertTriangle, Database, PanelRight, Plus, ShieldAlert, WifiOff } from "lucide-react"
-import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { AnimatedOrb } from "@/components/animated-orb"
@@ -9,11 +8,10 @@ import { ArtifactsPanel, type ArtifactTab } from "@/components/chat/artifacts-pa
 import { Composer } from "@/components/chat/composer"
 import { Message } from "@/components/chat/message"
 import { ModelPicker } from "@/components/chat/model-picker"
-import { SoundToggle } from "@/components/sound-toggle"
 import { api, clearStoredSessionId } from "@/lib/api"
 import type { Artifact, DatasetSummary, ServerConfig } from "@/lib/types"
 import { useChatStream } from "@/lib/use-chat-stream"
-import { preloadSounds, useSound } from "@/lib/use-sound"
+import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
 
 /*
@@ -90,7 +88,6 @@ export function ChatShell() {
   }, [])
 
   useEffect(() => {
-    preloadSounds()
     void api.config().then(setConfig).catch(() => setConfig(null))
     void refreshSession()
   }, [refreshSession])
@@ -166,29 +163,9 @@ export function ChatShell() {
   )
 
   return (
-    <div className="flex h-screen w-full flex-col text-foreground">
-      {/* Without this a keyboard user tabs the entire header — brand, new chat,
-          dataset, model picker, sound, panel — before reaching the input. */}
-      <a
-        href="#composer"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-[60] focus:rounded-lg focus:bg-primary focus:px-3 focus:py-2 focus:text-[13px] focus:font-medium focus:text-primary-foreground focus:shadow-md"
-      >
-        Skip to the message box
-      </a>
-
+    <div className="flex min-h-0 flex-1 flex-col text-foreground">
       <header className="glass flex h-14 shrink-0 items-center justify-between border-b border-border px-3 sm:px-4">
-        <div className="flex min-w-0 items-center gap-1">
-          <Link
-            href="/"
-            aria-label="Wizard home"
-            className="mr-1 flex items-center gap-2 rounded-lg px-1.5 py-1 transition-opacity hover:opacity-80"
-          >
-            <AnimatedOrb size={22} />
-            <span className="hidden text-[14px] font-semibold tracking-[-0.02em] sm:inline">Wizard</span>
-          </Link>
-
-          <span className="mx-1 hidden h-4 w-px bg-border sm:block" />
-
+        <div className="flex min-w-0 items-center gap-1 pl-11 md:pl-0">
           <button
             type="button"
             onClick={() => void handleNewChat()}
@@ -241,7 +218,6 @@ export function ChatShell() {
           )}
 
           <ModelPicker />
-          <SoundToggle />
 
           <button
             type="button"

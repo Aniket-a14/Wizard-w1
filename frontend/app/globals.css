@@ -79,13 +79,15 @@
 
 @theme inline {
   /*
-    System stack by design. `next/font/google` downloads at build time, which
-    would make `npm run build` — a CI gate — depend on network reachability.
-    The stack below resolves to the same grotesque users already read the OS in.
+    Geist, self-hosted from the npm package rather than fetched by
+    `next/font/google` — `npm run build` is a CI gate and must not depend on
+    Google Fonts being reachable. `--font-geist-*` are injected by next/font in
+    the root layout; the system stack is the fallback while they swap in.
   */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto,
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas,
+    monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);

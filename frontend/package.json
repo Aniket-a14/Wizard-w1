@@ -1,5 +1,5 @@
 {
-  "name": "my-v0-project",
+  "name": "wizard-frontend",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -45,6 +45,7 @@
     "cmdk": "1.0.4",
     "date-fns": "4.1.0",
     "embla-carousel-react": "8.5.1",
+    "geist": "^1.7.2",
     "input-otp": "1.4.1",
     "lucide-react": "^0.454.0",
     "next": "^16.2.12",
@@ -79,5 +80,6 @@
     "postcss": "$postcss",
     "sharp": "^0.35.3",
     "js-yaml": "^4.2.1"
-  }
+  },
+  "description": "Client for Wizard, a local-first autonomous data analysis agent."
 }

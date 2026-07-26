@@ -138,10 +138,21 @@ Pydantic-settings singleton reading `backend/.env` (see `backend/.env.example`).
 
 ## Frontend
 
+Four routes, no landing page — `/` **is** the workspace:
+
+| Route | Component |
+|-------|-----------|
+| `/` | [chat-shell.tsx](frontend/components/chat-shell.tsx) |
+| `/data` | [pages/data-workbench.tsx](frontend/components/pages/data-workbench.tsx) |
+| `/models` | [pages/models-workbench.tsx](frontend/components/pages/models-workbench.tsx) |
+| `/settings` | [pages/settings-workbench.tsx](frontend/components/pages/settings-workbench.tsx) |
+
+[app-shell.tsx](frontend/components/app-shell.tsx) renders the nav rail once from the root layout. Keep it there: mounting it per page would tear down and rebuild the chat WebSocket on every route change.
+
 - [use-chat-stream.ts](frontend/lib/use-chat-stream.ts) owns one persistent WebSocket with heartbeat and exponential-backoff reconnect, and appends each `*_delta` frame to the live message. This is genuine token streaming; do not reintroduce the timer-based word reveal.
 - `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
 - The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.
-- Components: [chat-shell.tsx](frontend/components/chat-shell.tsx) (layout), [chat/message.tsx](frontend/components/chat/message.tsx), [chat/reasoning-panel.tsx](frontend/components/chat/reasoning-panel.tsx), [chat/step-timeline.tsx](frontend/components/chat/step-timeline.tsx), [chat/artifacts-panel.tsx](frontend/components/chat/artifacts-panel.tsx) (slide-over), [chat/model-picker.tsx](frontend/components/chat/model-picker.tsx).
+- Chat components: [chat/message.tsx](frontend/components/chat/message.tsx), [chat/reasoning-panel.tsx](frontend/components/chat/reasoning-panel.tsx), [chat/step-timeline.tsx](frontend/components/chat/step-timeline.tsx), [chat/artifacts-panel.tsx](frontend/components/chat/artifacts-panel.tsx) (slide-over), [chat/model-picker.tsx](frontend/components/chat/model-picker.tsx) (quick swap; `/models` is the full surface).
 - The picker browses one provider at a time and always sends the provider alongside the model name — the list on screen may belong to a different backend than the role currently uses, and a bare name would be routed to the wrong daemon.
 
 ### Design system — [globals.css](frontend/app/globals.css)
@@ -153,7 +164,7 @@ Every colour, shadow, duration and easing curve is a token; components reference
 - Surfaces: `.aurora` (ambient wash, in the root layout), `.grid-field` (hero only), `.glass` (anything floating over content), `.ring-gradient` (1px gradient border — plain `border` cannot express one), `.text-gradient`.
 - Motion: `.reveal` / `.reveal-in` / `.reveal-scale` for entrances, `.stagger` with an inline `--i` for cascades, `.lift` for hover, `.caret` for the streaming cursor. Entrances are blur + a 6px rise, never a long slide.
 - `prefers-reduced-motion` neutralises entrances to their **end state** rather than just shortening them, so nothing is left stranded mid-blur.
-- Type: system stack by choice. `next/font/google` downloads at build time, which would make `npm run build` — a CI gate — depend on network reachability.
+- Type is **Geist**, self-hosted from the `geist` npm package (the font files ship inside it). Deliberately not `next/font/google`, which downloads at build time and would make `npm run build` — a CI gate — fail whenever Google Fonts was unreachable.
 
 ### The orb and sound
 
