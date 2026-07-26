@@ -1,27 +1,43 @@
 # 🧙‍♂️ Wizard w1
 
-> **Advanced AI Data Analyst Platform** powered by **DeepSeek-R1**, **Qwen2.5-Coder**, and **Agentic Workflows**.
+> A local-first autonomous data analysis agent. Ask a question about your data; it plans the analysis, writes Python, runs it in an isolated sandbox, and explains the result — streaming its reasoning as it goes.
 
-![Status](https://img.shields.io/badge/Status-Production%20Grade-success) ![Version](https://img.shields.io/badge/Version-v2.3.0--Studio-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
+![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v3.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
 
-## 🌟 Overview
+## What it is
 
-**Wizard w1** is not a chatbot. It is a monolithic, autonomous Data Science Agent built for complex analytical workloads. It accepts raw, messy operational data via natural language instructions, establishes rigorous statistical assumptions, synthesizes deep reasoning chains, and flawlessly writes, tests, and self-corrects the required Python syntaxes.
+Wizard runs entirely on your machine. Your data never leaves it, and no API key is required.
 
-Through its native dual-brain architecture, Wizard manages complex analysis, statistical inference, and stunning data layer visualizations safely within a secure, warm Docker container pool.
+You upload a file and ask a question in plain language. A **manager** model reasons about the request and produces a plan; a **worker** model turns that plan into Python; the code is statically screened and executed inside a Docker container scoped to your session; the manager then reads the real output and writes the answer. If the code fails, the traceback goes back to the model and it fixes itself.
 
-### Why Wizard w1?
+Every stage streams to the browser as it happens — the reasoning, the plan, the generated code, the program's stdout, and the answer token by token.
 
-*   **Deep Reasoning (Manager):** Before writing a single line of code, the DeepSeek-R1 core generates a structured mental model. It predicts schema anomalies, actively queries the internet, and breaks down ambiguous tasks into an explicit mathematical blueprint.
-*   **Precision Execution (Worker):** The generated blueprint is handed to the Qwen2.5-Coder. It is parsed into exact AST-verified Pandas/SciPy operations safely, catching invalid indices and type-mismatches in a virtual runtime before final evaluation.
-*   **Multi-File Schema Knowledge Engine:** The system profiles and registers schemas of all datasets uploaded in the workspace into a local database. It automatically maps relationships and suggests logical primary-key/foreign-key joins so the agent can execute SQL/Pandas merge queries out-of-the-box.
-*   **Auto-Healing Ecosystem:** If a statistical operation fails (e.g. standard deviation calculation on a string column containing "NaN"), the system catches the literal traceback, pipes it back into the LLM context, and repairs its own execution script without user intervention.
+## Why you might want it
 
----
+- **Local first.** Two small Ollama models are enough to be useful. Nothing is sent anywhere.
+- **You choose the models.** The UI lists what you have actually pulled and lets you assign a model to each role per session.
+- **It runs the code, it doesn't just suggest it.** Results come from execution, not from a model claiming an answer.
+- **It corrects itself.** Failures are fed back with the traceback, and successful repairs are remembered as negative examples for next time.
+- **It is honest about degradation.** No Docker? It says so and runs in a restricted interpreter. No embedding model? Retrieval falls back to lexical matching. Model unreachable? You get a clear message, not a hang.
 
-## 🏗️ Core Architecture
+## Quick start
 
-Wizard's logic is tightly coordinated by **The Council**, a committee of sub-agents ensuring mathematical and syntactic correctness prior to rendering the output to the client.
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) and [Ollama](https://ollama.com/).
+
+```bash
+ollama pull deepseek-r1:1.5b     # reasoning
+ollama pull qwen2.5-coder:1.5b   # code
+
+git clone https://github.com/Aniket-a14/Wizard-w1.git
+cd Wizard-w1
+docker compose up --build -d
+```
+
+Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**.
+
+Any model you have pulled will appear in the model picker; the two above are just small defaults that fit on a laptop.
+
+## How it works
 
 ```mermaid
 graph TD
@@ -29,214 +45,151 @@ graph TD
     classDef api fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
     classDef brain fill:#db2777,stroke:#9d174d,stroke-width:2px,color:#fff;
     classDef sandbox fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#000;
-    classDef ext fill:#64748b,stroke:#334155,stroke-width:2px,color:#fff;
+    classDef store fill:#64748b,stroke:#334155,stroke-width:2px,color:#fff;
 
-    client_UI["Next.js 16 Web Client<br/>(Studio Viewport)"]:::client
-    API_Gateway["FastAPI Gateway<br/>(Async WebSockets)"]:::api
+    UI["Next.js client<br/>(streams every stage)"]:::client
+    WS["FastAPI · WS /ws/chat"]:::api
+    Session["Session<br/>datasets · history · sandbox"]:::api
+    Orch["Orchestrator"]:::api
 
-    subgraph "Relational Data Catalog"
-        SchemaReg["SQLite Schema Registry<br/>(PK/FK Mapping)"]:::ext
-    end
+    Manager["Manager model<br/>plan · answer"]:::brain
+    Worker["Worker model<br/>Python"]:::brain
 
-    subgraph "Flexible LLM Gateway (Local or Cloud VPC)"
-        Orchestrator["Scientific Agent"]
-        Manager["Reasoning Brain<br/>(DeepSeek-R1)"]:::brain
-        Worker["Code Execution Brain<br/>(Qwen2.5-Coder)"]:::brain
-        RAG["Memory State"]:::ext
-    end
+    Guard["Code guard<br/>AST policy check"]:::sandbox
+    Box["Per-session container<br/>cap_drop · mem/pid limits"]:::sandbox
 
-    subgraph "Docker Zero-Trust Sandbox"
-        CodeCheck["Guardrail Agent<br/>(AST Scan)"]:::sandbox
-        Runtime["Python Runtime<br/>(IPython Kernel)"]:::sandbox
-    end
+    Store["SQLite<br/>cache · trajectories · memory"]:::store
+    Retr["Retriever<br/>column + memory selection"]:::store
 
-    TheCouncil["The Council<br/>(Adjudication & Feedback)"]:::api
-
-    client_UI <-->|JSON/WebSockets & Live Logs| API_Gateway
-    API_Gateway <--> Orchestrator
-    Orchestrator <-->|Lookup Mappings| SchemaReg
-    Orchestrator -->|Inject Context| RAG
-    Orchestrator -->|1. Plan| Manager
-    Manager <-->|Augment Knowledge| Search[(Web Search APIs)]:::ext
-    Manager -->|2. Formulate Spec| Worker
-    Worker -->|3. Gen Python| CodeCheck
-    CodeCheck -->|Safe Code| Runtime
-    Runtime -->|STDOUT Logs / HTML Plots| TheCouncil
-    TheCouncil -->|Pass/Fail| Orchestrator
+    UI <-->|typed event frames| WS
+    WS --> Session --> Orch
+    Orch <--> Retr <--> Store
+    Orch -->|1 plan| Manager
+    Manager -->|2 spec| Worker
+    Worker -->|3 code| Guard
+    Guard -->|allowed| Box
+    Box -->|stdout · charts · errors| Orch
+    Orch -->|4 synthesise from real output| Manager
 ```
 
----
+The retry loop is the part that matters in practice: when the sandbox raises, the traceback is added to the worker's prompt and the step is retried, up to `MAX_CORRECTION_RETRIES`. A failure that is successfully repaired is stored so the same mistake is shown as a counter-example next time a similar question is asked.
 
-## 🚀 Key Features
+## Features
 
-*   **🤖 Double-Blind Generative Orchestration:**
-    *   **Manager Agent (DeepSeek-R1):** Generates execution logic visually formatted in a `<thought>` bubble UI streaming directly to the frontend.
-    *   **Worker Agent (Qwen2.5-Coder):** High execution rigor built strictly to handle Scikit-Learn, Statsmodels, SciPy, and complex Pandas manipulations.
-*   **📊 Interactive Data Studio:**
-    *   **Plotly Visualizations:** Renders full HTML interactive charts (zoom, hover tooltips, pans) inside safe iframe views instead of static base64 images.
-    *   **Progressive Console Log Streams:** View the agent's work transparently as it executes code. The frontend streams and accumulates standard output/stderr live in an inline code execution terminal.
-*   **🔌 Universal Enterprise Gateway:** Allows configuration of backend models via `.env`. Seamlessly direct calls to local Ollama endpoints (default) or OpenAI-compatible gateways (like self-hosted corporate APIs or cloud endpoints) without changing code.
-*   **🛡️ Multi-File Schema Registry:** Indexes all csv/feather files uploaded to the workspace in SQLite, profiles dimensions, automatically infers relations, and injects structural primary-key/foreign-key contexts to guide relational data queries.
-*   **🔐 AST-Level Sandboxing:** User-generated logic is scanned asynchronously against a blacklisted `eval()`, `exec()`, `os.system` dictionary. Executions happen in sealed Linux containers (supporting secure runtimes like gVisor `runsc`) restricting unapproved local I/O.
-*   **🌍 Stateful Working Memory:** The agent understands cross-session variables, previously established statistical facts, and implicitly remembers what steps you deemed "correct" throughout your chat flow.
+**Analysis**
+- Plans multi-step analyses and executes them one step at a time, feeding earlier outputs forward
+- Self-corrects on execution failure using the real traceback
+- Interactive Plotly charts (or static matplotlib, via `PLOT_FORMAT`)
+- Optional plan approval before anything runs, and explicit consent before any web search
 
----
+**Data**
+- CSV, TSV, Excel, JSON, NDJSON, Parquet and Feather
+- Large files are sampled for analysis while the full file stays available in the workspace
+- Column names are normalised for safe code generation **and de-duplicated**
+- Multiple tables per session, with primary-key and join-key inference between them
 
-## 🔄 Engine Evolution (v2.3.0)
+**Operational**
+- Per-session isolation: separate dataset, sandbox namespace, workspace and history
+- Runs without Docker (degraded, and it tells you), without an embedding model, and without Redis
+- Optional Redis for a shared cache and job state
+- Optional `API_KEY` for deployments beyond localhost
 
-For long-time developers mapping our internal upgrades:
+## Configuration
 
-| System Layer | v2.2 (Legacy Native Engine) | v2.3 (Current: Studio Upgrade) |
-|--------------|-----------------------------|------------------------------|
-| **Core Integration**| HF Transformers (`torch`) | **Flexible API Gateway** (Ollama, OpenAI, custom models) |
-| **Visualizations**| Static base64 images | **Plotly Interactive HTML Views** (zoom/hover in iframe) |
-| **Stdout Logs** | Suppressed / hidden in response | **Live Progressive Terminal Log Console** |
-| **Data Scope** | Single dataset isolation | **Relational Multi-File Schema Registry Joins** |
-| **Model Size** | Massive Local Weights (~25GB) | **Zero Weight Caching (<100MB)** |
-| **Processing** | Multi-GPU heavy dependencies | **CPU Tolerant / Apple Silicon Native** |
-| **Memory Leakage**| Moderate (Python GC limits) | **Near Zero** (Delegated to isolated runtime runsc) |
+Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything has a working default; the values you are most likely to touch:
 
-> 💡 **The v2.3 Impact:** You no longer need to run `download_models.py` to freeze HuggingFace repositories. The backend is completely abstracted, pushing LLM logic to standard Ollama ports or custom cloud gateways. This increased REST throughput performance by 500% in our internal evaluations.
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `API_PROVIDER` | `ollama` | `ollama`, `openai` or `custom_gateway` |
+| `MODEL_NAME` | `deepseek-r1:1.5b` | Default reasoning model |
+| `WORKER_MODEL_NAME` | `qwen2.5-coder:1.5b` | Default code model |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Where Ollama lives |
+| `PLOT_FORMAT` | `html` | `html` for interactive Plotly, `png` for static |
+| `SANDBOX_ENABLED` | `True` | `False` disables containers entirely |
+| `SANDBOX_NETWORK_DISABLED` | `False` | `True` is safer, but blocks on-demand package installs |
+| `SANDBOX_DOCKER_RUNTIME` | `""` | Set `runsc` for gVisor kernel isolation |
+| `CORS_ALLOW_ORIGINS` | `http://localhost:3000` | Comma-separated allowlist |
+| `API_KEY` | `""` | When set, mutating routes require `X-API-Key` |
+| `REDIS_URL` | `""` | Empty means in-process cache and queue |
 
----
+## API
 
-## ⚡ Getting Started
+Interactive docs: `http://localhost:8000/docs`.
 
-### Prerequisites
+The session id is returned in the `X-Session-Id` header and should be sent back on subsequent requests.
 
-*   [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Required for robust execution)
-*   [Ollama](https://ollama.com/) (Must be installed and actively running on your host machine)
-
-### 1. Model Initialization
-From your host terminal, pull the required brains:
-```bash
-ollama pull deepseek-r1:1.5b
-ollama pull qwen2.5-coder:1.5b
-```
-
-### 2. Standup the Monorepo
-Wizard w1 relies entirely on one command for orchestration.
-```bash
-git clone https://github.com/Aniket-a14/Wizard-w1.git
-cd Wizard-w1
-docker-compose up --build -d
-```
-
-### 3. Verification
-Once the container initialization is complete:
-*   **Web Client Dashboard:** [http://localhost:3000](http://localhost:3000)
-*   **REST API Swagger UI:** [http://localhost:8000/docs](http://localhost:8000/docs)
-*   **Backend Health Check:** `curl http://localhost:8000/health` should return `{"status": "ok"}`
-
----
-
-## 🔌 REST API Reference
-
-The backend `FastAPI` instance natively supports JSON operations. You can bypass the UI entirely for custom integrations.
-
-### `<POST> /upload` - Semantic Data Instantiation
-
-Strictly mounts the DataFrame into state. Uses the `CatalogEngine` to automatically detect PII, currencies, geometries, and temporal data points before proceeding.
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/config` | Server capabilities |
+| `POST` | `/api/session` | Create a session |
+| `GET` | `/api/models` | Models installed on the host |
+| `POST` | `/api/models` | Choose models for this session |
+| `POST` | `/api/datasets` | Upload a file |
+| `GET` | `/api/data/preview` | Paginated table view |
+| `POST` | `/api/chat` | Run a turn, buffered |
+| `WS` | `/ws/chat` | Run a turn, streamed |
+| `GET` | `/api/workspace/files` | Files this session produced |
+| `GET` | `/api/report` | Summary of the session's analyses |
 
 <details>
-<summary>View Request / Payload Sample</summary>
+<summary>WebSocket frames</summary>
 
-**Request:**
+**Client → server**
+```jsonc
+{ "type": "message",  "content": "which day has the highest tips?", "mode": "planning" }
+{ "type": "approval", "approved": true, "tool": "execute_plan", "content": "...", "plan": "..." }
+{ "type": "cancel" }
+{ "type": "ping" }
+```
+
+**Server → client**
+
+`session` · `status` · `step_start` · `step_end` · `reasoning_delta` · `plan_delta` · `content_delta` · `code` · `stdout` · `artifact` · `approval_required` · `warning` · `error` · `final`
+
+Reasoning and the final answer arrive as separate delta streams, so the client can render a live "thinking" panel independently of the answer.
+</details>
+
+## Security
+
+Generated code is untrusted. Three layers apply:
+
+1. **Static analysis** — an AST policy check rejects restricted imports, dynamic execution, interpreter-internals traversal, reflection with computed attribute names, and file access outside the workspace. Malformed code is treated as retryable rather than hostile, so the model gets to fix its own typo.
+2. **Container isolation** — one container per session, with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout. Set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor.
+3. **Scoped filesystem** — each session reads and writes only its own workspace directory.
+
+> [!IMPORTANT]
+> The backend mounts the host Docker socket so it can create sandbox containers. That is host-root-equivalent access. Run Wizard on a trusted machine, and set `API_KEY` and a narrow `CORS_ALLOW_ORIGINS` before exposing it beyond localhost.
+
+Report vulnerabilities privately — see [SECURITY.md](./SECURITY.md).
+
+## Development
+
 ```bash
-curl -X POST "http://localhost:8000/upload" \
-  -H "accept: application/json" \
-  -H "Content-Type: multipart/form-data" \
-  -F "file=@/path/to/global_sales.csv"
+pip install -r requirements.txt
+cd frontend && npm ci && cd ..
+
+pytest                                # 300+ tests; no Docker, model or network needed
+ruff check . --fix && ruff format .
+
+cd frontend && npm run lint && npx tsc --noEmit && npm run build
 ```
 
-**Response:**
-```json
-{
-  "message": "Dataset loaded and semantically cleaned",
-  "filename": "global_sales.csv",
-  "shape": [4582, 12],
-  "columns": ["Date", "Revenue", "Region", "Store ID"],
-  "summary": "This dataset comprises sales metadata across multiple international domains. Detected temporal bounds spanning Q1-Q4. Financial integer detection (Revenue) validated. No unencrypted PII located.",
-  "cleaning_result": "Dropped 12 NaNs. Parsed ISO-8601 strings to datetime arrays."
-}
-```
-</details>
+Tests are organised as `unit/`, `integration/`, `regression/` and `negative/` under `backend/tests/`. The regression suite pins previously-fixed defects and each test explains what broke — worth reading before changing sessions, the database layer or the code guard.
 
-### `<POST> /chat` - Standard Analytical Execution
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](./CLAUDE.md) for an architecture tour.
 
-Triggers the cognitive core. Orchestrates both Manager & Worker LLMs dynamically based on the current mathematical state.
+## Troubleshooting
 
-<details>
-<summary>View Request / Payload Sample</summary>
+**The backend cannot reach Ollama.** On Linux, `host.docker.internal` is not automatic; the compose file adds a `host-gateway` alias for it. If you still cannot connect, set `OLLAMA_BASE_URL=http://172.17.0.1:11434`.
 
-**Request:**
-```json
-{
-  "message": "Compute the moving average of monthly revenue, accounting for seasonal variance, and plot the outliers using an IQR of 1.5.",
-  "mode": "planning",
-  "is_confirmed_plan": false
-}
-```
+**"No sandbox" appears in the header.** Docker is unreachable, so code is running in a restricted in-process interpreter with weaker isolation. Start Docker Desktop and reload.
 
-**Response:**
-```json
-{
-  "response": "The statistical evaluation completed successfully under the council's oversight. I identified 4 notable seasonal outliers located primarily in Q3.",
-  "code": "df['Revenue_MA'] = df['Revenue'].rolling(window=30).mean()\nstats.detect_outliers(df, column='Revenue', iqr_factor=1.5)...",
-  "image": "iVBORw0KGgoAAAANSUhEUgAAAo...",
-  "thought": "<thought>The user requests moving average combined with robust statistical bounds. Wait, IQR 1.5 multiplier is required. I must account for missing weekend aggregations first...</thought>",
-  "status": "completed"
-}
-```
-</details>
+**The model picker is empty.** Nothing is pulled yet, or Ollama is not running. Try `ollama pull qwen2.5-coder:1.5b`, then use the refresh button.
 
----
+**Analysis keeps failing on the same step.** The agent stops after `MAX_CORRECTION_RETRIES`. The generated code and the traceback are in the "Ran N steps" disclosure — that usually shows a column that does not exist or a type that needs converting first.
 
-## 🛠️ Environment Configuration (`.env`)
+**A large upload is slow.** Files over `MAX_INMEMORY_ROWS` are sampled for analysis; the full file stays in the workspace and can be read directly in generated code.
 
-The `docker-compose` stack relies on strict variables injected during runtime.
+## License
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `APP_NAME` | `Wizard AI Agent` | The global namespace identifier for the stack. |
-| `ENV` | `prod` | `prod`, `dev`, or `test`. Modifies logging verbs. |
-| `MODEL_TYPE` | `ollama` | The active engine format (ollama, openai, or custom_gateway). |
-| `MODEL_NAME` | `deepseek-r1:1.5b` | Reasoner / Manager configuration. |
-| `WORKER_MODEL_NAME`| `qwen2.5-coder:1.5b`| Syntax / Runtime code generator constraint. |
-| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434`| The bridge linking the Docker backend to host OSX/Windows/Linux Ollama socket. |
-| `TEMPERATURE` | `0.0` | Determines deterministic output of execution commands. |
-| `API_PROVIDER` | `ollama` | Choice of model engine. Can be: `ollama` (default local), `openai`, or `custom_gateway`. |
-| `GATEWAY_API_URL` | `""` | Endpoint address of custom OpenAI-compatible cloud/VPC inference gateway. |
-| `GATEWAY_API_KEY` | `""` | Security authorization credential for the custom cloud gateway. |
-| `PLOT_FORMAT` | `html` | Visual graphic formats generated: `png` (base64) or `html` (interactive Plotly maps). |
-| `SANDBOX_DOCKER_RUNTIME`| `""` | Sandbox runtime engine parameter (e.g., `runsc` for gVisor virtualization). |
-
----
-
-## 🐛 Troubleshooting & FAQ
-
-**Q: The backend container fails to start because it cannot connect to Ollama.**
-A: Ensure you have pulled the models via `ollama pull deepseek-r1:1.5b`. If you are on Linux, you may need to explicitly configure `OLLAMA_BASE_URL=http://172.17.0.1:11434` or use the `--network host` capability, as `host.docker.internal` primarily maps to Windows & macOS Docker environments.
-
-**Q: "No Dataset Loaded" error when chatting?**
-A: Due to REST architectures being stateless, our server persists single-user buffers via server globals (`state["df"]`). You must call `<POST> /upload` from the UI or API before submitting queries to `<POST> /chat`.
-
-**Q: The generated code runs into infinite self-correction loops.**
-A: In `backend/src/core/agent/flow.py`, `max_retries` is capped at 2. If the prompt creates an unsolvable computational matrix (e.g. comparing incompatible matrix shapes), the agent will self-terminate after 2 correction attempts to prevent infinite API polling limits. Provide a cleaner dataset.
-
----
-
-## 💻 Contribution Guidelines
-
-We accept PRs for `frontend` and `backend` separately. All PRs must pass the `pytest` workflows and TS compiling chains defined in `.github/workflows/`.
-
-1. Please fork the repo and create your branch from `master`.
-2. Format your `FastAPI` code utilizing standard `black` formats.
-3. Keep `Next.js` components strictly utilizing `TailwindCSS v4` class layers; please refrain from importing heavyweight generic UI libraries unnecessarily to protect bundle sizes.
-4. Open your PR and link it to an existing feature request issue.
-
----
-
-## 📜 License
-
-This codebase is licensed heavily under the constraints of the [BSD 3-Clause License](./LICENSE). It provides frictionless allowance for modification, commercial use, and private deployment.
+[BSD 3-Clause](./LICENSE).

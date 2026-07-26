@@ -9,16 +9,22 @@ on:
 permissions:
   contents: read
 
-jobs:
-  # ------------------------------------------------------------------
-  # Backend Quality Assurance (Python)
-  # ------------------------------------------------------------------
-  backend-qa:
-    runs-on: ubuntu-latest
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-    defaults:
-      run:
-        working-directory: ./backend
+env:
+  # The runner has no Docker-in-Docker sandbox and no model server, and it must
+  # not download a sentence-transformer on every run. The suite is designed to
+  # pass with all three unavailable.
+  ENV: test
+  SANDBOX_ENABLED: "false"
+  EMBEDDINGS_FORCE_FALLBACK: "true"
+
+jobs:
+  backend:
+    name: Backend (lint + tests)
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
@@ -29,41 +35,30 @@ jobs:
         python-version: "3.11"
         cache: 'pip'
 
-    - name: Install Dependencies
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Install from root requirements since backend uses src layout
-        pip install -r ../requirements.txt
-        # Install dev tools
-        pip install pytest pytest-asyncio pytest-cov check-manifest ruff mypy
+        pip install -r requirements.txt
+        pip install ruff pytest pytest-asyncio pytest-cov
 
-    - name: Lint with Ruff
+    - name: Lint
       run: |
-        # Stop the build if there are Python syntax errors or undefined names
-        ruff check . --select=E9,F63,F7,F82 --target-version=py311
-        # Default linting (exit non-zero on warnings)
         ruff check .
+        ruff format --check .
 
-    # - name: Type Check with Mypy
-    #   run: mypy src/ --ignore-missing-imports
+    - name: Test
+      # Run from the repo root: pyproject sets testpaths and pythonpath.
+      run: pytest --cov=backend/src --cov-report=xml --cov-report=term-missing
 
-    - name: Run Tests
-      # Run simulation tests to verify E2E flow
-      run: |
-        export PYTHONPATH=$PYTHONPATH:$(pwd)
-        pytest tests/ -v --cov=src --cov-report=xml
-
-    - name: Upload coverage reports to Codecov
+    - name: Upload coverage
       uses: codecov/codecov-action@v4
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        file: ./backend/coverage.xml
+        file: ./coverage.xml
         fail_ci_if_error: false
 
-  # ------------------------------------------------------------------
-  # Frontend Quality Assurance (Next.js)
-  # ------------------------------------------------------------------
-  frontend-qa:
+  frontend:
+    name: Frontend (lint + types + build)
     runs-on: ubuntu-latest
 
     defaults:
@@ -80,20 +75,21 @@ jobs:
         cache: 'npm'
         cache-dependency-path: frontend/package-lock.json
 
-    - name: Install Dependencies
+    - name: Install dependencies
       run: npm ci
 
-    - name: Linting
+    - name: Lint
       run: npm run lint
 
-    - name: Build Check
+    - name: Type check
+      run: npx tsc --noEmit
+
+    - name: Build
       run: npm run build
 
-  # ------------------------------------------------------------------
-  # Docker Build Verification
-  # ------------------------------------------------------------------
-  docker-build:
-    needs: [backend-qa, frontend-qa]
+  docker:
+    name: Docker images build
+    needs: [backend, frontend]
     runs-on: ubuntu-latest
 
     steps:
@@ -102,18 +98,32 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build Backend Image
+    - name: Build backend image
       uses: docker/build-push-action@v5
       with:
         context: .
         file: Dockerfile
         push: false
-        tags: wizard-backend:latest
+        tags: wizard-backend:ci
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
-    - name: Build Frontend Image
+    - name: Build sandbox image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend/docker
+        file: backend/docker/Dockerfile
+        push: false
+        tags: wizard-sandbox:ci
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build frontend image
       uses: docker/build-push-action@v5
       with:
         context: ./frontend
         file: frontend/Dockerfile
         push: false
-        tags: wizard-frontend:latest
+        tags: wizard-frontend:ci
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

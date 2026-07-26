@@ -71,3 +71,7 @@ data/
 
 # Workspace cache & temporary datasets
 workspace/
+
+# TypeScript incremental build cache
+frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo

@@ -1,113 +1,135 @@
 # Contributing to Wizard w1 🧙‍♂️
 
-First off, thank you for considering contributing to **Wizard w1**! It is people like you who make the open-source community an amazing place to learn, inspire, and create.
-
-This guide provides the necessary information to get you started and ensures your contributions meet our standards for code quality, security, and architectural integrity within our **Pure Ollama Architecture**.
+Thanks for considering a contribution. This guide covers what you need to know to get productive quickly and to get a PR merged without surprises.
 
 ---
 
-## 🏗️ Architectural Core: Pure Ollama Multi-Agent System (MAS)
-Wizard w1 operates on a decoupled, production-grade **Multi-Agent Architecture** running natively through Ollama. When contributing, keep this execution flow in mind:
+## Architecture in one minute
 
-1.  **Scientific Agent (Manager - DeepSeek-R1)**: Handles deterministic reasoning, analytical planning, web-crawling for context, and evaluation generation.
-2.  **Code Generator (Worker - Qwen2.5-Coder)**: Exclusively translates manager blueprints into AST-compliant Pandas and SciPy expressions.
-3.  **The Council (Adjudication)**: A suite of specialized heuristic checks that grade the execution before returning the payload to the frontend.
-4.  **Hardened Sandbox (Docker)**: All code is isolated in zero-trust Docker containers prior to execution to prevent execution bleed.
+Wizard is a **local-first** agent. Read [CLAUDE.md](./CLAUDE.md) for the full tour; the short version:
+
+1. **Manager model** — reasons about the request and produces a plan, then writes the final answer from the real execution output.
+2. **Worker model** — turns the plan into Python. Nothing else.
+3. **Code guard** — one AST policy check, in [`backend/src/core/security/code_guard.py`](backend/src/core/security/code_guard.py). It is the only authority on whether generated code may run.
+4. **Sandbox** — one Docker container per session, created lazily.
+
+Two rules that are easy to violate by accident:
+
+- **There is one workflow implementation.** `AnalysisOrchestrator.run` is it. The REST and WebSocket handlers only translate events into frames. If you find yourself adding step-sequencing logic to a transport, it belongs in the orchestrator — that split is exactly what drifted before and caused features to work on one path only.
+- **Everything degrades.** No Docker, no embedding model, no Redis and no model server are all supported states. New dependencies must be optional or gracefully absent.
 
 > [!IMPORTANT]
-> The project architecture is strictly **Local-First & Pure Ollama (v2.3.0+)**. Avoid introducing cloud-based dependencies (e.g., OpenAI bindings) or heavy local mapping tools like `torch` or `transformers` directly into `backend/`.
+> Keep the local-first default intact. Cloud providers are supported through `API_PROVIDER`, but nothing may *require* an external service to run.
 
 ---
 
-## 🚀 Environment Setup
+## Setup
 
-### Prerequisites
-*   **Node.js 20+** (LTS) & **Python 3.11+**
-*   **Docker Desktop** (with minimum 8GB+ RAM allocated for the worker environments)
-*   **Ollama Daemon** installed and running on your host machine natively.
+**Prerequisites:** Python 3.11+, Node.js 20+, Docker Desktop, Ollama.
 
-### 1. Repository Setup
 ```bash
-# Fork the repo on GitHub, then clone your fork:
 git clone https://github.com/YOUR_USERNAME/Wizard-w1.git
 cd Wizard-w1
 git remote add upstream https://github.com/Aniket-a14/Wizard-w1.git
-```
 
-### 2. Model Hydration (Host Machine)
-We rely entirely on standard Ollama endpoints. Pull the brains locally:
-```bash
 ollama pull deepseek-r1:1.5b
 ollama pull qwen2.5-coder:1.5b
-```
-
-### 3. Backend Installation (Python API)
-When developing the backend without Docker (for direct debugging):
-```bash
-cd backend
-python -m venv .venv
-
-# Activate:
-# Unix/MacOS: source .venv/bin/activate
-# Windows: .venv\Scripts\Activate.ps1
 
 pip install -r requirements.txt
+cd frontend && npm ci && cd ..
+
+pre-commit install --hook-type commit-msg   # conventional commits are enforced
 ```
 
-### 4. Frontend Installation (Next.js Client)
+Copy [backend/.env.example](backend/.env.example) to `backend/.env` if you want to change defaults; the app runs without it.
+
+---
+
+## Running things
+
 ```bash
-cd ../frontend
-npm ci
+# Backend (from backend/)
+uvicorn src.api.api:app --reload --port 8000
+
+# Frontend (from frontend/)
+npm run dev
+
+# CLI, same stack
+python backend/main.py path/to/data.csv
 ```
 
 ---
 
-## 🛠️ Development Cycle
+## Quality gates
 
-### Branching Strategy
-We follow a disciplined Git Flow. Please name your branches descriptively:
-*   `feature/` (e.g., `feature/custom-visualization-charts`)
-*   `fix/` (e.g., `fix/docker-socket-binding`)
-*   `docs/` (e.g., `docs/update-rest-api`)
-*   `refactor/` (e.g., `refactor/abstract-guardrails`)
+These are exactly what CI runs. Run them before pushing.
 
-### Standards & Quality
-Before committing, ensure your code passes our CI gates:
+**Backend**
+```bash
+ruff check . --fix
+ruff format .
+pytest                    # from the repo root
+```
 
-**Backend (Python - FastAPI)**
-*   **Linting**: We exclusively use **Ruff**. Run `ruff check . --fix` and `ruff format .`.
-*   **Types**: Type execution flows defensively. Rely on Pydantic `BaseModel` for all REST transfers.
-*   **Tests**: Maintain test coverage. Run `pytest` locally. Mock Ollama responses when testing AST parsing logic.
-
-**Frontend (React/TypeScript - Next.js)**
-*   **Linting**: `npm run lint`
-*   **Type Check**: `npx tsc --noEmit`
-*   **Styles**: Strictly `TailwindCSS v4`. Do not introduce large UI libraries without prior RFC approval.
-*   **Build**: Ensure `npm run build` concludes completely without SC / CSR warnings.
+**Frontend**
+```bash
+cd frontend
+npm run lint              # errors only; warnings are allowed
+npx tsc --noEmit
+npm run build
+```
 
 ---
 
-## 📝 Pull Request Process
+## Tests
 
-1.  **Sync**: Ensure your fork is up-to-date with `upstream/master`.
-2.  **Commit Messages**: We enforce conventional commits (`feat:`, `fix:`, `chore:`, etc.).
-3.  **PR Template**: Fill out the provided Pull Request Template completely.
-4.  **Local Verification**: If modifying the Glassmorphic UI, attach screenshots or a short visual GIF in your PR.
-5.  **Review**: At least one core maintainer must approve the PR. All Github Actions (CodeQL, Linting, Testing) must pass `green`.
+Four layers under `backend/tests/`:
+
+| Layer | What belongs there |
+|-------|--------------------|
+| `unit/` | One module, no I/O |
+| `integration/` | Real app, real SQLite, stubbed LLM |
+| `regression/` | A specific past defect, with a docstring saying what broke |
+| `negative/` | Hostile, malformed and degenerate input |
+
+**The suite must never need Docker, a model server or the network.** `backend/tests/conftest.py` pins `SANDBOX_ENABLED=false` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is built at import time. If you add a test that needs a real service, mark it `@pytest.mark.requires_docker` or `@pytest.mark.requires_llm`.
+
+When you fix a bug, add a regression test whose docstring explains the original failure. Anyone can write `assert x == y`; the value is in recording why it was ever `z`.
 
 ---
 
-## 🛡️ Security Policy
-If you discover a security vulnerability, please **do not open a public issue.** See our detailed [SECURITY.md](./SECURITY.md) guidelines. We prioritize patches for:
-*   Docker Sandbox escape vectors.
-*   AST / `eval()` logic bypassing.
-*   FastAPI endpoint injection.
+## Making changes
+
+**Branches:** `feature/…`, `fix/…`, `docs/…`, `refactor/…`, `test/…`
+
+**Commits:** conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`). commitlint runs as a pre-commit hook and also gates PRs.
+
+**Style:**
+- Python — Ruff is the only linter and formatter. Line length is 120; `E501` is off because the formatter owns wrapping.
+- TypeScript — strict mode, no `any`. `react-hooks/set-state-in-effect` is an **error**: do not call `setState` synchronously in an effect body, and do not silence the rule.
+- Tailwind v4 only, through the design tokens in `globals.css`. Do not hardcode colours — everything must work in light and dark.
+
+**Comments** should explain *why*, especially where the obvious approach was rejected. Several modules carry short notes about a previous implementation and the failure it caused; keep that habit rather than deleting the context.
 
 ---
 
-## 🌈 Community
+## Pull requests
 
-*   **Issues**: Search existing issues before opening a new one. Provide reproducible error states.
-*   **Discussions**: Use the GitHub Discussions tab for "RFC" (Request for Comments) or architectural questions.
+1. Sync with `upstream/master`.
+2. Make sure all gates above pass locally.
+3. Fill in the PR template. For UI changes, attach a screenshot or a short clip.
+4. One maintainer approval plus green CI is required to merge.
 
-Thank you for contributing to the orchestration layer of the future! 🧙‍♂️🦾
+Touching security-sensitive code — the code guard, the sandbox, session handling, or anything that executes generated code — needs negative tests demonstrating the new boundary holds.
+
+---
+
+## Reporting security issues
+
+Please do **not** open a public issue. See [SECURITY.md](./SECURITY.md). Priority areas: sandbox escape, code-guard bypass, cross-session data access, and endpoint injection.
+
+---
+
+## Community
+
+Search existing issues before opening a new one, and include a reproducible case. Use GitHub Discussions for design questions and RFCs.
