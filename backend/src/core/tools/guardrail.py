@@ -1,50 +1,35 @@
+"""Backwards-compatible facade over :mod:`src.core.security.code_guard`.
+
+The project previously implemented two disagreeing guards: a regex denylist here
+and an AST walk inlined in the agent. Both now delegate to a single AST-based
+analyzer. This module is kept so existing imports and the ``(is_safe, reason)``
+contract continue to work.
+"""
+
+from __future__ import annotations
+
 import re
 
-from ...utils.logging import logger
+from src.core.security.code_guard import CodeGuard
+from src.utils.logging import logger
 
 
 class GuardrailAgent:
-    """
-    Scans generated code for security risks, malformed syntax,
-    and alignment with user safety policies.
-    """
-
-    PROHIBITED_PATTERNS = [
-        (r"\bos\b", "OS module access"),
-        (r"\bsubprocess\b", "Subprocess execution"),
-        (r"__import__", "Dynamic import execution"),
-        (r"importlib", "Dynamic import execution"),
-        (r"eval\(", "Dangerous eval() call"),
-        (r"exec\(", "Dangerous exec() call"),
-        (r"socket\.", "Network socket access"),
-        (r"requests\.", "Network request attempt"),
-        # Note: open() is NOT blocked here because the AST guardrail in
-        # langgraph_agent.py handles it with path-traversal detection,
-        # allowing legitimate workspace file access while blocking escapes.
-    ]
+    """Thin adapter preserving the historical tuple-returning API."""
 
     @classmethod
     def scan(cls, code: str) -> tuple[bool, str]:
-        """
-        Scans code and returns (is_safe, reason).
-        """
-        for pattern, reason in cls.PROHIBITED_PATTERNS:
-            if re.search(pattern, code):
-                logger.warning("Guardrail Triggered", reason=reason)
-                return False, f"Guardrail Violation: {reason} is prohibited."
-
-        # Check for empty code
-        if not code.strip():
-            return False, "Code generation appeared to fail (empty response)."
-
+        verdict = CodeGuard.scan(code)
+        if not verdict.ok:
+            logger.warning("Guardrail triggered", reason=verdict.reason, syntax_error=verdict.syntax_error)
+            if verdict.syntax_error:
+                return False, verdict.reason
+            return False, f"Guardrail Violation: {verdict.reason}"
         return True, "Safe"
 
     @classmethod
     def audit_scientific_alignment(cls, plan: str, code: str) -> tuple[bool, str]:
-        """
-        Verifies if the code actually attempts to execute the plan.
-        """
-        # Basic keyword alignment
+        """Heuristic check that the code plausibly implements the plan."""
         plan_keywords = re.findall(r"\b\w{4,}\b", plan.lower())
         code_lower = code.lower()
 

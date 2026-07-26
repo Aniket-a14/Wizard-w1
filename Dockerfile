@@ -1,37 +1,37 @@
-# Base Image: Lightweight Python
-FROM python:3.10-slim
+# Backend API image.
+#
+# Python 3.11 to match `target-version` in pyproject.toml and the version CI
+# tests against; the previous 3.10 base meant the deployed runtime was never the
+# runtime the test suite exercised.
+FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Environment Variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
-  PYTHONUNBUFFERED=1 \
-  ENV=prod
+    PYTHONUNBUFFERED=1 \
+    MPLBACKEND=Agg \
+    ENV=prod
 
-# Install system dependencies (for matplotlib/scipy if needed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  build-essential curl \
-  && rm -rf /var/lib/apt/lists/*
+    build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY backend/ .
 
-# Create non-root user and set permissions
+# Present for deployments that do NOT mount the Docker socket. docker-compose
+# overrides this to root, because talking to the host daemon needs socket
+# access — see the comment there.
 RUN adduser --disabled-password --gecos '' appuser && \
+    mkdir -p /app/data /app/logs && \
     chown -R appuser:appuser /app
 USER appuser
 
-# Health Check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health || exit 1
 
-# Expose port
 EXPOSE 8000
 
-# Command
 CMD ["uvicorn", "src.api.api:app", "--host", "0.0.0.0", "--port", "8000"]

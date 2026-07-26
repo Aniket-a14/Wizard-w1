@@ -1,101 +1,61 @@
-import json
+"""Store of confirmed-good task/code pairs used as few-shot examples."""
 
-import numpy as np
+from __future__ import annotations
+
+import json
+import os
 
 from src.config import settings
 from src.core.database import db_mgr
+from src.core.embeddings import embedding_service
+from src.utils.logging import logger
 
 
 class FeedbackStore:
-    """
-    Manages successful examples (few-shots) utilizing SQLite database storage
-    with semantic vector cosine similarity matching.
-    """
+    """SQLite-backed few-shot memory with semantic retrieval."""
 
-    def __init__(self, filename=None):
-        # Kept for backward compatibility but operations are offloaded to SQLite
+    _legacy_synced = False
+
+    def __init__(self, filename: str | None = None):
         self.filename = filename or settings.FEEDBACK_FILE
-        self._sync_legacy_file_to_db()
+        # The legacy JSON import only needs to happen once per process; the
+        # original ran it in every constructor, and three different components
+        # construct this class.
+        if not FeedbackStore._legacy_synced:
+            self._sync_legacy_file()
+            FeedbackStore._legacy_synced = True
 
-    def _sync_legacy_file_to_db(self):
-        """Loads legacy JSON feedbacks into the SQLite database on startup if any exist."""
-        import os
+    def _sync_legacy_file(self):
+        if not self.filename or not os.path.exists(self.filename):
+            return
+        try:
+            with open(self.filename, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            for entry in payload.get("successful_examples", []):
+                task, code = entry.get("task", ""), entry.get("code", "")
+                if task and code:
+                    db_mgr.save_feedback(task, code)
+            logger.info("Imported legacy feedback file", path=self.filename)
+        except Exception as exc:
+            logger.debug("No legacy feedback imported", error=str(exc))
 
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, encoding="utf-8") as f:
-                    data = json.load(f)
-                successful = data.get("successful_examples", [])
-                for entry in successful:
-                    task = entry.get("task", "")
-                    code = entry.get("code", "")
-                    if task and code:
-                        db_mgr.save_feedback(task, code)
-            except Exception:
-                pass
-
+    # ------------------------------------------------------------------ #
     def add_example(self, example: dict):
-        """Add a successful example to the database."""
-        task = example.get("task", "")
-        code = example.get("code", "")
-        if task and code:
-            try:
-                from src.core.semantic_cache import semantic_cache
-
-                model = semantic_cache._get_model()
-                embedding = model.encode(task.strip().lower()) if model else None
-            except Exception:
-                embedding = None
-            db_mgr.save_feedback(task, code, embedding)
+        task, code = example.get("task", ""), example.get("code", "")
+        if not task or not code:
+            return
+        embedding = None
+        try:
+            embedding = embedding_service.encode(task.strip().lower())
+        except Exception:
+            pass
+        db_mgr.save_feedback(task, code, embedding)
 
     def get_similar_examples(self, query: str, limit: int = 2) -> list[dict]:
-        """Retrieves successful examples matching the query semantically from SQLite."""
-        feedbacks = db_mgr.get_feedbacks()
-        if not feedbacks:
-            return []
+        """Highest-scoring stored examples for ``query``."""
+        from src.core.rag.retriever import context_retriever
 
-        try:
-            from src.core.semantic_cache import semantic_cache
+        return context_retriever.retrieve_examples(query, limit=limit)
 
-            model = semantic_cache._get_model()
-            if model:
-                query_vector = model.encode(query.strip().lower())
-                scored_examples = []
-
-                for fb in feedbacks:
-                    task = fb["task"]
-                    code = fb["code"]
-                    task_vector = fb.get("embedding")
-
-                    if task_vector is None or len(task_vector) == 0:
-                        task_vector = model.encode(task.strip().lower())
-                        # Save embedding back
-                        db_mgr.save_feedback(task, code, task_vector)
-
-                    dot_product = float(np.dot(query_vector, task_vector))
-                    norm_q = float(np.linalg.norm(query_vector))
-                    norm_t = float(np.linalg.norm(task_vector))
-                    sim = dot_product / (norm_q * norm_t) if norm_q > 0 and norm_t > 0 else 0.0
-                    scored_examples.append((sim, {"task": task, "code": code}))
-
-                scored_examples.sort(key=lambda x: x[0], reverse=True)
-                return [entry for sim, entry in scored_examples[:limit]]
-        except Exception:
-            pass  # Fallback to keyword matching below
-
-        query_terms = query.lower().split()
-        scored_examples = []
-
-        for fb in feedbacks:
-            score = 0
-            task = fb["task"]
-            code = fb["code"]
-            content = task.lower()
-            for term in query_terms:
-                if term in content:
-                    score += 1
-            if score > 0:
-                scored_examples.append((score, {"task": task, "code": code}))
-
-        scored_examples.sort(key=lambda x: x[0], reverse=True)
-        return [entry for score, entry in scored_examples[:limit]]
+    def all_examples(self) -> list[dict]:
+        return [{"task": entry["task"], "code": entry["code"]} for entry in db_mgr.get_feedbacks()]

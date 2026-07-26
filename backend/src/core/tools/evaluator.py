@@ -1,73 +1,81 @@
+"""Heuristic scoring of an execution result.
+
+The error check now looks for the marker the executor actually emits rather than
+the substring ``"Error"``, which matched any output containing words like
+"Errors found: 0" or a column named ``error_rate`` and silently halved the score.
+"""
+
+from __future__ import annotations
+
+import re
 from typing import Any
 
 
+ERROR_MARKERS = ("Error executing code:", "Traceback (most recent call last)")
+
+ANALYTICAL_KEYWORDS = frozenset(
+    {
+        "test",
+        "correlation",
+        "regression",
+        "model",
+        "hypothesis",
+        "distribution",
+        "stats",
+        "statistical",
+        "significance",
+        "predict",
+    }
+)
+
+RIGOUR_KEYWORDS = ("mean", "median", "distribution", "variance", "std", "p-value", "significant", "confidence")
+
+PROHIBITED_CALLS = ("exec(", "eval(", "os.system", "subprocess", "__import__")
+
+
 class Evaluator:
-    """
-    Evaluates agent performance against ground truth and scientific best practices.
-    Implements 'AI-Assisted Judges' pattern.
-    """
+    """Cheap, deterministic quality signal recorded alongside each interaction."""
 
     @staticmethod
-    def score_execution(result: str, expected_snippet: str = None, instruction: str = None) -> dict[str, Any]:
-        """
-        Heuristic-based scoring of an execution result.
-        """
+    def score_execution(
+        result: str,
+        expected_snippet: str | None = None,
+        instruction: str | None = None,
+    ) -> dict[str, Any]:
         score = 100
-        deductions = []
+        deductions: list[str] = []
+        text = result or ""
 
-        # 1. Error Check
-        if "Error" in result:
+        if any(marker in text for marker in ERROR_MARKERS):
             score -= 50
             deductions.append("Execution error detected.")
 
-        # 2. Content Check
-        if expected_snippet and expected_snippet.lower() not in result.lower():
+        if expected_snippet and expected_snippet.lower() not in text.lower():
             score -= 30
-            deductions.append(f"Expected snippet '{expected_snippet}' missing from output.")
+            deductions.append(f"Expected content '{expected_snippet}' was not present.")
 
-        # 3. Scientific Rigour Check — only applies when query involves analysis/statistics
-        if instruction:
-            analysis_keywords = {
-                "test",
-                "correlation",
-                "regression",
-                "model",
-                "hypothesis",
-                "distribution",
-                "stats",
-                "statistical",
-                "significance",
-                "predict",
-            }
-            is_analytical = any(kw in instruction.lower() for kw in analysis_keywords)
-        else:
-            is_analytical = True  # Default to checking if no instruction provided
-
+        is_analytical = any(keyword in instruction.lower() for keyword in ANALYTICAL_KEYWORDS) if instruction else True
         if is_analytical:
-            scientific_keywords = ["mean", "distribution", "variance", "p-value", "significant"]
-            keyword_matches = sum(1 for kw in scientific_keywords if kw in result.lower())
-            if keyword_matches == 0:
+            lowered = text.lower()
+            if not any(keyword in lowered for keyword in RIGOUR_KEYWORDS):
                 score -= 10
-                deductions.append("Low scientific terminology in response.")
+                deductions.append("Result reports no summary statistics.")
 
-        return {"score": max(0, score), "deductions": deductions, "status": "PASS" if score >= 70 else "FAIL"}
+        score = max(0, score)
+        return {"score": score, "deductions": deductions, "status": "PASS" if score >= 70 else "FAIL"}
 
     @staticmethod
     def evaluate_code_quality(code: str) -> dict[str, Any]:
-        """
-        Checks code for best practices (imports, comments, safety).
-        """
+        warnings: list[str] = []
         is_clean = True
-        warnings = []
 
-        prohibited = ["exec(", "eval(", "os.system", "subprocess"]
-        for p in prohibited:
-            if p in code:
+        for call in PROHIBITED_CALLS:
+            if call in code:
                 is_clean = False
-                warnings.append(f"Security Warning: Prohibited call '{p}' detected.")
+                warnings.append(f"Prohibited call '{call}' detected.")
 
-        if "import" not in code:
-            warnings.append("No imports detected (might be incomplete).")
+        if code.strip() and not re.search(r"^\s*(import|from)\s", code, re.MULTILINE):
+            warnings.append("No imports detected; the snippet may be incomplete.")
 
         return {
             "is_clean": is_clean,

@@ -1,105 +1,116 @@
-import os
+"""Command-line interface.
+
+A thin REPL over the same session + orchestrator stack the API uses, so CLI
+behaviour cannot drift from the web behaviour.
+"""
+
+from __future__ import annotations
+
+import argparse
 import sys
-import warnings
-
-import pandas as pd
-from src.config import settings
-
-# Modern Imports (Src Architecture)
-from src.core.agent.flow import science_agent
-from src.core.feedback_store import FeedbackStore
+from pathlib import Path
 
 
-# Suppress Pydantic V1 compatibility warnings in Python 3.14+
-warnings.filterwarnings("ignore", message=".*Pydantic V1 functionality isn't compatible with Python 3.14.*")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Ensure backend directory is in python path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from src.config import settings  # noqa: E402
+from src.core.agent.flow import science_agent  # noqa: E402
+from src.core.ingest.loader import DatasetLoader  # noqa: E402
+from src.core.session import session_manager  # noqa: E402
+from src.core.tools.catalog import CatalogEngine  # noqa: E402
 
 
-def load_dataset_local(file_path: str) -> pd.DataFrame:
-    """Helper to load dataset locally for CLI."""
-    if not os.path.exists(file_path):
+def load_dataset_local(file_path: str):
+    """Loads a dataset from disk using the same loader the API uses."""
+    path = Path(file_path)
+    if not path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
-    df = pd.read_csv(file_path)
-    if df.empty:
-        raise ValueError("Dataset is empty")
-    return df
+    return DatasetLoader.load(path)
 
 
-def main():
+def run_repl(dataset_path: str, mode: str) -> int:
     try:
-        print(f"\nHi! I'm {settings.APP_NAME}, your data analysis assistant (CLI Mode).")
-        print(f"Environment: {settings.ENV}")
+        result = load_dataset_local(dataset_path)
+    except Exception as exc:
+        print(f"Could not load the dataset: {exc}", file=sys.stderr)
+        return 1
 
-        file_path = input("Enter dataset file path (CSV): ")
+    session = session_manager.create()
+    session.add_dataset(
+        name=Path(dataset_path).name,
+        df=result.df,
+        catalog=CatalogEngine.analyze(result.df),
+        profile=result.profile.to_dict(),
+        source_format=result.source_format,
+    )
 
-        try:
-            df = load_dataset_local(file_path)
-        except Exception as e:
-            print(f"Error loading file: {e}")
-            return
+    print(f"\n{settings.APP_NAME} — CLI ({settings.ENV})")
+    print(f"Loaded {len(result.df):,} rows x {len(result.df.columns)} columns from {dataset_path}")
+    for warning in result.warnings:
+        print(f"  note: {warning}")
+    print("Columns:", ", ".join(map(str, result.df.columns[:20])))
+    print("\nType a question, 'help' for commands, or 'exit' to quit.\n")
 
-        feedback_store = FeedbackStore()
-
-        print("\nDataset loaded successfully!")
-        print(f"Shape: {df.shape}")
-        print("\nColumns:")
-        print(df.columns.tolist())
-        print("\nType 'help' for available commands or 'exit' to quit.")
-
+    try:
         while True:
-            instruction = input("\nBot: What data analysis task can I help you with? ").strip()
-            if instruction.lower() == "exit":
+            instruction = input("you > ").strip()
+            if not instruction:
+                continue
+            if instruction.lower() in {"exit", "quit"}:
                 break
-            elif instruction.lower() == "help":
-                print("\nAvailable commands:")
-                print("- exit: Quit the program")
-                print("- help: Show this help message")
+            if instruction.lower() == "help":
+                print("  exit          quit\n  columns       list columns\n  reset         clear sandbox variables")
+                continue
+            if instruction.lower() == "columns":
+                print(", ".join(map(str, result.df.columns)))
+                continue
+            if instruction.lower() == "reset":
+                session.executor.reset()
+                print("Sandbox namespace cleared.")
                 continue
 
-            print("\nProcessing your request...")
+            session.append_message("user", instruction)
+            print("\nthinking...\n")
+            answer, code, _image, thought, status = science_agent.run(instruction, session, mode=mode)
 
-            try:
-                # Synchronous execution via Science Agent
-                result, code, image, thought, status = science_agent.run(instruction, df)
-
-                print("\nResult:", result)
-                if thought:
-                    print("Thought:", thought)
-                if image:
-                    print("(Chart generated and saved)")
-
-                # Feedback Loop
-                while True:
-                    feedback = input("\nWas this result correct? (y/n): ").lower()
-                    if feedback in ["y", "yes", "n", "no"]:
-                        break
-                    print("Please enter 'y' or 'n'")
-
-                if feedback in ["y", "yes"]:
-                    example = {"task": instruction, "code": code}
-                    feedback_store.add_example(example)
-                    print("Great! Added to successful examples.")
+            if thought:
+                print(f"[reasoning] {thought}\n")
+            if status == "waiting_confirmation":
+                print(f"[plan]\n{answer}\n")
+                if input("Run this plan? [y/N] ").strip().lower() in {"y", "yes"}:
+                    answer, code, _image, _thought, _status = science_agent.run(
+                        instruction, session, mode="fast", approved_plan=answer
+                    )
                 else:
-                    correct_code = input("What would be the correct code? (press enter to skip): ")
-                    if correct_code.strip():
-                        correct_example = {"task": instruction, "code": correct_code}
-                        feedback_store.add_example(correct_example)
-                    print("Thank you for the feedback!")
+                    print("Cancelled.\n")
+                    continue
 
-            except Exception as e:
-                print(f"Error executing task: {e}")
-                continue
+            if code:
+                print(f"[code]\n{code}\n")
+            print(f"wizard > {answer}\n")
+    except (KeyboardInterrupt, EOFError):
+        print("\nInterrupted.")
+    finally:
+        session_manager.drop(session.id)
+    return 0
 
-    except KeyboardInterrupt:
-        print("\nProgram terminated by user.")
-    except Exception as e:
-        print(f"\nAn error occurred: {e}")
-        import traceback
 
-        traceback.print_exc()
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Wizard w1 data analysis agent (CLI).")
+    parser.add_argument("dataset", nargs="?", help="Path to a CSV/Excel/JSON/Parquet file.")
+    parser.add_argument(
+        "--mode",
+        choices=["planning", "fast"],
+        default="fast",
+        help="'planning' asks for confirmation before executing (default: fast).",
+    )
+    args = parser.parse_args()
+
+    dataset_path = args.dataset or input("Dataset path: ").strip()
+    if not dataset_path:
+        parser.error("A dataset path is required.")
+    return run_repl(dataset_path, args.mode)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

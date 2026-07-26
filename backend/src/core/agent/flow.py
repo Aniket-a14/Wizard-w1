@@ -1,105 +1,134 @@
+"""High-level entry points that wrap the async orchestrator.
+
+Kept so the CLI and the non-streaming REST path have a simple surface, and so
+existing imports of ``science_agent`` continue to resolve.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING, Any
+
 import pandas as pd
 
-from src.core.agent.agent import DataAnalysisAgent
+from src.core.agent.events import EventCollector
+from src.core.agent.orchestrator import RunResult, orchestrator
+from src.core.execution import ExecutionResult
+from src.core.llm import LLMRole, llm_provider
 from src.core.prompts import create_cleaning_prompt
 from src.core.tools.catalog import CatalogEngine
 from src.utils.logging import logger, trace_agent
 
 
-class ScientificAgent:
-    """
-    Orchestrates the Planning -> Execution -> Critique loop.
-    "Level 100" Data Scientist behavior.
-    """
+if TYPE_CHECKING:
+    from src.core.session import Session
 
-    def __init__(self):
-        self.execution_agent = DataAnalysisAgent()
-        self.catalog = None
+
+def _run_sync(coro):
+    """Runs a coroutine from synchronous code.
+
+    Only valid when there is no loop already running on this thread, which is the
+    case for the CLI and for handlers dispatched through ``asyncio.to_thread``.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("_run_sync called from inside a running event loop; await the coroutine instead.")
+
+
+class ScientificAgent:
+    """Synchronous façade over :class:`AnalysisOrchestrator`."""
 
     @trace_agent("ScientificAgent")
     def run(
         self,
         instruction: str,
-        df: pd.DataFrame,
+        session: Session,
         mode: str = "planning",
-        is_confirmed_plan: bool = False,
-        catalog: dict = None,
+        approved_plan: str | None = None,
     ) -> tuple[str, str, str | None, str | None, str]:
-        """
-        Adapts the original interface to call the new LangGraph-based workflow.
-        Returns: (Result, Code, Image, Thought, Status)
-        """
-        from src.core.agent.langgraph_agent import WorkflowState, langgraph_agent
-
-        # Initialize workflow state
-        state = WorkflowState(instruction, df, mode=mode, catalog=catalog)
-
-        if is_confirmed_plan:
-            # The instruction passed in is the approved plan
-            state.plan = instruction
-            state.status = "executing"
-        else:
-            state.status = "init"
-
-        import asyncio
-
-        final_state = asyncio.run(langgraph_agent.execute_workflow(state))
-
-        # Map statuses
-        ui_status = "completed"
-        if final_state.status == "waiting_approval":
-            ui_status = "waiting_confirmation"
-
-        return (
-            final_state.result or final_state.plan,
-            final_state.code,
-            final_state.image,
-            final_state.thought,
-            ui_status,
+        """Legacy 5-tuple interface: ``(result, code, image, thought, status)``."""
+        collector = EventCollector()
+        result: RunResult = _run_sync(
+            orchestrator.run(
+                session=session,
+                instruction=instruction,
+                mode=mode,
+                emitter=collector,
+                approved_plan=approved_plan,
+            )
         )
+        ui_status = "waiting_confirmation" if result.status == "awaiting_approval" else result.status
+        answer = result.answer or result.plan
+        return answer, result.code, result.image, result.thought, ui_status
 
-    def clean_dataset(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict, str]:
-        """
-        New Stage: Semantic Cleaning.
-        Uses the CatalogEngine to detect issues and the Agent to fix them.
-        Returns: (Cleaned DF, Catalog, Cleaning Summary)
-        """
-        logger.info("Starting Semantic Cleaning Stage")
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def clean_dataset(df: pd.DataFrame, session: Session) -> tuple[pd.DataFrame, dict[str, Any], str]:
+        """Profiles the frame and applies a model-authored cleaning script.
 
-        # 1. Analyze
+        The script is executed through :class:`CodeExecutor`, so it is statically
+        screened and runs inside the container. The previous implementation called
+        the builtin ``exec()`` directly in the API process with no screening at
+        all -- on every upload, with column names from the uploaded file already
+        embedded in the prompt.
+        """
+        logger.info("Starting semantic cleaning")
         catalog = CatalogEngine.analyze(df)
 
-        # 2. Clean
-        prompt = create_cleaning_prompt(df, catalog)
-        result, code, _ = self.execution_agent.run(prompt, df)
+        try:
+            response = llm_provider.complete(
+                create_cleaning_prompt(df, catalog),
+                role=LLMRole.WORKER,
+                model=session.models.worker,
+            )
+        except Exception as exc:
+            logger.warning("Cleaning skipped, model unavailable", error=str(exc))
+            return df, catalog, "Automatic cleaning was skipped because the model was unavailable."
 
-        if "Error executing code:" in result:
-            logger.warning("Cleaning failed, proceeding with raw data", error=result)
-            return df, catalog, "No changes applied due to error."
+        code = orchestrator._extract_code(response)
+        if not code or code.strip() in {"pass", ""}:
+            return df, catalog, "No cleaning was necessary."
 
-        # 3. Apply the generated cleaning code to produce the cleaned DataFrame
-        if code and code.strip():
-            try:
-                import matplotlib.pyplot as plt
-                import numpy as np
-                import seaborn as sns
+        # Persist the frame so the sandbox sees it, then run the script and read back.
+        session.add_dataset("dataset.csv", df, catalog=catalog, make_active=True)
+        session.executor.reload_dataset()
 
-                exec_globals = {"pd": pd, "np": np, "plt": plt, "sns": sns, "df": df.copy()}
-                exec(code, exec_globals)
-                cleaned_df = exec_globals.get("df", df)
-                if isinstance(cleaned_df, pd.DataFrame) and not cleaned_df.empty:
-                    logger.info("Dataset cleaned successfully", original_shape=df.shape, cleaned_shape=cleaned_df.shape)
-                    return cleaned_df, catalog, result
-                else:
-                    logger.warning("Cleaning code did not produce a valid DataFrame, using original")
-                    return df, catalog, result
-            except Exception as e:
-                logger.warning("Failed to apply cleaning code locally, using original", error=str(e))
-                return df, catalog, result
+        wrapped = f"{code}\n\ndf.to_csv('/workspace/cleaned.csv', index=False)\nprint('CLEANING_OK', len(df))\n"
+        result: ExecutionResult = session.executor.execute(wrapped, df)
 
-        logger.info("No cleaning code generated, using original data")
-        return df, catalog, result
+        if not result.ok:
+            logger.warning("Cleaning script failed; keeping the raw data", detail=result.output[:300])
+            return df, catalog, "Automatic cleaning was skipped because the generated script failed."
+
+        cleaned_path = session.workspace / "cleaned.csv"
+        if not cleaned_path.exists():
+            return df, catalog, "Automatic cleaning produced no output; the original data was kept."
+
+        try:
+            cleaned = pd.read_csv(cleaned_path)
+        except Exception as exc:
+            logger.warning("Could not read cleaned output", error=str(exc))
+            return df, catalog, "Automatic cleaning output could not be read; the original data was kept."
+        finally:
+            cleaned_path.unlink(missing_ok=True)
+
+        if cleaned.empty:
+            return df, catalog, "Automatic cleaning emptied the dataset, so the original was kept."
+
+        # Reject a script that discarded most of the data.
+        if len(cleaned) < len(df) * 0.5:
+            logger.warning("Cleaning dropped too many rows", before=len(df), after=len(cleaned))
+            return df, catalog, "Automatic cleaning was rejected because it removed too many rows."
+
+        rows_removed = len(df) - len(cleaned)
+        summary = (
+            f"Cleaned: {rows_removed:,} row(s) removed, {len(cleaned.columns)} columns retained."
+            if rows_removed
+            else "Cleaned: types normalised, no rows removed."
+        )
+        return cleaned, CatalogEngine.analyze(cleaned), summary
 
 
-# Singleton for the higher-level agent
 science_agent = ScientificAgent()

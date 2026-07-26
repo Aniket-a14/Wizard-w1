@@ -1,5 +1,8 @@
 import json
 import sqlite3
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -8,183 +11,267 @@ from src.config import settings
 from src.utils.logging import logger
 
 
+SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS semantic_cache (
+        query TEXT PRIMARY KEY,
+        schema_hash TEXT,
+        columns TEXT,
+        code TEXT,
+        embedding BLOB
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS trajectories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instruction TEXT,
+        schema_hash TEXT,
+        columns TEXT,
+        failed_code TEXT,
+        error_message TEXT,
+        corrected_code TEXT,
+        embedding BLOB
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS feedbacks (
+        task TEXT PRIMARY KEY,
+        code TEXT,
+        embedding BLOB
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS working_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp REAL,
+        session_id TEXT,
+        instruction TEXT,
+        plan TEXT,
+        code TEXT,
+        result TEXT,
+        meta TEXT,
+        embedding BLOB
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS schema_registry (
+        filename TEXT PRIMARY KEY,
+        session_id TEXT,
+        columns TEXT,
+        row_count INTEGER,
+        primary_key TEXT,
+        meta TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        timestamp REAL NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        meta TEXT
+    )
+    """,
+)
+
+INDEX_STATEMENTS = (
+    "CREATE INDEX IF NOT EXISTS idx_semantic_cache_schema ON semantic_cache(schema_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_trajectories_schema ON trajectories(schema_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_working_memory_session ON working_memory(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_working_memory_ts ON working_memory(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_schema_registry_session ON schema_registry(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, timestamp)",
+)
+
+# Columns added after the initial release, applied idempotently on boot.
+MIGRATIONS = (
+    ("semantic_cache", "schema_hash", "TEXT"),
+    ("trajectories", "schema_hash", "TEXT"),
+    ("working_memory", "session_id", "TEXT"),
+    ("working_memory", "embedding", "BLOB"),
+    ("schema_registry", "session_id", "TEXT"),
+)
+
+
 class DatabaseManager:
     """
-    Unified SQLite database manager for semantic cache, trajectories memory, and feedbacks.
-    Includes schema migration capabilities and schema-hash query indexing.
+    Unified SQLite store for the semantic cache, failure trajectories, feedback
+    examples, working memory, chat transcripts and the multi-file schema registry.
+
+    Connections are pooled per thread and closed deterministically. WAL journalling
+    plus a busy timeout are required because FastAPI dispatches blocking work through
+    ``asyncio.to_thread``, so several threads hit this database concurrently.
     """
 
-    def __init__(self):
-        self.db_path = settings.DATA_DIR / "wizard.db"
+    def __init__(self, db_path: str | None = None):
+        self.db_path = str(db_path) if db_path else str(settings.DATA_DIR / "wizard.db")
         # Ensure parent directory exists
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        from pathlib import Path
+
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
+        self._write_lock = threading.Lock()
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
+    # ------------------------------------------------------------------ #
+    # Connection lifecycle
+    # ------------------------------------------------------------------ #
+    def _connection(self) -> sqlite3.Connection:
+        """Returns a per-thread connection, creating it on first use."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA busy_timeout=30000")
+                conn.execute("PRAGMA foreign_keys=ON")
+            except sqlite3.Error as exc:  # pragma: no cover - pragma support varies
+                logger.warning("Failed to apply SQLite pragmas", error=str(exc))
+            self._local.conn = conn
         return conn
 
-    def _init_db(self):
-        """Creates tables if they do not exist, and runs schema migrations if needed."""
-        try:
-            with self._get_connection() as conn:
-                # 1. Semantic Cache Table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS semantic_cache (
-                        query TEXT PRIMARY KEY,
-                        schema_hash TEXT,
-                        columns TEXT,
-                        code TEXT,
-                        embedding BLOB
-                    )
-                """)
-                # 2. Trajectories Memory Table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS trajectories (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        instruction TEXT,
-                        schema_hash TEXT,
-                        columns TEXT,
-                        failed_code TEXT,
-                        error_message TEXT,
-                        corrected_code TEXT,
-                        embedding BLOB
-                    )
-                """)
-                # 3. Feedbacks Table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS feedbacks (
-                        task TEXT PRIMARY KEY,
-                        code TEXT,
-                        embedding BLOB
-                    )
-                """)
-                # 4. Working Memory Table
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS working_memory (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp REAL,
-                        instruction TEXT,
-                        plan TEXT,
-                        code TEXT,
-                        result TEXT,
-                        meta TEXT
-                    )
-                """)
-                # 5. Schema Registry Table (For multi-file relational schema mapping)
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS schema_registry (
-                        filename TEXT PRIMARY KEY,
-                        columns TEXT,
-                        row_count INTEGER,
-                        primary_key TEXT,
-                        meta TEXT
-                    )
-                """)
+    @contextmanager
+    def _read(self) -> Iterator[sqlite3.Connection]:
+        yield self._connection()
 
-                # Check for migrations
-                # Check semantic_cache
-                cursor = conn.execute("PRAGMA table_info(semantic_cache)")
-                columns = [row["name"] for row in cursor.fetchall()]
-                if "schema_hash" not in columns:
-                    logger.info("Migrating database: adding schema_hash to semantic_cache")
-                    conn.execute("ALTER TABLE semantic_cache ADD COLUMN schema_hash TEXT")
-
-                # Check trajectories
-                cursor = conn.execute("PRAGMA table_info(trajectories)")
-                columns = [row["name"] for row in cursor.fetchall()]
-                if "schema_hash" not in columns:
-                    logger.info("Migrating database: adding schema_hash to trajectories")
-                    conn.execute("ALTER TABLE trajectories ADD COLUMN schema_hash TEXT")
-
-                # Create indexes
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_semantic_cache_schema ON semantic_cache(schema_hash)")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_trajectories_schema ON trajectories(schema_hash)")
-
+    @contextmanager
+    def _write(self) -> Iterator[sqlite3.Connection]:
+        """Serialised write transaction. SQLite allows a single writer at a time."""
+        conn = self._connection()
+        with self._write_lock:
+            try:
+                yield conn
                 conn.commit()
-            logger.info("SQLite database initialized successfully", path=str(self.db_path))
+            except Exception:
+                conn.rollback()
+                raise
+
+    def close(self):
+        """Closes the calling thread's connection (used by tests and shutdown)."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+            self._local.conn = None
+
+    def _init_db(self):
+        """Creates tables and indexes, then applies additive column migrations."""
+        try:
+            with self._write() as conn:
+                for statement in SCHEMA_STATEMENTS:
+                    conn.execute(statement)
+
+                for table, column, coltype in MIGRATIONS:
+                    cursor = conn.execute(f"PRAGMA table_info({table})")
+                    existing = {row["name"] for row in cursor.fetchall()}
+                    if column not in existing:
+                        logger.info("Migrating database", table=table, column=column)
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+
+                for statement in INDEX_STATEMENTS:
+                    conn.execute(statement)
+            logger.info("SQLite database initialized", path=self.db_path)
         except Exception as e:
             logger.error("Failed to initialize SQLite database", error=str(e))
 
-    # --- Vector Serialization ---
-    def _serialize_vector(self, vec: np.ndarray) -> bytes:
-        return vec.astype(np.float32).tobytes()
+    # ------------------------------------------------------------------ #
+    # Vector serialization
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _serialize_vector(vec: np.ndarray) -> bytes:
+        return np.asarray(vec, dtype=np.float32).tobytes()
 
-    def _deserialize_vector(self, blob: bytes) -> np.ndarray:
+    @staticmethod
+    def _deserialize_vector(blob: bytes | None) -> np.ndarray | None:
+        if not blob:
+            return None
         return np.frombuffer(blob, dtype=np.float32)
 
-    # --- Semantic Cache ---
+    @staticmethod
+    def _schema_hash(columns: list[str]) -> str:
+        return ",".join(sorted(columns))
+
+    # ------------------------------------------------------------------ #
+    # Semantic Cache
+    # ------------------------------------------------------------------ #
     def get_cache_entries(self, active_columns: list[str] | None = None) -> list[dict[str, Any]]:
         try:
-            with self._get_connection() as conn:
+            with self._read() as conn:
                 if active_columns is not None:
-                    schema_hash = ",".join(sorted(active_columns))
                     rows = conn.execute(
                         "SELECT query, columns, code, embedding FROM semantic_cache WHERE schema_hash = ?",
-                        (schema_hash,),
+                        (self._schema_hash(active_columns),),
                     ).fetchall()
                 else:
                     rows = conn.execute("SELECT query, columns, code, embedding FROM semantic_cache").fetchall()
 
-                entries = []
-                for row in rows:
-                    entries.append(
-                        {
-                            "query": row["query"],
-                            "columns": json.loads(row["columns"]),
-                            "code": row["code"],
-                            "embedding": self._deserialize_vector(row["embedding"]),
-                        }
-                    )
-                return entries
+                return [
+                    {
+                        "query": row["query"],
+                        "columns": json.loads(row["columns"]),
+                        "code": row["code"],
+                        "embedding": self._deserialize_vector(row["embedding"]),
+                    }
+                    for row in rows
+                ]
         except Exception as e:
             logger.error("Failed to fetch semantic cache from database", error=str(e))
             return []
 
     def save_cache_entry(self, query: str, columns: list[str], code: str, embedding: np.ndarray):
         try:
-            schema_hash = ",".join(sorted(columns))
-            with self._get_connection() as conn:
+            with self._write() as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO semantic_cache (query, schema_hash, columns, code, embedding) VALUES (?, ?, ?, ?, ?)",
-                    (query.strip().lower(), schema_hash, json.dumps(columns), code, self._serialize_vector(embedding)),
+                    "INSERT OR REPLACE INTO semantic_cache (query, schema_hash, columns, code, embedding)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (
+                        query.strip().lower(),
+                        self._schema_hash(columns),
+                        json.dumps(columns),
+                        code,
+                        self._serialize_vector(embedding),
+                    ),
                 )
-                conn.commit()
         except Exception as e:
             logger.error("Failed to save semantic cache entry", error=str(e))
 
-    # --- Trajectories (Failures Memory) ---
+    def clear_cache(self):
+        try:
+            with self._write() as conn:
+                conn.execute("DELETE FROM semantic_cache")
+        except Exception as e:
+            logger.error("Failed to clear semantic cache", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Trajectories (failure -> fix memory)
+    # ------------------------------------------------------------------ #
     def get_trajectory_entries(self, active_columns: list[str] | None = None) -> list[dict[str, Any]]:
         try:
-            with self._get_connection() as conn:
+            with self._read() as conn:
+                base = "SELECT instruction, columns, failed_code, error_message, corrected_code, embedding FROM trajectories"
                 if active_columns is not None:
-                    schema_hash = ",".join(sorted(active_columns))
                     rows = conn.execute(
-                        """
-                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding
-                        FROM trajectories WHERE schema_hash = ?
-                    """,
-                        (schema_hash,),
+                        f"{base} WHERE schema_hash = ?", (self._schema_hash(active_columns),)
                     ).fetchall()
                 else:
-                    rows = conn.execute("""
-                        SELECT instruction, columns, failed_code, error_message, corrected_code, embedding
-                        FROM trajectories
-                    """).fetchall()
-                entries = []
-                for row in rows:
-                    entries.append(
-                        {
-                            "instruction": row["instruction"],
-                            "columns": json.loads(row["columns"]),
-                            "failed_code": row["failed_code"],
-                            "error_message": row["error_message"],
-                            "corrected_code": row["corrected_code"],
-                            "embedding": self._deserialize_vector(row["embedding"]),
-                        }
-                    )
-                return entries
+                    rows = conn.execute(base).fetchall()
+
+                return [
+                    {
+                        "instruction": row["instruction"],
+                        "columns": json.loads(row["columns"]),
+                        "failed_code": row["failed_code"],
+                        "error_message": row["error_message"],
+                        "corrected_code": row["corrected_code"],
+                        "embedding": self._deserialize_vector(row["embedding"]),
+                    }
+                    for row in rows
+                ]
         except Exception as e:
             logger.error("Failed to fetch trajectories from database", error=str(e))
             return []
@@ -196,184 +283,284 @@ class DatabaseManager:
         failed_code: str,
         error_message: str,
         corrected_code: str,
-        embedding: np.ndarray,
+        embedding: np.ndarray | None,
     ):
         try:
-            schema_hash = ",".join(sorted(columns))
-            with self._get_connection() as conn:
+            with self._write() as conn:
                 conn.execute(
-                    """
-                    INSERT INTO trajectories (instruction, schema_hash, columns, failed_code, error_message, corrected_code, embedding)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
+                    "INSERT INTO trajectories"
+                    " (instruction, schema_hash, columns, failed_code, error_message, corrected_code, embedding)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         instruction.strip().lower(),
-                        schema_hash,
+                        self._schema_hash(columns),
                         json.dumps(columns),
                         failed_code,
                         error_message,
                         corrected_code,
-                        self._serialize_vector(embedding),
+                        self._serialize_vector(embedding) if embedding is not None else None,
                     ),
                 )
-                conn.commit()
         except Exception as e:
             logger.error("Failed to save trajectory memory", error=str(e))
 
-    # --- Feedbacks ---
+    # ------------------------------------------------------------------ #
+    # Feedbacks (few-shot successes)
+    # ------------------------------------------------------------------ #
     def get_feedbacks(self) -> list[dict[str, Any]]:
         try:
-            with self._get_connection() as conn:
+            with self._read() as conn:
                 rows = conn.execute("SELECT task, code, embedding FROM feedbacks").fetchall()
-                entries = []
-                for row in rows:
-                    entries.append(
-                        {
-                            "task": row["task"],
-                            "code": row["code"],
-                            "embedding": self._deserialize_vector(row["embedding"]) if row["embedding"] else None,
-                        }
-                    )
-                return entries
+                return [
+                    {
+                        "task": row["task"],
+                        "code": row["code"],
+                        "embedding": self._deserialize_vector(row["embedding"]),
+                    }
+                    for row in rows
+                ]
         except Exception as e:
             logger.error("Failed to fetch feedbacks from database", error=str(e))
             return []
 
     def save_feedback(self, task: str, code: str, embedding: np.ndarray | None = None):
         try:
-            with self._get_connection() as conn:
-                emb_blob = self._serialize_vector(embedding) if embedding is not None else None
+            with self._write() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO feedbacks (task, code, embedding) VALUES (?, ?, ?)",
-                    (task.strip().lower(), code, emb_blob),
+                    (
+                        task.strip().lower(),
+                        code,
+                        self._serialize_vector(embedding) if embedding is not None else None,
+                    ),
                 )
-                conn.commit()
         except Exception as e:
             logger.error("Failed to save feedback entry", error=str(e))
 
-    # --- Working Memory ---
-    def get_memories(self) -> list[dict[str, Any]]:
+    # ------------------------------------------------------------------ #
+    # Working Memory
+    # ------------------------------------------------------------------ #
+    def get_memories(self, session_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         try:
-            with self._get_connection() as conn:
-                rows = conn.execute(
-                    "SELECT timestamp, instruction, plan, code, result, meta FROM working_memory ORDER BY timestamp ASC"
-                ).fetchall()
-                entries = []
-                for row in rows:
-                    meta = {}
-                    try:
-                        meta = json.loads(row["meta"]) if row["meta"] else {}
-                    except Exception:
-                        pass
-                    entries.append(
-                        {
-                            "timestamp": row["timestamp"],
-                            "instruction": row["instruction"],
-                            "plan": row["plan"],
-                            "code": row["code"],
-                            "result": row["result"],
-                            "meta": meta,
-                        }
-                    )
-                return entries
+            with self._read() as conn:
+                sql = (
+                    "SELECT timestamp, session_id, instruction, plan, code, result, meta, embedding FROM working_memory"
+                )
+                params: list[Any] = []
+                if session_id:
+                    sql += " WHERE session_id = ?"
+                    params.append(session_id)
+                sql += " ORDER BY timestamp ASC"
+                if limit:
+                    sql += " LIMIT ?"
+                    params.append(limit)
+                rows = conn.execute(sql, params).fetchall()
+                return [self._memory_row(row) for row in rows]
         except Exception as e:
             logger.error("Failed to fetch working memory from database", error=str(e))
             return []
 
-    def search_memories(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
+    def get_recent_memories(self, session_id: str | None, timespan_seconds: int) -> list[dict[str, Any]]:
+        """Memories newer than ``timespan_seconds``, oldest first."""
+        import time
+
+        cutoff = time.time() - timespan_seconds
+        try:
+            with self._read() as conn:
+                sql = (
+                    "SELECT timestamp, session_id, instruction, plan, code, result, meta, embedding"
+                    " FROM working_memory WHERE timestamp >= ?"
+                )
+                params: list[Any] = [cutoff]
+                if session_id:
+                    sql += " AND session_id = ?"
+                    params.append(session_id)
+                sql += " ORDER BY timestamp ASC"
+                rows = conn.execute(sql, params).fetchall()
+                return [self._memory_row(row) for row in rows]
+        except Exception as e:
+            logger.error("Failed to fetch recent working memory", error=str(e))
+            return []
+
+    def search_memories(self, query: str, limit: int = 3, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Keyword fallback search. Vector search lives in the RAG retriever."""
         try:
             query_terms = [f"%{term.strip().lower()}%" for term in query.split() if term.strip()]
             if not query_terms:
                 return []
 
             where_clauses = []
-            params = []
+            params: list[Any] = []
             for term in query_terms:
-                where_clauses.append("(instruction LIKE ? OR plan LIKE ?)")
+                where_clauses.append("(LOWER(instruction) LIKE ? OR LOWER(plan) LIKE ?)")
                 params.extend([term, term])
 
-            sql = f"""
-                SELECT timestamp, instruction, plan, code, result, meta
-                FROM working_memory
-                WHERE {" AND ".join(where_clauses)}
-                ORDER BY timestamp DESC
-                LIMIT ?
-            """
+            if session_id:
+                where_clauses.append("session_id = ?")
+                params.append(session_id)
+
+            sql = (
+                "SELECT timestamp, session_id, instruction, plan, code, result, meta, embedding FROM working_memory"
+                f" WHERE {' AND '.join(where_clauses)} ORDER BY timestamp DESC LIMIT ?"
+            )
             params.append(limit)
 
-            with self._get_connection() as conn:
+            with self._read() as conn:
                 rows = conn.execute(sql, params).fetchall()
-                entries = []
-                for row in rows:
-                    meta = {}
-                    try:
-                        meta = json.loads(row["meta"]) if row["meta"] else {}
-                    except Exception:
-                        pass
-                    entries.append(
-                        {
-                            "timestamp": row["timestamp"],
-                            "instruction": row["instruction"],
-                            "plan": row["plan"],
-                            "code": row["code"],
-                            "result": row["result"],
-                            "meta": meta,
-                        }
-                    )
-                return entries
+                return [self._memory_row(row) for row in rows]
         except Exception as e:
             logger.error("Failed to search working memory in database", error=str(e))
             return []
 
+    def _memory_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        meta: dict[str, Any] = {}
+        try:
+            meta = json.loads(row["meta"]) if row["meta"] else {}
+        except (TypeError, ValueError):
+            pass
+        keys = row.keys()
+        return {
+            "timestamp": row["timestamp"],
+            "session_id": row["session_id"] if "session_id" in keys else None,
+            "instruction": row["instruction"],
+            "plan": row["plan"],
+            "code": row["code"],
+            "result": row["result"],
+            "meta": meta,
+            "embedding": self._deserialize_vector(row["embedding"]) if "embedding" in keys else None,
+        }
+
     def save_memory(
-        self, timestamp: float, instruction: str, plan: str, code: str, result: str, meta: dict[str, Any] = None
+        self,
+        timestamp: float,
+        instruction: str,
+        plan: str,
+        code: str,
+        result: str,
+        meta: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        embedding: np.ndarray | None = None,
     ):
         try:
-            with self._get_connection() as conn:
+            with self._write() as conn:
                 conn.execute(
-                    "INSERT INTO working_memory (timestamp, instruction, plan, code, result, meta) VALUES (?, ?, ?, ?, ?, ?)",
-                    (timestamp, instruction, plan, code, result, json.dumps(meta or {})),
+                    "INSERT INTO working_memory"
+                    " (timestamp, session_id, instruction, plan, code, result, meta, embedding)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        timestamp,
+                        session_id,
+                        instruction,
+                        plan,
+                        code,
+                        result,
+                        json.dumps(meta or {}),
+                        self._serialize_vector(embedding) if embedding is not None else None,
+                    ),
                 )
-                conn.commit()
         except Exception as e:
             logger.error("Failed to save working memory entry", error=str(e))
 
-    # --- Schema Registry Operations ---
+    def prune_memories(self, keep_last: int = 500):
+        """Bounds unbounded growth of the memory table."""
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "DELETE FROM working_memory WHERE id NOT IN"
+                    " (SELECT id FROM working_memory ORDER BY timestamp DESC LIMIT ?)",
+                    (keep_last,),
+                )
+        except Exception as e:
+            logger.error("Failed to prune working memory", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Chat transcripts (multi-turn context)
+    # ------------------------------------------------------------------ #
+    def append_chat_message(self, session_id: str, role: str, content: str, meta: dict[str, Any] | None = None):
+        import time
+
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "INSERT INTO chat_messages (session_id, timestamp, role, content, meta) VALUES (?, ?, ?, ?, ?)",
+                    (session_id, time.time(), role, content, json.dumps(meta or {})),
+                )
+        except Exception as e:
+            logger.error("Failed to append chat message", error=str(e))
+
+    def get_chat_messages(self, session_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    "SELECT role, content, timestamp, meta FROM chat_messages"
+                    " WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (session_id, limit),
+                ).fetchall()
+                messages = [
+                    {"role": row["role"], "content": row["content"], "timestamp": row["timestamp"]} for row in rows
+                ]
+                messages.reverse()
+                return messages
+        except Exception as e:
+            logger.error("Failed to fetch chat messages", error=str(e))
+            return []
+
+    def delete_session_data(self, session_id: str):
+        try:
+            with self._write() as conn:
+                conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM working_memory WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM schema_registry WHERE session_id = ?", (session_id,))
+        except Exception as e:
+            logger.error("Failed to delete session data", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Schema Registry
+    # ------------------------------------------------------------------ #
     def save_schema(
-        self, filename: str, columns: list[str], row_count: int, primary_key: str, meta: dict[str, Any] = None
+        self,
+        filename: str,
+        columns: list[str],
+        row_count: int,
+        primary_key: str,
+        meta: dict[str, Any] | None = None,
+        session_id: str | None = None,
     ):
         try:
-            with self._get_connection() as conn:
+            with self._write() as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO schema_registry (filename, columns, row_count, primary_key, meta) VALUES (?, ?, ?, ?, ?)",
-                    (filename, json.dumps(columns), row_count, primary_key, json.dumps(meta or {})),
+                    "INSERT OR REPLACE INTO schema_registry"
+                    " (filename, session_id, columns, row_count, primary_key, meta) VALUES (?, ?, ?, ?, ?, ?)",
+                    (filename, session_id, json.dumps(columns), row_count, primary_key, json.dumps(meta or {})),
                 )
-                conn.commit()
-                logger.info("Saved schema to database registry", filename=filename)
+            logger.info("Saved schema to database registry", filename=filename)
         except Exception as e:
             logger.error("Failed to save schema registry entry", error=str(e))
 
-    def get_schemas(self) -> list[dict[str, Any]]:
+    def get_schemas(self, session_id: str | None = None) -> list[dict[str, Any]]:
         try:
-            with self._get_connection() as conn:
-                rows = conn.execute(
-                    "SELECT filename, columns, row_count, primary_key, meta FROM schema_registry"
-                ).fetchall()
+            with self._read() as conn:
+                sql = "SELECT filename, session_id, columns, row_count, primary_key, meta FROM schema_registry"
+                params: list[Any] = []
+                if session_id:
+                    sql += " WHERE session_id = ?"
+                    params.append(session_id)
+                rows = conn.execute(sql, params).fetchall()
+
                 entries = []
                 for row in rows:
-                    cols = []
                     try:
                         cols = json.loads(row["columns"]) if row["columns"] else []
-                    except Exception:
-                        pass
-                    meta = {}
+                    except (TypeError, ValueError):
+                        cols = []
                     try:
                         meta = json.loads(row["meta"]) if row["meta"] else {}
-                    except Exception:
-                        pass
+                    except (TypeError, ValueError):
+                        meta = {}
                     entries.append(
                         {
                             "filename": row["filename"],
+                            "session_id": row["session_id"],
                             "columns": cols,
                             "row_count": row["row_count"],
                             "primary_key": row["primary_key"],
@@ -385,12 +572,16 @@ class DatabaseManager:
             logger.error("Failed to fetch schemas from registry", error=str(e))
             return []
 
-    def delete_schema(self, filename: str):
+    def delete_schema(self, filename: str, session_id: str | None = None):
         try:
-            with self._get_connection() as conn:
-                conn.execute("DELETE FROM schema_registry WHERE filename = ?", (filename,))
-                conn.commit()
-                logger.info("Deleted schema from registry", filename=filename)
+            with self._write() as conn:
+                if session_id:
+                    conn.execute(
+                        "DELETE FROM schema_registry WHERE filename = ? AND session_id = ?", (filename, session_id)
+                    )
+                else:
+                    conn.execute("DELETE FROM schema_registry WHERE filename = ?", (filename,))
+            logger.info("Deleted schema from registry", filename=filename)
         except Exception as e:
             logger.error("Failed to delete schema registry entry", error=str(e))
 

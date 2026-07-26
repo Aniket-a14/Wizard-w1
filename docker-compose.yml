@@ -3,25 +3,54 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Overrides the image's non-root user: creating sandbox containers requires
+    # access to the mounted Docker socket, which is root-owned on the host. The
+    # socket mount below already grants host-root-equivalent power, so dropping
+    # to a non-root user here would add no real isolation.
     user: root
     ports:
       - "8000:8000"
     environment:
-      - APP_NAME=${APP_NAME:-Wizard AI Agent}
+      - APP_NAME=${APP_NAME:-Wizard}
       - ENV=${ENV:-prod}
       - SYSTEM_PROFILE=${SYSTEM_PROFILE:-server}
-      - MODEL_TYPE=${MODEL_TYPE:-ollama}
+      - API_PROVIDER=${API_PROVIDER:-ollama}
       - MODEL_NAME=${MODEL_NAME:-deepseek-r1:1.5b}
       - WORKER_MODEL_NAME=${WORKER_MODEL_NAME:-qwen2.5-coder:1.5b}
       - VISION_MODEL_NAME=${VISION_MODEL_NAME:-llava:7b}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - PLOT_FORMAT=${PLOT_FORMAT:-html}
+      # Restrict to the frontend origin. A wildcard here would also disable
+      # credentialed requests, which browsers reject outright.
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      # Set to require X-API-Key on mutating routes. Empty means open, which is
+      # the right default for a local-only deployment.
+      - API_KEY=${API_KEY:-}
+      # Empty by default: the in-process queue and cache need no extra service.
+      - REDIS_URL=${REDIS_URL:-}
+      - SANDBOX_NETWORK_DISABLED=${SANDBOX_NETWORK_DISABLED:-False}
+      - SANDBOX_DOCKER_RUNTIME=${SANDBOX_DOCKER_RUNTIME:-}
+      - SANDBOX_MEM_LIMIT=${SANDBOX_MEM_LIMIT:-2g}
     volumes:
       - ./backend:/app
       - ./workspace:/workspace
+      # Required: the backend asks the host daemon to create sandbox containers.
+      # This grants host-root-equivalent access, so only expose this service on
+      # a trusted network.
       - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      # Lets the backend reach a host-installed Ollama on Linux, where
+      # host.docker.internal is not provided automatically.
+      - "host.docker.internal:host-gateway"
     networks:
       - wizard_net
-    restart: always
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   frontend:
     build:
@@ -30,12 +59,25 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
-      - backend
+      backend:
+        condition: service_started
     networks:
       - wizard_net
-    restart: always
+    restart: unless-stopped
+
+  # Opt-in: `docker compose --profile redis up`, with REDIS_URL set on the
+  # backend. Without this the app runs entirely in-process.
+  redis:
+    image: redis:7-alpine
+    profiles: ["redis"]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    networks:
+      - wizard_net
+    restart: unless-stopped
 
 networks:
   wizard_net:
