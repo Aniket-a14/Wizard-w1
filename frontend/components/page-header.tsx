@@ -25,7 +25,10 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "flex shrink-0 flex-wrap items-end justify-between gap-4 border-b border-border px-6 pb-6 pt-8 md:px-9 md:pt-10",
+        "flex shrink-0 flex-wrap items-end justify-between gap-4 border-b border-border px-6 pb-6",
+        // Extra top padding below `md` clears the floating menu button, which
+        // sits at top-3 left-3 and would otherwise land on the eyebrow.
+        "pt-16 md:px-9 md:pt-10",
         className,
       )}
     >

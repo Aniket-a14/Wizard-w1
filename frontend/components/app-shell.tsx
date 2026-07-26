@@ -158,7 +158,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* `relative` matters: the menu button below is absolutely positioned and
+          would otherwise resolve against the viewport. */}
+      <div className="relative flex min-w-0 flex-1 flex-col">
         <button
           type="button"
           onClick={() => setMobileOpen(true)}
