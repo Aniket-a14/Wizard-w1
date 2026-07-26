@@ -82,6 +82,7 @@ class ScientificAgent:
                 create_cleaning_prompt(df, catalog),
                 role=LLMRole.WORKER,
                 model=session.models.worker,
+                provider=session.models.worker_provider,
             )
         except Exception as exc:
             logger.warning("Cleaning skipped, model unavailable", error=str(exc))

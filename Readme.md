@@ -37,6 +37,18 @@ Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**.
 
 Any model you have pulled will appear in the model picker; the two above are just small defaults that fit on a laptop.
 
+### Using LM Studio instead of (or alongside) Ollama
+
+LM Studio works out of the box — no configuration needed if it is on its default port.
+
+1. In LM Studio, open **Developer** and **Start Server**.
+2. Turn on **Serve on Local Network**. LM Studio binds to loopback by default, so the backend container cannot reach it otherwise. (Skip this if you run the backend outside Docker.)
+3. In the model picker, switch the provider to **LM Studio**.
+
+The provider is stored **per role**, so you can leave the reasoning model on Ollama and put only the code model on LM Studio, or vice versa. Models are discovered through LM Studio's native API, which reports quantization, context length and whether a model is currently loaded — an unloaded model is marked, because LM Studio loads it on first use and that can take a while on a laptop.
+
+Any other OpenAI-compatible server (vLLM, llama.cpp, a hosted gateway) works through `API_PROVIDER=custom_gateway` with `GATEWAY_API_URL`.
+
 ## How it works
 
 ```mermaid
@@ -100,10 +112,11 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything 
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `API_PROVIDER` | `ollama` | `ollama`, `openai` or `custom_gateway` |
+| `API_PROVIDER` | `ollama` | Default backend: `ollama`, `lmstudio`, `openai` or `custom_gateway` |
 | `MODEL_NAME` | `deepseek-r1:1.5b` | Default reasoning model |
 | `WORKER_MODEL_NAME` | `qwen2.5-coder:1.5b` | Default code model |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Where Ollama lives |
+| `LMSTUDIO_BASE_URL` | `http://host.docker.internal:1234` | Where LM Studio lives (root, not `/v1`) |
 | `PLOT_FORMAT` | `html` | `html` for interactive Plotly, `png` for static |
 | `SANDBOX_ENABLED` | `True` | `False` disables containers entirely |
 | `SANDBOX_NETWORK_DISABLED` | `False` | `True` is safer, but blocks on-demand package installs |
@@ -185,6 +198,10 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](.
 **"No sandbox" appears in the header.** Docker is unreachable, so code is running in a restricted in-process interpreter with weaker isolation. Start Docker Desktop and reload.
 
 **The model picker is empty.** Nothing is pulled yet, or Ollama is not running. Try `ollama pull qwen2.5-coder:1.5b`, then use the refresh button.
+
+**The LM Studio tab is empty but LM Studio is running.** Almost always **Serve on Local Network** being off — with it off LM Studio accepts loopback connections only, and the backend runs in a container. The error under the tab names the exact URL that was tried. Note that `LMSTUDIO_BASE_URL` wants the root (`http://host.docker.internal:1234`), not the `/v1` endpoint the LM Studio UI displays; a trailing `/v1` is stripped for you.
+
+**LM Studio answers the first question very slowly.** It loads the model on first request. The picker marks models that are not loaded; loading one in LM Studio beforehand avoids the stall.
 
 **Analysis keeps failing on the same step.** The agent stops after `MAX_CORRECTION_RETRIES`. The generated code and the traceback are in the "Ran N steps" disclosure — that usually shows a column that does not exist or a type that needs converting first.
 

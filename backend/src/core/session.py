@@ -61,12 +61,27 @@ class DatasetHandle:
 
 @dataclass
 class ModelPreferences:
-    """User-selected models. ``None`` means "use the configured default"."""
+    """User-selected models. ``None`` means "use the configured default".
+
+    The provider is tracked *per role*, not once for the session, so a user can
+    plan on an Ollama reasoning model and generate code on an LM Studio one.
+    Sessions that never touch the provider fields behave exactly as before,
+    running everything on ``settings.API_PROVIDER``.
+    """
 
     manager: str | None = None
     worker: str | None = None
     vision: str | None = None
     temperature: float | None = None
+    manager_provider: str | None = None
+    worker_provider: str | None = None
+    vision_provider: str | None = None
+
+    def model_for(self, role: str) -> str | None:
+        return getattr(self, role, None)
+
+    def provider_for(self, role: str) -> str | None:
+        return getattr(self, f"{role}_provider", None)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +89,9 @@ class ModelPreferences:
             "worker": self.worker,
             "vision": self.vision,
             "temperature": self.temperature,
+            "manager_provider": self.manager_provider,
+            "worker_provider": self.worker_provider,
+            "vision_provider": self.vision_provider,
         }
 
 

@@ -114,13 +114,24 @@ Tables: `semantic_cache`, `trajectories` (failure→fix pairs), `feedbacks`, `wo
 
 ### Models — [llm/](backend/src/core/llm/)
 
-`llm_provider` builds and caches clients keyed by (provider, model, temperature, …), so per-session model selection is cheap. Every entry point has a streaming twin (`astream`, `stream_to`). `model_registry` enumerates what is actually installed via the Ollama `/api/tags` endpoint, which is what makes the UI model picker real rather than hardcoded.
+`llm_provider` builds and caches clients keyed by (provider, endpoint, model, temperature, …), so per-session model selection is cheap. Every entry point has a streaming twin (`astream`, `stream_to`).
+
+**The provider is per-request, not process-wide.** `settings.API_PROVIDER` is only the default. `ModelPreferences` stores a provider per *role*, so one run can plan on Ollama and generate code on LM Studio; `ModelSpec` therefore carries the resolved `base_url`, and that URL is part of the cache key — without it the same model name on two backends collides. Never read a provider URL directly from `settings`; go through `settings.provider_root_url` / `provider_openai_base_url` / `provider_api_key`, keyed by the provider actually in play.
+
+`model_registry` enumerates what is really installed, per provider and cached per provider:
+- **Ollama** → `/api/tags`
+- **LM Studio** → `/api/v0/models` (native: real `type`, quantization, context length, load state), falling back to `/v1/models`
+- **Gateways** → `/v1/models`
+
+Empty results are cached too, for a shorter TTL — a refused connect costs seconds, and one page load asks for both the list and a suggestion. `available_providers()` must stay network-free; it renders on every page load.
 
 ### Config — [config.py](backend/src/config.py)
 
 Pydantic-settings singleton reading `backend/.env` (see `backend/.env.example`). Notes:
 
-- `API_PROVIDER` is what the runtime branches on. `MODEL_TYPE` exists only so older `.env` files still validate.
+- `API_PROVIDER` is the *default* provider, not a global switch — see the models section. `MODEL_TYPE` exists only so older `.env` files still validate.
+- `LMSTUDIO_BASE_URL` is stored as a bare root; a pasted `/v1` suffix is stripped by a validator, because discovery needs `/api/v0` off the same root. LM Studio binds loopback only until "Serve on Local Network" is enabled, which is the usual cause of an empty picker from inside Docker.
+- `LLM_NUM_CTX` reaches Ollama only. OpenAI-compatible servers fix context length when the model is loaded, so it is deliberately not sent there.
 - `cors_origins` / `cors_allow_credentials` are resolved together: a wildcard origin forces credentials off, because the combination is invalid in every browser.
 - `PLOT_FORMAT` is coupled across two places — the visualization rule in `create_prompt` and the artifact branch in `_execute`. Change both.
 - `SANDBOX_ENABLED=false` disables container creation entirely; `EMBEDDINGS_FORCE_FALLBACK=true` skips the model download. Both are set in CI.
@@ -131,12 +142,17 @@ Pydantic-settings singleton reading `backend/.env` (see `backend/.env.example`).
 - `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
 - The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.
 - Components: [chat-shell.tsx](frontend/components/chat-shell.tsx) (layout), [chat/message.tsx](frontend/components/chat/message.tsx), [chat/reasoning-panel.tsx](frontend/components/chat/reasoning-panel.tsx), [chat/step-timeline.tsx](frontend/components/chat/step-timeline.tsx), [chat/artifacts-panel.tsx](frontend/components/chat/artifacts-panel.tsx) (slide-over), [chat/model-picker.tsx](frontend/components/chat/model-picker.tsx).
+- The picker browses one provider at a time and always sends the provider alongside the model name — the list on screen may belong to a different backend than the role currently uses, and a bare name would be routed to the wrong daemon.
 
 ## Testing
 
 Four layers under `backend/tests/`: `unit/`, `integration/`, `regression/`, `negative/`.
 
-`regression/test_regressions.py` pins specific defects; each test's docstring states what broke and why. Read it before changing session handling, the database layer, the guard, the rate limiter or `sandbox.interrupt()`.
+`regression/test_regressions.py` pins specific defects; each test's docstring states what broke and why. Read it before changing session handling, the database layer, the guard, the rate limiter, provider resolution or `sandbox.interrupt()`.
+
+The autouse teardown clears state through `semantic_cache.clear()`, **not** `db_mgr.clear_cache()` — `add()` writes to SQLite *and* to the in-process exact-match cache, and clearing only the table leaves a live entry that sends a later test with the same question down the cache-hit path. That failure is order-dependent and invisible when the file is run alone.
+
+`conftest.py` pins `OLLAMA_BASE_URL` and `LMSTUDIO_BASE_URL` to `http://127.0.0.1:1`. Model discovery is the one component that dials out on its own; port 1 is refused instantly instead of waiting on a connect timeout or resolving `host.docker.internal`, which is a real host on some dev machines.
 
 ## Conventions
 

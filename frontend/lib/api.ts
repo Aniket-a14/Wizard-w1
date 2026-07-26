@@ -95,8 +95,13 @@ export const api = {
 
   resetNamespace: () => request<SessionInfo>("/api/session/reset", { method: "POST" }),
 
-  models: (refresh = false) =>
-    request<ModelListResponse>(`/api/models${refresh ? "?refresh=true" : ""}`),
+  models: (refresh = false, provider?: string) => {
+    const query = new URLSearchParams()
+    if (refresh) query.set("refresh", "true")
+    if (provider) query.set("provider", provider)
+    const suffix = query.toString()
+    return request<ModelListResponse>(`/api/models${suffix ? `?${suffix}` : ""}`)
+  },
 
   selectModels: (selection: Record<string, string | number | null>) =>
     request<SessionInfo>("/api/models", {

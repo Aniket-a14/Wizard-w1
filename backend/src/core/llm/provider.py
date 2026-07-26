@@ -10,8 +10,13 @@ Two things this replaces:
    so the UI can render tokens as they are produced instead of faking a reveal
    animation over an already-complete string.
 
-Clients are cached by a (provider, model, temperature, ...) key so switching
-models is cheap and switching back reuses the warm client.
+Clients are cached by a (provider, endpoint, model, temperature, ...) key so
+switching models is cheap and switching back reuses the warm client.
+
+The provider is part of that key, and part of every call signature, because it
+is a per-request choice rather than process-wide configuration: one analysis can
+plan on an Ollama reasoning model and generate code on an LM Studio one.
+``settings.API_PROVIDER`` is only the default used when a caller names none.
 """
 
 from __future__ import annotations
@@ -37,16 +42,24 @@ class LLMRole(StrEnum):
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """A fully-resolved request for a specific model."""
+    """A fully-resolved request for a specific model on a specific backend.
+
+    The endpoint is captured here rather than read from ``settings`` inside
+    ``_build_client``, because a single request can involve two providers -- a
+    manager on Ollama and a worker on LM Studio, say -- and the cache key has to
+    tell those apart.
+    """
 
     provider: str
     model: str
     temperature: float
     max_tokens: int
     num_ctx: int
+    base_url: str = ""
+    api_key: str = ""
 
     def cache_key(self) -> tuple:
-        return (self.provider, self.model, self.temperature, self.max_tokens, self.num_ctx)
+        return (self.provider, self.base_url, self.model, self.temperature, self.max_tokens, self.num_ctx)
 
 
 class LLMUnavailableError(RuntimeError):
@@ -76,14 +89,20 @@ class LLMProvider:
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        provider: str | None = None,
     ) -> ModelSpec:
         """Turns a role plus optional per-request overrides into a concrete spec."""
+        resolved_provider = settings.resolve_provider(provider)
         return ModelSpec(
-            provider=settings.API_PROVIDER,
+            provider=resolved_provider,
             model=(model or self.default_model_for(role)).strip(),
             temperature=settings.TEMPERATURE if temperature is None else float(temperature),
             max_tokens=max_tokens or settings.MAX_TOKENS,
             num_ctx=settings.LLM_NUM_CTX,
+            base_url=settings.provider_openai_base_url(resolved_provider)
+            if resolved_provider != "ollama"
+            else settings.provider_root_url(resolved_provider),
+            api_key=settings.provider_api_key(resolved_provider),
         )
 
     # ------------------------------------------------------------------ #
@@ -112,7 +131,7 @@ class LLMProvider:
                 logger.info("Initializing ChatOllama client", model=spec.model, temperature=spec.temperature)
                 return ChatOllama(
                     model=spec.model,
-                    base_url=settings.OLLAMA_BASE_URL,
+                    base_url=spec.base_url or settings.OLLAMA_BASE_URL,
                     temperature=spec.temperature,
                     num_predict=spec.max_tokens,
                     num_ctx=spec.num_ctx,
@@ -125,17 +144,25 @@ class LLMProvider:
             except ImportError:  # pragma: no cover - depends on optional extra
                 from langchain_community.chat_models import ChatOpenAI
 
-            logger.info("Initializing OpenAI-compatible gateway client", model=spec.model)
+            # LM Studio, vLLM, llama.cpp's server and hosted gateways all speak
+            # this dialect. Note that context length is *not* sent: LM Studio
+            # fixes it when the model is loaded, so LLM_NUM_CTX has no effect here.
+            logger.info(
+                "Initializing OpenAI-compatible client",
+                provider=spec.provider,
+                model=spec.model,
+                base_url=spec.base_url or "<default>",
+            )
             return ChatOpenAI(
                 model=spec.model,
-                base_url=settings.GATEWAY_API_URL or None,
-                api_key=settings.GATEWAY_API_KEY or "not-required",
+                base_url=spec.base_url or None,
+                api_key=spec.api_key or "not-required",
                 temperature=spec.temperature,
                 max_tokens=spec.max_tokens,
                 timeout=settings.LLM_REQUEST_TIMEOUT,
             )
         except Exception as exc:
-            logger.error("Failed to construct LLM client", model=spec.model, error=str(exc))
+            logger.error("Failed to construct LLM client", provider=spec.provider, model=spec.model, error=str(exc))
             return None
 
     def clear_cache(self):
@@ -152,17 +179,18 @@ class LLMProvider:
         role: LLMRole = LLMRole.MANAGER,
         model: str | None = None,
         temperature: float | None = None,
+        provider: str | None = None,
     ) -> str:
         """Blocking completion. Returns "" when the provider is unreachable."""
-        spec = self.resolve(role, model=model, temperature=temperature)
+        spec = self.resolve(role, model=model, temperature=temperature, provider=provider)
         client = self.get_client(spec)
         if client is None:
-            raise LLMUnavailableError(f"No LLM client available for model '{spec.model}'")
+            raise LLMUnavailableError(self._unavailable_message(spec))
         try:
             response = client.invoke(prompt)
             return self._extract_text(response)
         except Exception as exc:
-            logger.error("LLM completion failed", model=spec.model, error=str(exc))
+            logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=str(exc))
             raise LLMUnavailableError(str(exc)) from exc
 
     async def acomplete(
@@ -171,16 +199,17 @@ class LLMProvider:
         role: LLMRole = LLMRole.MANAGER,
         model: str | None = None,
         temperature: float | None = None,
+        provider: str | None = None,
     ) -> str:
-        spec = self.resolve(role, model=model, temperature=temperature)
+        spec = self.resolve(role, model=model, temperature=temperature, provider=provider)
         client = self.get_client(spec)
         if client is None:
-            raise LLMUnavailableError(f"No LLM client available for model '{spec.model}'")
+            raise LLMUnavailableError(self._unavailable_message(spec))
         try:
             response = await client.ainvoke(prompt)
             return self._extract_text(response)
         except Exception as exc:
-            logger.error("LLM completion failed", model=spec.model, error=str(exc))
+            logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=str(exc))
             raise LLMUnavailableError(str(exc)) from exc
 
     async def astream(
@@ -189,19 +218,20 @@ class LLMProvider:
         role: LLMRole = LLMRole.MANAGER,
         model: str | None = None,
         temperature: float | None = None,
+        provider: str | None = None,
     ) -> AsyncIterator[str]:
         """Yields text deltas as the model produces them.
 
         Falls back to a single yield of the full response when the underlying
         client does not implement ``astream``.
         """
-        spec = self.resolve(role, model=model, temperature=temperature)
+        spec = self.resolve(role, model=model, temperature=temperature, provider=provider)
         client = self.get_client(spec)
         if client is None:
-            raise LLMUnavailableError(f"No LLM client available for model '{spec.model}'")
+            raise LLMUnavailableError(self._unavailable_message(spec))
 
         if not hasattr(client, "astream"):
-            yield await self.acomplete(prompt, role=role, model=model, temperature=temperature)
+            yield await self.acomplete(prompt, role=role, model=model, temperature=temperature, provider=provider)
             return
 
         try:
@@ -210,7 +240,7 @@ class LLMProvider:
                 if text:
                     yield text
         except Exception as exc:
-            logger.error("LLM streaming failed", model=spec.model, error=str(exc))
+            logger.error("LLM streaming failed", provider=spec.provider, model=spec.model, error=str(exc))
             raise LLMUnavailableError(str(exc)) from exc
 
     async def stream_to(
@@ -220,6 +250,7 @@ class LLMProvider:
         role: LLMRole = LLMRole.MANAGER,
         model: str | None = None,
         temperature: float | None = None,
+        provider: str | None = None,
     ) -> str:
         """Streams a completion, invoking ``on_delta`` per chunk, and returns the full text.
 
@@ -227,7 +258,7 @@ class LLMProvider:
         straight into a WebSocket without wrapping.
         """
         buffer: list[str] = []
-        async for delta in self.astream(prompt, role=role, model=model, temperature=temperature):
+        async for delta in self.astream(prompt, role=role, model=model, temperature=temperature, provider=provider):
             buffer.append(delta)
             if on_delta is not None:
                 result = on_delta(delta)
@@ -235,12 +266,12 @@ class LLMProvider:
                     await result
         return "".join(buffer)
 
-    async def describe_image(self, base64_png: str, model: str | None = None) -> str:
+    async def describe_image(self, base64_png: str, model: str | None = None, provider: str | None = None) -> str:
         """Multimodal description of a rendered chart."""
-        spec = self.resolve(LLMRole.VISION, model=model, temperature=0.2)
+        spec = self.resolve(LLMRole.VISION, model=model, temperature=0.2, provider=provider)
         client = self.get_client(spec)
         if client is None:
-            raise LLMUnavailableError("Vision model unavailable")
+            raise LLMUnavailableError(self._unavailable_message(spec))
 
         from langchain_core.messages import HumanMessage
 
@@ -260,6 +291,16 @@ class LLMProvider:
         return self._extract_text(response).strip()
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _unavailable_message(spec: ModelSpec) -> str:
+        """Names the endpoint, since 'no client available' alone is undebuggable.
+
+        The usual cause is a local daemon that is not running, and the user can
+        only check that if they are told which host was tried.
+        """
+        where = spec.base_url or "the configured endpoint"
+        return f"No LLM client available for '{spec.model}' on {spec.provider} at {where}"
+
     @staticmethod
     def _extract_text(response: Any) -> str:
         """Normalises the several shapes LangChain returns into plain text."""

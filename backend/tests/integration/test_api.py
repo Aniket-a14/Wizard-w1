@@ -342,3 +342,46 @@ def test_chat_rejects_an_invalid_mode(client: TestClient, simple_df: pd.DataFram
     session_id = upload(client, simple_df)["session_id"]
     response = client.post("/api/chat", json={"message": "hi", "mode": "turbo"}, headers={SESSION_HEADER: session_id})
     assert response.status_code == 422
+
+
+def test_model_selection_round_trips_provider_per_role(client: TestClient) -> None:
+    """The session has to remember *which backend* each role runs on, not just
+    the model name -- the same name can exist on two providers."""
+    response = client.post(
+        "/api/models",
+        json={
+            "manager": "deepseek-r1:1.5b",
+            "manager_provider": "ollama",
+            "worker": "qwen2.5-coder-7b-instruct",
+            "worker_provider": "lmstudio",
+        },
+    )
+    assert response.status_code == 200, response.text
+    session_id = response.json()["session_id"]
+
+    models = client.get("/api/models", headers={SESSION_HEADER: session_id}).json()["selected"]
+    assert models["manager_provider"] == "ollama"
+    assert models["worker_provider"] == "lmstudio"
+    assert models["worker"] == "qwen2.5-coder-7b-instruct"
+
+
+def test_model_list_advertises_every_provider(client: TestClient) -> None:
+    body = client.get("/api/models").json()
+
+    listed = {entry["id"]: entry for entry in body["providers"]}
+    assert {"ollama", "lmstudio", "openai", "custom_gateway"} <= listed.keys()
+    assert listed["lmstudio"]["local"] is True
+    assert listed["lmstudio"]["base_url"]
+    assert listed["custom_gateway"]["configured"] is False
+
+
+def test_partial_selection_leaves_other_roles_alone(client: TestClient) -> None:
+    first = client.post("/api/models", json={"manager": "keep-me", "manager_provider": "ollama"})
+    headers = {SESSION_HEADER: first.json()["session_id"]}
+
+    client.post("/api/models", json={"temperature": 0.4}, headers=headers)
+
+    models = client.get("/api/models", headers=headers).json()["selected"]
+    assert models["manager"] == "keep-me"
+    assert models["manager_provider"] == "ollama"
+    assert models["temperature"] == 0.4

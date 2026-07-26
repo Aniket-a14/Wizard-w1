@@ -281,3 +281,53 @@ def test_guard_rejects_enormous_input() -> None:
 def test_guard_handles_null_bytes() -> None:
     verdict = CodeGuard.scan("print('a')\x00")
     assert verdict.syntax_error or not verdict.ok
+
+
+# --------------------------------------------------------------------------- #
+# Provider selection
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("bogus", ["gpt4all", "", "ollama; drop table", "OLLAMA_TYPO", "../../etc/passwd"])
+def test_unknown_provider_is_rejected_at_the_boundary(client: TestClient, bogus: str) -> None:
+    """A provider the runtime cannot route must never reach the session, where
+    it would silently degrade to the default and mislabel which backend ran."""
+    response = client.post("/api/models", json={"worker": "some-model", "worker_provider": bogus})
+    assert response.status_code == 422
+
+
+def test_listing_an_unreachable_provider_reports_where_it_tried(client: TestClient) -> None:
+    """Nothing is listening on the LM Studio port in a test run. The response
+    has to name the endpoint -- 'no models' alone gives the user nothing to fix.
+    """
+    response = client.get("/api/models?provider=lmstudio")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "lmstudio"
+    assert body["models"] == []
+    assert body["error"] and "lmstudio" in body["error"]
+
+
+def test_provider_switch_does_not_carry_the_previous_backends_model(client: TestClient) -> None:
+    """An Ollama tag like `deepseek-r1:1.5b` is a 404 on LM Studio. Switching
+    provider without naming a model must re-resolve rather than keep the old id.
+    """
+    first = client.post("/api/models", json={"worker": "qwen2.5-coder:1.5b"})
+    headers = {"X-Session-Id": first.json()["session_id"]}
+    assert first.json()["models"]["worker"] == "qwen2.5-coder:1.5b"
+
+    response = client.post("/api/models", json={"worker_provider": "lmstudio"}, headers=headers)
+
+    assert response.status_code == 200
+    models = response.json()["models"]
+    assert models["worker_provider"] == "lmstudio"
+    # LM Studio is unreachable here, so there is nothing to resolve to -- but the
+    # stale Ollama tag must not survive the switch either.
+    assert models["worker"] != "qwen2.5-coder:1.5b"
+
+
+def test_an_unreachable_provider_does_not_break_the_provider_list(client: TestClient) -> None:
+    """The picker must still render every provider so the user can switch back."""
+    body = client.get("/api/models?provider=lmstudio").json()
+
+    assert {entry["id"] for entry in body["providers"]} >= {"ollama", "lmstudio"}
+    assert any(entry["is_default"] for entry in body["providers"])

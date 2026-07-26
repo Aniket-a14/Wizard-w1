@@ -392,6 +392,7 @@ class AnalysisOrchestrator:
             role=LLMRole.MANAGER,
             model=session.models.manager,
             temperature=session.models.temperature,
+            provider=session.models.manager_provider,
         )
         if pending:
             await emit(emitter, EventType.PLAN_DELTA, content=pending)
@@ -547,6 +548,7 @@ class AnalysisOrchestrator:
             role=LLMRole.WORKER,
             model=session.models.worker,
             temperature=session.models.temperature,
+            provider=session.models.worker_provider,
         )
         state.code = self._extract_code(raw)
 
@@ -623,7 +625,7 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STEP_START, id="review", label="Reviewing results", kind="review")
 
         tasks: list[asyncio.Task] = [
-            asyncio.ensure_future(self.council.adjudicate(state.plan, state.code, state.output))
+            asyncio.ensure_future(self.council.adjudicate(state.plan, state.code, state.output, session.models))
         ]
         if settings.VISION_ENABLED and state.image:
             tasks.append(asyncio.ensure_future(self._describe_plot(state.image, session)))
@@ -655,7 +657,9 @@ class AnalysisOrchestrator:
 
     async def _describe_plot(self, image: str, session: Session) -> str:
         try:
-            return await llm_provider.describe_image(image, model=session.models.vision)
+            return await llm_provider.describe_image(
+                image, model=session.models.vision, provider=session.models.vision_provider
+            )
         except Exception as exc:
             logger.debug("Vision description unavailable", error=str(exc))
             return ""
@@ -689,6 +693,7 @@ class AnalysisOrchestrator:
                 role=LLMRole.MANAGER,
                 model=session.models.manager,
                 temperature=session.models.temperature,
+                provider=session.models.manager_provider,
             )
             state.answer = "".join(chunks).strip()
         except LLMUnavailableError:

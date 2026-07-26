@@ -4,7 +4,7 @@ import { Check, ChevronDown, Cpu, RefreshCw, TriangleAlert } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { api } from "@/lib/api"
-import type { ModelListResponse } from "@/lib/types"
+import type { ModelListResponse, ProviderId } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const ROLES = [
@@ -12,29 +12,56 @@ const ROLES = [
   { key: "worker", label: "Code", hint: "Writes the Python that runs" },
 ] as const
 
+const PROVIDER_LABELS: Record<ProviderId, string> = {
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  openai: "OpenAI",
+  custom_gateway: "Gateway",
+}
+
+/** What to suggest when a provider returns nothing, keyed by why it is usually empty. */
+const EMPTY_HINTS: Record<ProviderId, string> = {
+  ollama: "No models found. Pull one first, e.g. `ollama pull qwen2.5-coder:1.5b`.",
+  lmstudio:
+    "No models found. Start the LM Studio server (Developer tab) and enable “Serve on Local Network” so the backend can reach it.",
+  openai: "No models found. Check GATEWAY_API_URL and GATEWAY_API_KEY.",
+  custom_gateway: "No models found. Check GATEWAY_API_URL and GATEWAY_API_KEY.",
+}
+
 function formatSize(bytes: number): string {
   if (!bytes) return ""
   const gb = bytes / 1024 ** 3
   return gb >= 1 ? `${gb.toFixed(1)}GB` : `${Math.round(bytes / 1024 ** 2)}MB`
 }
 
+function formatContext(tokens: number): string {
+  if (!tokens) return ""
+  return tokens >= 1000 ? `${Math.round(tokens / 1024)}k ctx` : `${tokens} ctx`
+}
+
 /**
- * Lets the user pick which locally-installed model fills each role.
+ * Lets the user pick which model fills each role, on which backend.
  *
- * The list comes from the running Ollama daemon rather than being hardcoded, so
- * whatever the user has pulled is what they can choose.
+ * The list is fetched per provider from the daemon itself rather than being
+ * hardcoded, so whatever the user has installed is what they can choose. Roles
+ * carry their provider independently: picking an LM Studio model for `worker`
+ * leaves `manager` on Ollama.
  */
 export function ModelPicker() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<ModelListResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [activeRole, setActiveRole] = useState<"manager" | "worker">("manager")
+  // `null` means "whatever the server says this role is using". It only becomes
+  // a concrete id once the user browses to another provider, so opening the menu
+  // always lands on the backend the role is actually running on.
+  const [browsing, setBrowsing] = useState<ProviderId | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const load = useCallback(async (refresh = false) => {
+  const load = useCallback(async (refresh = false, provider?: ProviderId) => {
     setLoading(true)
     try {
-      setData(await api.models(refresh))
+      setData(await api.models(refresh, provider))
     } catch {
       setData(null)
     } finally {
@@ -62,14 +89,38 @@ export function ModelPicker() {
     }
   }, [open])
 
-  const select = async (name: string) => {
-    await api.selectModels({ [activeRole]: name })
-    await load()
-  }
-
   const selected = data?.selected ?? {}
+  const roleProvider = String(selected[`${activeRole}_provider`] ?? data?.provider ?? "") as ProviderId
+  const shownProvider = browsing ?? roleProvider
   const current = String(selected[activeRole] ?? "")
   const label = String(selected.manager ?? "model")
+
+  const select = async (name: string) => {
+    // Always send the provider alongside the name: the model list on screen may
+    // belong to a different backend than the one this role is currently on, and
+    // a name without a provider would be sent to the wrong daemon.
+    await api.selectModels({ [activeRole]: name, [`${activeRole}_provider`]: shownProvider })
+    setBrowsing(null)
+    await load(false, shownProvider)
+  }
+
+  const showProvider = async (provider: ProviderId) => {
+    setBrowsing(provider)
+    await load(false, provider)
+  }
+
+  const switchRole = (role: "manager" | "worker") => {
+    setActiveRole(role)
+    // Drop the browse override so the new role opens on its own provider.
+    setBrowsing(null)
+    void load(false, String(selected[`${role}_provider`] ?? "") as ProviderId)
+  }
+
+  const providers = data?.providers ?? []
+  const mixed =
+    Boolean(selected.manager_provider) &&
+    Boolean(selected.worker_provider) &&
+    selected.manager_provider !== selected.worker_provider
 
   return (
     <div ref={containerRef} className="relative">
@@ -95,7 +146,7 @@ export function ModelPicker() {
               <button
                 key={role.key}
                 type="button"
-                onClick={() => setActiveRole(role.key)}
+                onClick={() => switchRole(role.key)}
                 title={role.hint}
                 className={cn(
                   "flex-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors",
@@ -109,13 +160,35 @@ export function ModelPicker() {
             ))}
             <button
               type="button"
-              onClick={() => void load(true)}
+              onClick={() => void load(true, shownProvider)}
               aria-label="Refresh model list"
               className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
             >
               <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
             </button>
           </div>
+
+          {providers.length > 1 && (
+            <div className="flex flex-wrap gap-1 border-b border-border px-1.5 py-1.5">
+              {providers.map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  onClick={() => void showProvider(provider.id)}
+                  title={provider.base_url || "No endpoint configured"}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                    shownProvider === provider.id
+                      ? "bg-foreground text-background"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    !provider.configured && shownProvider !== provider.id && "opacity-40",
+                  )}
+                >
+                  {PROVIDER_LABELS[provider.id] ?? provider.id}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="max-h-72 overflow-y-auto p-1.5">
             {data?.error && (
@@ -127,7 +200,7 @@ export function ModelPicker() {
 
             {!loading && data && data.models.length === 0 && !data.error && (
               <p className="px-2 py-3 text-xs text-muted-foreground">
-                No models found. Pull one first, e.g. <code>ollama pull qwen2.5-coder:1.5b</code>.
+                {EMPTY_HINTS[shownProvider] ?? "No models found."}
               </p>
             )}
 
@@ -141,23 +214,38 @@ export function ModelPicker() {
                 <Check
                   className={cn(
                     "h-3.5 w-3.5 shrink-0",
-                    model.name === current ? "text-emerald-500" : "text-transparent",
+                    model.name === current && shownProvider === roleProvider
+                      ? "text-emerald-500"
+                      : "text-transparent",
                   )}
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs font-medium">{model.name}</span>
                   <span className="block truncate text-[10px] text-muted-foreground">
-                    {[model.parameter_size, formatSize(model.size_bytes), ...model.capabilities]
+                    {[
+                      model.parameter_size,
+                      formatSize(model.size_bytes),
+                      formatContext(model.context_length),
+                      ...model.capabilities,
+                    ]
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
                 </span>
+                {/* LM Studio loads on first use; that stall is worth warning about up front. */}
+                {model.loaded === false && (
+                  <span className="shrink-0 rounded px-1 py-0.5 text-[9px] text-muted-foreground ring-1 ring-border">
+                    not loaded
+                  </span>
+                )}
               </button>
             ))}
           </div>
 
           <p className="border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
-            Provider: {data?.provider ?? "…"} · applies to this session
+            {mixed
+              ? `Reasoning on ${PROVIDER_LABELS[selected.manager_provider as ProviderId] ?? selected.manager_provider} · code on ${PROVIDER_LABELS[selected.worker_provider as ProviderId] ?? selected.worker_provider}`
+              : `Provider: ${PROVIDER_LABELS[shownProvider] ?? shownProvider ?? "…"} · applies to this session`}
           </p>
         </div>
       )}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends
 
 from src.api.deps import get_session, require_api_key
@@ -59,13 +61,24 @@ async def server_config() -> ServerConfig:
 
 
 @router.get("/api/models", response_model=ModelListResponse)
-async def list_models(refresh: bool = False, session: Session = Depends(get_session)) -> ModelListResponse:
-    """Models installed on the configured host, so the user can actually pick one."""
-    models = model_registry.list_models(force=refresh)
+async def list_models(
+    refresh: bool = False,
+    provider: str | None = None,
+    session: Session = Depends(get_session),
+) -> ModelListResponse:
+    """Models installed on one provider, so the user can actually pick one.
+
+    ``provider`` selects which backend to enumerate. Discovery talks to a
+    possibly-unreachable host, so it runs off the event loop.
+    """
+    resolved = settings.resolve_provider(provider)
+    models = await asyncio.to_thread(model_registry.list_models, refresh, resolved)
+    suggested = await asyncio.to_thread(model_registry.suggest, resolved)
+
     return ModelListResponse(
-        provider=settings.API_PROVIDER,
+        provider=resolved,
         models=[model.to_dict() for model in models],
-        suggested=model_registry.suggest(),
+        suggested=suggested,
         selected={
             "manager": session.models.manager or settings.MODEL_NAME,
             "worker": session.models.worker or settings.WORKER_MODEL_NAME,
@@ -73,20 +86,33 @@ async def list_models(refresh: bool = False, session: Session = Depends(get_sess
             "temperature": session.models.temperature
             if session.models.temperature is not None
             else settings.TEMPERATURE,
+            "manager_provider": session.models.manager_provider or settings.API_PROVIDER,
+            "worker_provider": session.models.worker_provider or settings.API_PROVIDER,
+            "vision_provider": session.models.vision_provider or settings.API_PROVIDER,
         },
-        error=model_registry.last_error if not models else None,
+        providers=model_registry.available_providers(),
+        error=model_registry.error_for(resolved) if not models else None,
     )
 
 
 @router.post("/api/models", response_model=SessionResponse, dependencies=[Depends(require_api_key)])
 async def select_models(selection: ModelSelection, session: Session = Depends(get_session)) -> SessionResponse:
     """Sets this session's preferred models. Unspecified fields keep their value."""
-    if selection.manager is not None:
-        session.models.manager = selection.manager or None
-    if selection.worker is not None:
-        session.models.worker = selection.worker or None
-    if selection.vision is not None:
-        session.models.vision = selection.vision or None
+    for role in ("manager", "worker", "vision"):
+        model = getattr(selection, role)
+        provider = getattr(selection, f"{role}_provider")
+        if model is not None:
+            setattr(session.models, role, model or None)
+        if provider is not None:
+            setattr(session.models, f"{role}_provider", provider or None)
+            # A provider switch without a model name would otherwise send the
+            # previous backend's model id to the new one -- an Ollama tag like
+            # "deepseek-r1:1.5b" is a 404 on LM Studio. Resolve a real default
+            # from what that provider actually has.
+            if model is None:
+                suggested = await asyncio.to_thread(model_registry.suggest, provider)
+                setattr(session.models, role, suggested.get(role))
+
     if selection.temperature is not None:
         session.models.temperature = selection.temperature
 

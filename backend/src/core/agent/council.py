@@ -14,11 +14,15 @@ regexes to strip back out.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.config import settings
 from src.core.llm import LLMRole, llm_provider
 from src.utils.logging import logger, trace_agent
+
+
+if TYPE_CHECKING:  # `src.core.session` pulls in the executor; keep that out of import order
+    from src.core.session import ModelPreferences
 
 
 class SpecialistAgent:
@@ -26,12 +30,23 @@ class SpecialistAgent:
 
     name = "Specialist"
 
-    async def review(self, plan: str, code: str, result: str) -> dict[str, Any]:
+    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
-    async def _ask(self, prompt: str, role: LLMRole = LLMRole.WORKER) -> str:
+    async def _ask(self, prompt: str, role: LLMRole = LLMRole.WORKER, models: ModelPreferences | None = None) -> str:
+        # Specialists used to always run on the configured default model, which
+        # quietly ignored the user's choice for the rest of the session.
+        role_name = role.value
         try:
-            return (await llm_provider.acomplete(prompt, role=role, temperature=0.2)).strip()
+            return (
+                await llm_provider.acomplete(
+                    prompt,
+                    role=role,
+                    temperature=0.2,
+                    model=models.model_for(role_name) if models else None,
+                    provider=models.provider_for(role_name) if models else None,
+                )
+            ).strip()
         except Exception as exc:
             logger.debug("Specialist LLM review skipped", agent=self.name, error=str(exc))
             return ""
@@ -42,7 +57,7 @@ class VisualizerAgent(SpecialistAgent):
 
     name = "Visualizer"
 
-    async def review(self, plan: str, code: str, result: str) -> dict[str, Any]:
+    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
         produces_plot = any(marker in code for marker in ("plt.", "sns.", "px.", "go."))
         if not produces_plot:
             return {"agent": self.name, "applicable": False, "feedback": []}
@@ -67,7 +82,7 @@ class StatisticianAgent(SpecialistAgent):
 
     RELEVANT = ("test", "hypothesis", "significan", "correlat", "regress", "model", "predict", "distribution")
 
-    async def review(self, plan: str, code: str, result: str) -> dict[str, Any]:
+    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
         haystack = f"{plan} {code}".lower()
         if not any(marker in haystack for marker in self.RELEVANT):
             return {"agent": self.name, "applicable": False, "feedback": []}
@@ -87,6 +102,7 @@ class StatisticianAgent(SpecialistAgent):
                 "You are a statistical reviewer. In one sentence, state the single most important "
                 f"caveat for this analysis.\n\nPlan: {plan[:800]}\n\nOutput: {result[:800]}",
                 role=LLMRole.MANAGER,
+                models=models,
             )
             if tip and "sound" not in tip.lower():
                 feedback.append(tip)
@@ -106,7 +122,7 @@ class ArchitectAgent(SpecialistAgent):
         ("inplace=True", "`inplace=True` is deprecated in several pandas APIs; prefer reassignment."),
     )
 
-    async def review(self, plan: str, code: str, result: str) -> dict[str, Any]:
+    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
         feedback = [message for pattern, message in self.ANTIPATTERNS if pattern in code]
         return {"agent": self.name, "applicable": bool(feedback), "feedback": feedback}
 
@@ -118,12 +134,14 @@ class TheCouncil:
         self.specialists: list[SpecialistAgent] = [VisualizerAgent(), StatisticianAgent(), ArchitectAgent()]
 
     @trace_agent("TheCouncil")
-    async def adjudicate(self, plan: str, code: str, result: str) -> dict[str, Any]:
+    async def adjudicate(
+        self, plan: str, code: str, result: str, models: ModelPreferences | None = None
+    ) -> dict[str, Any]:
         if not settings.COUNCIL_ENABLED:
             return {"reviews": [], "status": "disabled"}
 
         outcomes = await asyncio.gather(
-            *(specialist.review(plan, code, result) for specialist in self.specialists),
+            *(specialist.review(plan, code, result, models) for specialist in self.specialists),
             return_exceptions=True,
         )
 

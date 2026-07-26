@@ -90,6 +90,8 @@ export interface ChatMessage {
   streaming?: boolean
 }
 
+export type ProviderId = "ollama" | "lmstudio" | "openai" | "custom_gateway"
+
 export interface ModelInfo {
   name: string
   size_bytes: number
@@ -98,6 +100,18 @@ export interface ModelInfo {
   quantization: string
   capabilities: string[]
   installed: boolean
+  provider: string
+  context_length: number
+  /** LM Studio only: null elsewhere, since no other provider reports load state. */
+  loaded: boolean | null
+}
+
+export interface ProviderInfo {
+  id: ProviderId
+  base_url: string
+  configured: boolean
+  local: boolean
+  is_default: boolean
 }
 
 export interface ModelListResponse {
@@ -105,6 +119,7 @@ export interface ModelListResponse {
   models: ModelInfo[]
   suggested: Record<string, string | null>
   selected: Record<string, string | number | null>
+  providers: ProviderInfo[]
   error: string | null
 }
 

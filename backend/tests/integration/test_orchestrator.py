@@ -370,3 +370,74 @@ def test_session_dataset_is_materialised_for_the_sandbox(session: Session, simpl
     session.add_dataset("dataset.csv", simple_df)
     assert (session.workspace / "dataset.csv").exists()
     assert (session.workspace / "dataset.feather").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Per-role provider routing
+# --------------------------------------------------------------------------- #
+class RecordingLLM(ScriptedLLM):
+    """Scripted, but also records which (role, model, provider) each call used."""
+
+    def __init__(self, responses: list[str]):
+        super().__init__(responses)
+        self.calls: list[dict] = []
+
+    def _record(self, kwargs: dict) -> None:
+        self.calls.append(
+            {
+                "role": str(kwargs.get("role", "")),
+                "model": kwargs.get("model"),
+                "provider": kwargs.get("provider"),
+            }
+        )
+
+    async def acomplete(self, prompt: str, **kwargs: object) -> str:
+        self._record(kwargs)
+        return await super().acomplete(prompt)
+
+    def complete(self, prompt: str, **kwargs: object) -> str:
+        self._record(kwargs)
+        return super().complete(prompt)
+
+    async def stream_to(self, prompt: str, on_delta=None, **kwargs: object) -> str:
+        self._record(kwargs)
+        return await super().stream_to(prompt, on_delta)
+
+
+async def test_each_role_reaches_its_own_provider(loaded_session: Session, monkeypatch) -> None:
+    """The point of per-session providers: plan on one backend, code on another."""
+    stub = RecordingLLM(
+        [
+            "<thought>Considering.</thought>\n1. Count the rows",
+            "```python\nprint(len(df))\n```",
+            "There are five rows.",
+        ]
+    )
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", stub)
+
+    loaded_session.models.manager = "deepseek-r1:1.5b"
+    loaded_session.models.manager_provider = "ollama"
+    loaded_session.models.worker = "qwen2.5-coder-7b-instruct"
+    loaded_session.models.worker_provider = "lmstudio"
+
+    await orchestrator.run(session=loaded_session, instruction="how many rows", mode="fast", emitter=EventCollector())
+
+    by_role: dict[str, dict] = {}
+    for call in stub.calls:
+        by_role.setdefault(call["role"], call)
+
+    assert by_role["manager"]["provider"] == "ollama"
+    assert by_role["manager"]["model"] == "deepseek-r1:1.5b"
+    assert by_role["worker"]["provider"] == "lmstudio"
+    assert by_role["worker"]["model"] == "qwen2.5-coder-7b-instruct"
+
+
+async def test_unset_provider_leaves_the_default_in_charge(loaded_session: Session, monkeypatch) -> None:
+    """A session that never touches the provider fields behaves as it always did."""
+    stub = RecordingLLM(["1. Count", "```python\nprint(len(df))\n```", "Five."])
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", stub)
+
+    await orchestrator.run(session=loaded_session, instruction="how many rows", mode="fast", emitter=EventCollector())
+
+    assert stub.calls
+    assert all(call["provider"] is None for call in stub.calls)

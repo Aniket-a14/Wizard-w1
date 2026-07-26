@@ -6,6 +6,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.config import Provider
+
+
+# Rejecting an unknown provider at the schema boundary means the session can
+# never hold a value the LLM layer would silently fall back on.
+ProviderName = Provider
+
 
 class ErrorDetail(BaseModel):
     detail: Any
@@ -56,6 +63,17 @@ class ModelInfoResponse(BaseModel):
     quantization: str = ""
     capabilities: list[str] = Field(default_factory=list)
     installed: bool = True
+    provider: str = ""
+    context_length: int = 0
+    loaded: bool | None = None
+
+
+class ProviderInfo(BaseModel):
+    id: str
+    base_url: str = ""
+    configured: bool = False
+    local: bool = False
+    is_default: bool = False
 
 
 class ModelListResponse(BaseModel):
@@ -63,6 +81,7 @@ class ModelListResponse(BaseModel):
     models: list[ModelInfoResponse]
     suggested: dict[str, str | None]
     selected: dict[str, Any]
+    providers: list[ProviderInfo] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -71,6 +90,9 @@ class ModelSelection(BaseModel):
     worker: str | None = Field(default=None, max_length=200)
     vision: str | None = Field(default=None, max_length=200)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    manager_provider: ProviderName | None = None
+    worker_provider: ProviderName | None = None
+    vision_provider: ProviderName | None = None
 
 
 class DatasetSummary(BaseModel):

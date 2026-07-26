@@ -15,12 +15,15 @@ import pandas as pd
 
 from src.api.deps import SlidingWindowRateLimiter
 from src.config import Settings
-from src.core.database import DatabaseManager
+from src.core.agent.council import TheCouncil
+from src.core.database import DatabaseManager, db_mgr
 from src.core.execution import CodeExecutor
 from src.core.ingest.loader import json_safe_records, sanitize_columns
+from src.core.llm import LLMRole, llm_provider
 from src.core.memory import working_memory
 from src.core.reporting import ReportingEngine
 from src.core.security.code_guard import CodeGuard
+from src.core.semantic_cache import semantic_cache
 from src.core.session import Session, SessionManager
 from src.core.tools.evaluator import Evaluator
 from src.core.tools.sandbox import PID_FILE, SandboxSession
@@ -256,3 +259,60 @@ def test_syntax_errors_are_retryable_not_policy_violations(loaded_session: Sessi
     assert not result.ok
     assert result.retryable_error
     assert not result.blocked
+
+
+def test_provider_is_part_of_the_llm_client_cache_key() -> None:
+    """`ModelSpec.cache_key` covered only (provider, model, temperature, ...).
+
+    Adding a second backend made that ambiguous: the same model name served by
+    Ollama and by LM Studio produced the same key, so whichever endpoint was
+    contacted first answered for both. The endpoint is now part of the key.
+    """
+    spec = llm_provider.resolve(LLMRole.WORKER, model="shared-name", provider="ollama")
+    other = llm_provider.resolve(LLMRole.WORKER, model="shared-name", provider="lmstudio")
+
+    assert spec.base_url != other.base_url
+    assert spec.cache_key() != other.cache_key()
+
+
+def test_lmstudio_base_url_accepts_the_form_the_app_displays() -> None:
+    """LM Studio shows its endpoint as `http://localhost:1234/v1`, so that is
+    what users paste. Discovery needs the bare root, and the earlier code would
+    have built `.../v1/api/v0/models`, which 404s.
+    """
+    parsed = Settings(LMSTUDIO_BASE_URL="http://localhost:1234/v1")
+
+    assert parsed.LMSTUDIO_BASE_URL == "http://localhost:1234"
+    assert parsed.provider_openai_base_url("lmstudio") == "http://localhost:1234/v1"
+
+
+def test_council_honours_the_session_model_choice() -> None:
+    """Specialists called `acomplete` with no `model=`, so every review ran on
+    the configured default even after the user had picked something else.
+    """
+    import inspect
+
+    from src.core.agent.council import SpecialistAgent
+
+    signature = inspect.signature(SpecialistAgent._ask)
+    assert "models" in signature.parameters
+
+    signature = inspect.signature(TheCouncil.adjudicate)
+    assert "models" in signature.parameters
+
+
+def test_clearing_the_semantic_cache_also_clears_the_in_process_layer() -> None:
+    """`add()` writes to the SQLite table *and* to the in-process exact-match
+    cache, but the suite's teardown only truncated the table. A later test
+    asking the same question hit the stale in-memory entry, took the cache-hit
+    path and never called the LLM it had scripted -- an order-dependent failure
+    that passed whenever the file was run on its own.
+    """
+    columns = ["A", "B"]
+    semantic_cache.add("how many rows", columns, "print(len(df))")
+    assert semantic_cache.lookup("how many rows", columns) is not None
+
+    semantic_cache.clear()
+
+    assert semantic_cache.lookup("how many rows", columns) is None
+    assert db_mgr.get_cache_entries(columns) == []

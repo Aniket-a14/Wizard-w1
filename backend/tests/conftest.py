@@ -28,6 +28,12 @@ os.environ.update(
         "LOG_DIR": str(TEST_DATA_DIR / "logs"),
         "REDIS_URL": "",
         "API_KEY": "",
+        # Model discovery is the one component that dials out on its own. Port 1
+        # on loopback is refused instantly, so provider tests assert the
+        # unreachable path without waiting on a connect timeout (or resolving
+        # `host.docker.internal`, which is a real host on some dev machines).
+        "OLLAMA_BASE_URL": "http://127.0.0.1:1",
+        "LMSTUDIO_BASE_URL": "http://127.0.0.1:1",
         "COUNCIL_ENABLED": "false",
         "VISION_ENABLED": "false",
         "RATE_LIMIT_MAX_REQUESTS": "10000",
@@ -48,7 +54,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
-from src.core.database import db_mgr  # noqa: E402
+from src.core.semantic_cache import semantic_cache  # noqa: E402
 from src.core.session import Session, session_manager  # noqa: E402
 
 
@@ -125,9 +131,15 @@ def loaded_session(session: Session, simple_df: pd.DataFrame) -> Session:
 
 @pytest.fixture(autouse=True)
 def _clean_database():
-    """Keeps cross-test pollution out of the shared SQLite file."""
+    """Keeps cross-test pollution out of the shared cache.
+
+    This has to go through ``semantic_cache.clear()`` rather than
+    ``db_mgr.clear_cache()``: ``store()`` writes to the SQLite table *and* to the
+    in-process exact-match cache, so clearing only the table leaves a live entry
+    that makes a later test with the same question take the cache-hit path.
+    """
     yield
-    db_mgr.clear_cache()
+    semantic_cache.clear()
 
 
 @pytest.fixture
