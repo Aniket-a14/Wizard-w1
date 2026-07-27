@@ -2,8 +2,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Deliberately not under `core.infra`: `Settings` is constructed at import time,
+# and that package's __init__ imports the cache, which imports `settings` back.
+from src.utils.hostinfo import host_info
 
 
 # Every backend the runtime can talk to. "ollama" and "lmstudio" are local
@@ -92,6 +96,47 @@ COMPACT_MAX_PARAMS_B = 4.0
 FULL_MIN_PARAMS_B = 30.0
 
 
+#: Docker's memory-limit suffixes, which are what `SANDBOX_MEM_LIMIT` speaks.
+_MEMORY_UNITS: dict[str, int] = {"b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+
+
+def parse_memory(value: str | int | None) -> int | None:
+    """``"2g"`` -> bytes. Returns ``None`` for anything unreadable.
+
+    Total by design: this parses a hand-edited .env value, and a typo there
+    should cost a default rather than a failed boot.
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    text = str(value).strip().lower().rstrip("ib")  # accepts "2gib" and "2gb"
+    if not text:
+        return None
+    unit = _MEMORY_UNITS.get(text[-1:], None)
+    number = text[:-1] if unit else text
+    try:
+        parsed = float(number)
+    except ValueError:
+        return None
+    return int(parsed * (unit or 1)) or None
+
+
+def format_memory(num_bytes: int) -> str:
+    """Bytes -> a readable Docker suffix form (``"2g"``, ``"512m"``).
+
+    Rounded *down* to a whole gigabyte, or to 256 MB below that. A derived limit
+    is an approximation of what the machine can spare, and printing it as
+    ``2057637k`` reads like a measurement it is not -- someone comparing it
+    against their .env should see a number they could have typed.
+    """
+    gigabyte = 1024**3
+    if num_bytes >= gigabyte:
+        return f"{num_bytes // gigabyte}g"
+    step = 256 * 1024**2
+    return f"{max(1, (num_bytes // step) * step // (1024**2))}m"
+
+
 def tier_for_parameter_size(parameter_size: str | None) -> AgentTier:
     """Maps a reported parameter count ("1.5B", "7B", "70B") onto a tier.
 
@@ -120,8 +165,10 @@ class Settings(BaseSettings):
     ENV: Literal["dev", "prod", "test"] = "dev"
     BASE_DIR: Path = Path(__file__).parent.parent
 
-    # Adaptive Hardware Profile
-    SYSTEM_PROFILE: Literal["laptop", "server", "hpc"] = "laptop"
+    # Adaptive hardware profile. "auto" measures the host at boot; the three
+    # named profiles pin it. This was previously read by nothing at all, so
+    # every resource default was a server's regardless of what it said.
+    SYSTEM_PROFILE: Literal["auto", "laptop", "server", "hpc"] = "auto"
 
     # Model Configuration
     # NOTE: MODEL_TYPE is retained only so existing .env files keep validating.
@@ -138,9 +185,33 @@ class Settings(BaseSettings):
     MODEL_NAME: str = ""
     WORKER_MODEL_NAME: str = ""
     VISION_MODEL_NAME: str = ""
-    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     FEEDBACK_FILE: str = "feedback_data.json"
+
+    # ------------------------------------------------------------------ #
+    # Embeddings
+    #
+    # These used to come from `sentence-transformers`, which depends on torch --
+    # and on Linux/x86_64 torch installs eleven NVIDIA CUDA wheels unconditionally,
+    # whether or not a GPU exists. That is ~2.8 GB of compressed wheels to run a
+    # 90 MB MiniLM model, and it was by far the largest thing in the API image.
+    #
+    # The model server this app already talks to can embed: Ollama exposes
+    # POST /api/embed, and every OpenAI-compatible server exposes /v1/embeddings.
+    # Using it costs nothing on disk and follows whichever provider is selected.
+    # Resolution order is remote -> local sentence-transformers (only if the user
+    # installed it) -> the built-in hashing encoder, which always works offline.
+    # ------------------------------------------------------------------ #
+    EMBEDDINGS_REMOTE_ENABLED: bool = True
+    #: Which provider to embed against. Empty follows API_PROVIDER.
+    EMBEDDING_PROVIDER: str = ""
+    #: Remote embedding model id. Empty means "discover one from this provider",
+    #: which is right because the name differs per backend and per install.
+    EMBEDDING_REMOTE_MODEL: str = ""
+    EMBEDDING_TIMEOUT: float = 20.0
+    #: Local sentence-transformers model, used only when that optional package
+    #: is installed. Unchanged so existing .env files keep their meaning.
+    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
 
     # LM Studio. Stored as a bare root because two API surfaces hang off it:
     # `/v1` (OpenAI-compatible, used for inference) and `/api/v0` (native, used
@@ -150,7 +221,50 @@ class Settings(BaseSettings):
     LMSTUDIO_BASE_URL: str = "http://host.docker.internal:1234"
     LMSTUDIO_API_KEY: str = ""  # LM Studio ignores it; present for proxies that don't
 
+    # ------------------------------------------------------------------ #
+    # Where generated code runs
+    #
+    # Two supported backends, not one backend and an apology:
+    #
+    #   docker     one container per session. Real isolation, ~700 MB image.
+    #   local      one *subprocess* per session running the same daemon over a
+    #              loopback socket. No Docker, no image, but still a separate
+    #              process -- so a runaway allocation, an infinite loop or a
+    #              segfault takes down the child and not the API.
+    #   inprocess  guarded `exec` inside the API process. No isolation at all.
+    #              Kept for CI and for environments where spawning is blocked.
+    #
+    # "auto" prefers docker and falls back to local, which is what someone who
+    # simply has not installed Docker should get.
+    # ------------------------------------------------------------------ #
+    EXECUTION_BACKEND: Literal["auto", "docker", "local", "inprocess"] = "auto"
+    #: Seconds to wait for a freshly spawned local runtime to accept connections.
+    #: It imports pandas and matplotlib first, which is seconds on a slow disk.
+    LOCAL_RUNTIME_START_TIMEOUT: float = 60.0
+    #: Address-space ceiling for a local runtime, mirroring SANDBOX_MEM_LIMIT.
+    #: Enforced through RLIMIT_AS on POSIX only -- Windows has no equivalent that
+    #: does not require pywin32, so there the cap is documented, not enforced.
+    LOCAL_RUNTIME_MEM_LIMIT: str = ""
+    #: Whether a local runtime may pip-install a missing package on demand.
+    #: Off by default: unlike a container, it would be installing into the
+    #: environment the backend itself runs in.
+    LOCAL_RUNTIME_ALLOW_PIP: bool = False
+
     # Sandbox
+    #
+    # How much of the analysis toolkit the image carries. The libraries are no
+    # longer declared to the model from a hand-maintained list -- the runtime is
+    # asked what it actually has -- so a smaller image simply advertises less
+    # rather than promising something that then fails to import.
+    #
+    #   core      pandas, numpy, pyarrow, matplotlib, duckdb, openpyxl
+    #   standard  + scipy, statsmodels, scikit-learn, xgboost-cpu, lightgbm,
+    #             plotly, seaborn, networkx, pillow, xlsxwriter, tabulate
+    #   full      + lifelines, geopandas, shapely
+    SANDBOX_TIER: Literal["core", "standard", "full"] = "standard"
+    #: Overrides the image tag. Empty derives it from the tier, so switching
+    #: tiers cannot silently reuse an image built with different libraries.
+    SANDBOX_IMAGE: str = ""
     SANDBOX_NETWORK_DISABLED: bool = False
     SANDBOX_DOCKER_RUNTIME: str = ""
     SANDBOX_MEM_LIMIT: str = "2g"
@@ -279,6 +393,70 @@ class Settings(BaseSettings):
             cleaned = cleaned[: -len("/v1")]
         return cleaned
 
+    @model_validator(mode="after")
+    def _size_to_the_host(self) -> "Settings":
+        """Fills resource limits from the measured machine.
+
+        Only fields the user did *not* set are touched -- ``model_fields_set``
+        carries everything that came from the environment or the .env, so an
+        explicit value always wins and this never silently overrides a choice.
+
+        Without this the shipped defaults describe a server: eight inference
+        threads (contention on a four-core laptop) and thirty-two sessions at
+        2 GB each, which is sixty-four gigabytes of containers on a machine that
+        may have four.
+        """
+        # Snapshotted: assigning below mutates `model_fields_set` in place, and
+        # a later check would then read a field this method had just filled in
+        # as though the user had chosen it.
+        #
+        # A blank string counts as unset. `docker-compose.yml` passes optional
+        # knobs as `${SANDBOX_MEM_LIMIT:-}`, and an empty environment variable
+        # is still *present* -- so without this, every compose deployment would
+        # arrive here looking as though the operator had chosen "".
+        explicit = {
+            name
+            for name in self.model_fields_set
+            if not (isinstance(getattr(self, name, None), str) and not getattr(self, name).strip())
+        }
+        host = host_info()
+
+        if "LLM_NUM_THREAD" not in explicit:
+            # Physical cores. More threads than cores makes local inference
+            # slower, not faster -- the work is memory-bandwidth bound.
+            self.LLM_NUM_THREAD = max(2, min(16, host.cores))
+
+        if "QUEUE_MAX_WORKERS" not in explicit:
+            self.QUEUE_MAX_WORKERS = max(1, min(4, host.cores // 2))
+
+        ram = host.ram_bytes
+        if "SANDBOX_MEM_LIMIT" not in explicit and ram:
+            # An eighth of RAM per sandbox: enough for a real frame, small
+            # enough that several sessions plus a local model still fit.
+            per_sandbox = max(512 * 1024**2, min(4 * 1024**3, ram // 8))
+            self.SANDBOX_MEM_LIMIT = format_memory(per_sandbox)
+
+        if "SESSION_MAX_ACTIVE" not in explicit and ram:
+            # Cap concurrent sandboxes so they cannot collectively claim more
+            # than half of RAM, whatever the per-sandbox limit works out to.
+            budget = ram // 2
+            per_sandbox = parse_memory(self.SANDBOX_MEM_LIMIT) or (1024**3)
+            self.SESSION_MAX_ACTIVE = max(1, min(32, int(budget // per_sandbox)))
+
+        if "LOCAL_RUNTIME_MEM_LIMIT" not in explicit:
+            # The local runtime is bounded like a container, so switching
+            # backends does not silently change how much memory code may take.
+            self.LOCAL_RUNTIME_MEM_LIMIT = self.SANDBOX_MEM_LIMIT
+
+        return self
+
+    @property
+    def system_profile(self) -> str:
+        """The profile in force, with ``auto`` already resolved to the host."""
+        if self.SYSTEM_PROFILE != "auto":
+            return self.SYSTEM_PROFILE
+        return host_info().profile
+
     # ------------------------------------------------------------------ #
     # Provider resolution
     #
@@ -379,6 +557,32 @@ class Settings(BaseSettings):
     @property
     def redis_enabled(self) -> bool:
         return bool(self.REDIS_URL.strip())
+
+    # ------------------------------------------------------------------ #
+    # Execution backend
+    #
+    # Which backends this configuration permits. Whether one is *reachable* is
+    # a runtime question and belongs to `core.tools.runtime`, which is why these
+    # only express permission -- config cannot import the sandbox without a
+    # circular import, and should not need to.
+    # ------------------------------------------------------------------ #
+    @property
+    def docker_backend_allowed(self) -> bool:
+        return self.SANDBOX_ENABLED and self.EXECUTION_BACKEND in ("auto", "docker")
+
+    @property
+    def local_backend_allowed(self) -> bool:
+        return self.EXECUTION_BACKEND in ("auto", "local")
+
+    @property
+    def sandbox_image(self) -> str:
+        """Image tag for the current tier, unless one was named explicitly."""
+        return self.SANDBOX_IMAGE.strip() or f"wizard-sandbox:{self.SANDBOX_TIER}"
+
+    @property
+    def local_runtime_mem_bytes(self) -> int:
+        """Address-space ceiling for a local runtime, 0 when uncapped."""
+        return parse_memory(self.LOCAL_RUNTIME_MEM_LIMIT) or 0
 
 
 settings = Settings()
