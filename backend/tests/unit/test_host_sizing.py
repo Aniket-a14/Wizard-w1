@@ -110,5 +110,3 @@ def test_the_agent_tier_is_still_the_models_business_not_the_hosts() -> None:
     """
     assert tier_for_parameter_size("70B") == "full"
     assert Settings(SYSTEM_PROFILE="laptop").budget_for("auto", "70B").tier == "full"
-
-
