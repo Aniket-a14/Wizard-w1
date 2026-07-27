@@ -5,9 +5,10 @@ agent, and a *completely unguarded* ``exec`` in ``ScientificAgent.clean_dataset`
 that ran on every upload. Only the first was checked. Everything now funnels
 through :meth:`CodeExecutor.execute`, which guards first and executes second.
 
-The local fallback is retained (it is what makes the app usable without Docker)
-but is now restricted and clearly reported as degraded, rather than silently
-running arbitrary model output in the API process.
+Which runtime serves a session is decided by :mod:`src.core.tools.runtime`: a
+container, a local subprocess, or -- only when neither is permitted -- a guarded
+``exec`` in this process. The first two are both fully supported; the third is
+the genuinely degraded one and says so.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import pandas as pd
 
 from src.config import settings
 from src.core.security.code_guard import CodeGuard, GuardVerdict
-from src.core.tools.sandbox import sandbox_pool
+from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
 
@@ -45,7 +46,11 @@ class ExecutionResult:
     blocked: bool = False
     blocked_reason: str = ""
     retryable_error: bool = False
+    #: True only for a container. A local subprocess is isolated from the API
+    #: process but is not a security boundary, so it does not claim to be one.
     sandboxed: bool = True
+    #: Which backend actually ran this: ``docker`` / ``local`` / ``inprocess``.
+    backend: str = "docker"
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -59,6 +64,7 @@ class ExecutionResult:
             "blocked": self.blocked,
             "blocked_reason": self.blocked_reason,
             "sandboxed": self.sandboxed,
+            "backend": self.backend,
             "has_image": self.image is not None,
             "warnings": self.warnings,
         }
@@ -72,9 +78,18 @@ class CodeExecutor:
 
     # ------------------------------------------------------------------ #
     def guard(self, code: str) -> tuple[GuardVerdict, str]:
-        """Repairs then scans. Returns the verdict and the (possibly repaired) code."""
+        """Repairs then scans. Returns the verdict and the (possibly repaired) code.
+
+        On a non-container backend the writable root is the session's own
+        workspace directory rather than ``/workspace``, so it is passed in --
+        otherwise the guard would reject the very chart path the prompt handed
+        the model.
+        """
         _, repaired = CodeGuard.repair(code)
-        return CodeGuard.scan(repaired), repaired
+        extra_roots: tuple[str, ...] = ()
+        if runtime_backend.active_backend() != "docker":
+            extra_roots = (runtime_backend.workspace_for(self.session_id).as_posix(),)
+        return CodeGuard.scan(repaired, extra_roots=extra_roots), repaired
 
     def execute(
         self,
@@ -90,6 +105,7 @@ class CodeExecutor:
         pay a full serialisation per call for something already there.
         """
         verdict, prepared = self.guard(code)
+        backend = runtime_backend.active_backend()
 
         if not verdict.ok:
             if verdict.syntax_error:
@@ -100,7 +116,8 @@ class CodeExecutor:
                     code=prepared,
                     ok=False,
                     retryable_error=True,
-                    sandboxed=sandbox_pool.available,
+                    sandboxed=backend == "docker",
+                    backend=backend,
                 )
             logger.warning("Execution blocked by guard", reason=verdict.reason, session=self.session_id)
             return ExecutionResult(
@@ -109,12 +126,13 @@ class CodeExecutor:
                 ok=False,
                 blocked=True,
                 blocked_reason=verdict.reason,
-                sandboxed=sandbox_pool.available,
+                sandboxed=backend == "docker",
+                backend=backend,
             )
 
-        session = sandbox_pool.get(self.session_id) if sandbox_pool.available else None
-        if session is not None:
-            output, image = session.run_code(prepared, on_stdout)
+        runtime = runtime_backend.get_runtime(self.session_id)
+        if runtime is not None:
+            output, image = runtime.run_code(prepared, on_stdout)
             failed = output.startswith("Error executing code:")
             return ExecutionResult(
                 output=output,
@@ -122,10 +140,14 @@ class CodeExecutor:
                 image=image,
                 ok=not failed,
                 retryable_error=failed,
-                sandboxed=True,
+                sandboxed=backend == "docker",
+                backend=backend,
+                # No warning for `local`: it is a supported way to run, and the
+                # isolation actually in force is reported once on /settings
+                # rather than restated on every message. Only the in-process
+                # path below warns, because only it has no isolation at all.
             )
 
-        logger.warning("Docker unavailable; running in degraded local mode", session=self.session_id)
         return self._execute_locally(prepared, df, on_stdout, tables)
 
     # ------------------------------------------------------------------ #
@@ -136,7 +158,12 @@ class CodeExecutor:
         on_stdout: Callable[[str], None] | None = None,
         tables: dict[str, pd.DataFrame] | None = None,
     ) -> ExecutionResult:
-        """In-process fallback used only when Docker is unreachable."""
+        """Last resort: guarded ``exec`` in the API process itself.
+
+        Reached only when neither a container nor a subprocess can be had. The
+        namespace does not persist between calls and nothing bounds the code, so
+        this is the one path that genuinely warrants a warning.
+        """
         import matplotlib
 
         matplotlib.use("Agg")
@@ -167,7 +194,11 @@ class CodeExecutor:
 
         buffer = io.StringIO()
         original_stdout = sys.stdout
-        warning = "Docker is unavailable, so this ran in a restricted local interpreter instead of the sandbox."
+        warning = (
+            "No isolated runtime was available, so this ran in a restricted interpreter "
+            "inside the API process. Start Docker, or allow the local subprocess runtime, "
+            "to restore isolation."
+        )
 
         try:
             plt.close("all")
@@ -186,7 +217,15 @@ class CodeExecutor:
             output = buffer.getvalue().strip() or "Executed successfully."
             if on_stdout and output:
                 on_stdout(output)
-            return ExecutionResult(output=output, code=code, image=image, ok=True, sandboxed=False, warnings=[warning])
+            return ExecutionResult(
+                output=output,
+                code=code,
+                image=image,
+                ok=True,
+                sandboxed=False,
+                backend="inprocess",
+                warnings=[warning],
+            )
         except Exception as exc:
             import traceback
 
@@ -199,6 +238,7 @@ class CodeExecutor:
                 ok=False,
                 retryable_error=True,
                 sandboxed=False,
+                backend="inprocess",
                 warnings=[warning],
             )
         finally:
@@ -206,31 +246,53 @@ class CodeExecutor:
             plt.close("all")
 
     # ------------------------------------------------------------------ #
+    # Runtime control. All of these address an *existing* runtime only --
+    # ``create=False`` -- because inspecting or resetting a session that has not
+    # run anything should not be what brings a container up.
+    # ------------------------------------------------------------------ #
+    def _existing(self):
+        return runtime_backend.get_runtime(self.session_id, create=False)
+
+    @property
+    def backend(self) -> str:
+        return runtime_backend.active_backend()
+
     def inspect_variables(self) -> dict:
-        session = sandbox_pool.get(self.session_id, create=False)
-        return session.inspect_variables() if session else {}
+        runtime = self._existing()
+        return runtime.inspect_variables() if runtime else {}
 
     def interrupt(self) -> bool:
-        session = sandbox_pool.get(self.session_id, create=False)
-        return session.interrupt() if session else False
+        runtime = self._existing()
+        return runtime.interrupt() if runtime else False
 
     def reload_dataset(self) -> bool:
-        session = sandbox_pool.get(self.session_id, create=False)
-        return session.reload_dataset() if session else False
+        runtime = self._existing()
+        return runtime.reload_dataset() if runtime else False
 
     def reset(self) -> bool:
-        session = sandbox_pool.get(self.session_id, create=False)
-        return session.reset_namespace() if session else False
+        runtime = self._existing()
+        return runtime.reset_namespace() if runtime else False
+
+    def capabilities(self) -> frozenset[str]:
+        """Modules generated code may import in this session's runtime."""
+        return runtime_backend.capabilities(self.session_id)
 
 
 def plot_output_path(session_id: str) -> str:
-    """Path the worker is told to write interactive charts to, inside the container."""
-    return "/workspace/plot.html"
+    """Path the worker is told to write interactive charts to.
+
+    ``/workspace`` inside a container; the session's own directory for a local
+    runtime, which is started with that directory as its working directory and
+    as the daemon's ``WORKSPACE``.
+    """
+    if runtime_backend.active_backend() == "docker":
+        return "/workspace/plot.html"
+    return str(runtime_backend.workspace_for(session_id) / "plot.html")
 
 
 def host_plot_path(session_id: str):
     """Corresponding path on the host for the session's chart."""
-    return sandbox_pool.workspace_for(session_id) / "plot.html"
+    return runtime_backend.workspace_for(session_id) / "plot.html"
 
 
 __all__ = ["CodeExecutor", "ExecutionResult", "plot_output_path", "host_plot_path", "settings"]

@@ -17,7 +17,10 @@ from src.api.routes import chat, datasets, meta, sandbox, sessions, workspace
 from src.config import settings
 from src.core.infra.queue import get_queue
 from src.core.session import session_manager
+from src.core.tools import runtime as runtime_backend
+from src.core.tools.local_runtime import local_runtime_pool
 from src.core.tools.sandbox import sandbox_pool
+from src.utils.hostinfo import host_info
 from src.utils.logging import configure_logger, logger
 
 
@@ -51,7 +54,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "Starting Wizard backend",
         env=settings.ENV,
         provider=settings.API_PROVIDER,
-        sandbox_enabled=settings.SANDBOX_ENABLED,
+        # Sized from the machine at boot, so the log is the record of what it
+        # decided -- "why is it only using four threads" has an answer here.
+        execution_backend=runtime_backend.active_backend(),
+        profile=settings.system_profile,
+        cores=host_info().cores,
+        ram_gb=None if host_info().ram_gb is None else round(host_info().ram_gb, 1),
+        inference_threads=settings.LLM_NUM_THREAD,
+        sandbox_mem_limit=settings.SANDBOX_MEM_LIMIT,
+        max_sessions=settings.SESSION_MAX_ACTIVE,
     )
     # Containers left behind by a previous process would otherwise accumulate.
     await asyncio.to_thread(sandbox_pool.prune_orphans)
@@ -66,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await get_queue().shutdown()
         await asyncio.to_thread(session_manager.shutdown)
         await asyncio.to_thread(sandbox_pool.shutdown)
+        await asyncio.to_thread(local_runtime_pool.shutdown)
         logger.info("Wizard backend stopped")
 
 

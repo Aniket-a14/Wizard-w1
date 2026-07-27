@@ -11,7 +11,6 @@ question, and per-section output is capped.
 from __future__ import annotations
 
 import io
-from functools import lru_cache
 from typing import Any
 
 import pandas as pd
@@ -241,84 +240,92 @@ A pandas DataFrame named `df` is already loaded with columns: {columns}
 #: The worker prompt used to declare only `pd`, `np`, `plt` and `sns`, so the
 #: model had no idea it could fit a model, run a hypothesis test or query with
 #: SQL -- and duly wrote hand-rolled loops for things scikit-learn and statsmodels
-#: were sitting right there to do. Anything added to `backend/docker/Dockerfile`
-#: belongs here too, or it may as well not be installed.
+#: were sitting right there to do.
+#:
+#: This is a *catalogue*, not a promise. The runtime reports which of these it
+#: can import and the block is filtered to that, so the sandbox image can ship
+#: in tiers without the prompt lying about either direction. Entries are
+#: therefore atomic: an entry naming three libraries is dropped entirely unless
+#: all three are present, which is why "charts" and "file output" are split
+#: rather than listed together.
 TOOLKIT: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("Dataframes & numerics", "pandas (`pd`), numpy (`np`), pyarrow", ("pandas", "numpy")),
+    ("Dataframes & numerics", "pandas (`pd`), numpy (`np`)", ("pandas", "numpy")),
+    ("Columnar I/O", "pyarrow — read and write parquet and feather", ("pyarrow",)),
     (
         "SQL over dataframes",
         "duckdb — `duckdb.sql('SELECT ... FROM df').df()`, joins and window functions included",
         ("duckdb",),
     ),
+    ("Statistics", "scipy.stats — hypothesis tests, distributions, correlation", ("scipy",)),
     (
-        "Statistics & inference",
-        "scipy.stats, statsmodels (OLS/GLM, ANOVA, ARIMA/SARIMAX, seasonal decomposition)",
-        ("scipy", "statsmodels"),
+        "Inference & time series",
+        "statsmodels (OLS/GLM, ANOVA, ARIMA/SARIMAX, seasonal decomposition)",
+        ("statsmodels",),
     ),
-    ("Machine learning", "scikit-learn, xgboost, lightgbm", ("sklearn",)),
+    ("Machine learning", "scikit-learn", ("sklearn",)),
+    ("Gradient boosting", "xgboost, lightgbm", ("xgboost", "lightgbm")),
     ("Survival & duration", "lifelines (Kaplan-Meier, Cox proportional hazards)", ("lifelines",)),
     ("Graphs & networks", "networkx (centrality, communities, shortest paths)", ("networkx",)),
-    # Split out of the main install in the Dockerfile because it carries GDAL,
-    # so the image is usable even when that layer fails. The prompt has to say
-    # so: with runtime pip on it installs on first use, and with the sandbox
-    # network disabled it is simply absent.
-    (
-        "Geospatial",
-        "geopandas, shapely — may install on first import, so avoid it unless the question is spatial",
-        ("geopandas",),
-    ),
-    ("Charts", "plotly (`px`, `go`), matplotlib (`plt`), seaborn (`sns`)", ("matplotlib",)),
-    (
-        "File output",
-        "openpyxl and xlsxwriter for .xlsx, pyarrow for parquet, all under `/workspace/`",
-        ("openpyxl",),
-    ),
+    ("Geospatial", "geopandas, shapely", ("geopandas", "shapely")),
+    ("Interactive charts", "plotly — `import plotly.express as px`", ("plotly",)),
+    ("Static charts", "matplotlib (`plt`)", ("matplotlib",)),
+    ("Statistical charts", "seaborn (`sns`)", ("seaborn",)),
+    ("Excel output", "openpyxl, and xlsxwriter for formatting", ("openpyxl", "xlsxwriter")),
 )
 
 
-@lru_cache(maxsize=1)
-def _importable() -> frozenset[str]:
-    """Modules importable in *this* process.
+def _toolkit_block(session_id: str | None = None) -> str:
+    """Describes the libraries generated code may import, as the runtime has them.
 
-    Only consulted on the Docker-less path. Advertising duckdb to a model that
-    is about to run in the API process, where it is not installed, produces a
-    confident ImportError and burns a correction retry -- the prompt has to
-    describe the environment the code will actually meet.
+    This used to describe :data:`TOOLKIT` in full whenever a container was up,
+    on the assumption that the image always carried everything in the list. That
+    assumption had to be maintained by hand against the Dockerfile and twice was
+    not -- and now that the image ships in tiers it would simply be false.
+
+    The runtime is asked instead, so a smaller image advertises less rather than
+    promising a library that then fails to import and burns a correction retry.
     """
-    from importlib.util import find_spec
+    from src.core.tools.runtime import capabilities
 
-    available = set()
-    for _, _, modules in TOOLKIT:
-        for module in modules:
-            try:
-                if find_spec(module) is not None:
-                    available.add(module)
-            except (ImportError, ValueError):
-                continue
-    return frozenset(available)
-
-
-def _toolkit_block() -> str:
-    from src.core.tools.sandbox import sandbox_pool
-
-    # The container is built from `docker/Dockerfile` and has the full set; the
-    # local fallback has only whatever the backend itself installed.
-    entries = TOOLKIT
-    if not sandbox_pool.available:
-        importable = _importable()
-        entries = tuple(entry for entry in TOOLKIT if all(module in importable for module in entry[2]))
+    available = capabilities(session_id)
+    entries = tuple(entry for entry in TOOLKIT if all(module in available for module in entry[2]))
 
     lines = [f"- **{area}**: {libraries}" for area, libraries, _ in entries]
-    if not sandbox_pool.available:
-        lines.append("- *Nothing else is installed. Do not import a library that is not listed above.*")
+    lines.append("- *Nothing else is installed. Do not import a library that is not listed above.*")
     return "\n".join(lines)
 
 
-def _visualization_rules() -> str:
-    if settings.PLOT_FORMAT == "html":
+def _workspace_root(session_id: str | None = None) -> str:
+    """The directory generated code may write to, as that runtime sees it.
+
+    A container always sees ``/workspace``; a local runtime is started with the
+    session's own directory as both its cwd and the daemon's workspace, so the
+    guard's path check and the prompt have to agree on which one it is.
+    """
+    from src.core.tools.runtime import active_backend, workspace_for
+
+    if active_backend() == "docker" or not session_id:
+        return "/workspace/"
+    return f"{workspace_for(session_id).as_posix()}/"
+
+
+def _visualization_rules(session_id: str | None = None) -> str:
+    """How to draw, given what this runtime can actually draw with.
+
+    ``PLOT_FORMAT=html`` needs plotly, and the ``core`` image tier does not ship
+    it. Telling the model to import plotly there would guarantee a failed step,
+    so the rule falls back to matplotlib -- which every tier has, because the
+    daemon itself imports it.
+    """
+    from src.core.tools.runtime import capabilities
+
+    if settings.PLOT_FORMAT == "html" and "plotly" in capabilities(session_id):
+        from src.core.execution import plot_output_path
+
+        target = plot_output_path(session_id or "")
         return (
             "6. Visualizations: use Plotly (`import plotly.express as px`). Save the primary figure with "
-            "`fig.write_html('/workspace/plot.html', include_plotlyjs='cdn')`. Do not print raw HTML and "
+            f"`fig.write_html('{target}', include_plotlyjs='cdn')`. Do not print raw HTML and "
             "do not call `fig.show()`."
         )
     return (
@@ -380,16 +387,16 @@ Translate the request into flawless, executable Python.
 2. The active dataset is ALREADY loaded as a pandas DataFrame named `df`. Never reload it from disk.
 3. Every other table in this session is loaded too, in the dict `tables` keyed by name. Join
    across them directly -- `tables['orders'].merge(tables['customers'], on='customer_id')`.
-4. `pd`, `np`, `plt`, `sns`, `px` and `go` are already imported. Everything else must be imported.
+4. `pd`, `np`, `plt` and `sns` are already imported. Everything else must be imported.
 5. Print anything the user should see. Results that are not printed are invisible.
 6. Never print a whole DataFrame -- use `.head()`, `.describe()` or an aggregation.
-{_visualization_rules()}
-8. File writes are permitted only under `/workspace/`.
+{_visualization_rules(session_id)}
+8. File writes are permitted only under `{_workspace_root(session_id)}`.
 9. The `os`, `sys`, `subprocess` and networking modules are unavailable.
 </environment>
 
 <available_libraries>
-{_toolkit_block()}
+{_toolkit_block(session_id)}
 
 Use the right tool for the job. Write vectorised pandas or a duckdb query rather than a Python
 loop over rows, and use the library that already implements a method rather than reimplementing it.

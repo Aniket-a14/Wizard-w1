@@ -22,20 +22,23 @@ from src.core.ingest.documents import supported_document_extensions
 from src.core.ingest.loader import DatasetLoader
 from src.core.llm import llm_provider, model_registry
 from src.core.session import Session
-from src.core.tools.sandbox import sandbox_pool
+from src.core.tools import runtime as runtime_backend
+from src.utils.hostinfo import host_info
 
 
 router = APIRouter(tags=["meta"])
 
-API_VERSION = "3.0.0"
+API_VERSION = "3.1.0"
 
 
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
+    backend = runtime_backend.active_backend()
     return HealthResponse(
         status="ok",
         version=API_VERSION,
-        sandbox_available=sandbox_pool.available,
+        sandbox_available=backend == "docker",
+        execution_backend=backend,
         model_provider=settings.API_PROVIDER,
     )
 
@@ -43,18 +46,29 @@ async def health() -> HealthResponse:
 @router.get("/api/config", response_model=ServerConfig)
 async def server_config() -> ServerConfig:
     """Everything the client needs to render the right controls."""
+    host = host_info()
+    backend = runtime_backend.active_backend()
     return ServerConfig(
         app_name=settings.APP_NAME,
         version=API_VERSION,
         plot_format=settings.PLOT_FORMAT,
-        sandbox_available=sandbox_pool.available,
+        sandbox_available=backend == "docker",
         sandbox_enabled=settings.SANDBOX_ENABLED,
+        execution_backend=backend,
+        execution_backend_setting=settings.EXECUTION_BACKEND,
+        sandbox_tier=settings.SANDBOX_TIER,
+        system_profile=settings.system_profile,
+        host_cores=host.cores,
+        host_ram_gb=None if host.ram_gb is None else round(host.ram_gb, 1),
+        sandbox_mem_limit=settings.SANDBOX_MEM_LIMIT,
+        max_sessions=settings.SESSION_MAX_ACTIVE,
         model_provider=settings.API_PROVIDER,
         supported_formats=DatasetLoader.supported_extensions(),
         max_upload_mb=settings.MAX_UPLOAD_BYTES // (1024 * 1024),
         queue_backend=get_queue().backend_name,
         cache_backend=get_cache().name,
         embeddings_semantic=embedding_service.is_semantic,
+        embeddings_backend=embedding_service.backend,
         rag_enabled=settings.RAG_ENABLED,
         council_enabled=settings.COUNCIL_ENABLED,
         requires_api_key=bool(settings.API_KEY),

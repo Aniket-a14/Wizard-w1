@@ -22,6 +22,7 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
     sandbox_available: bool
+    execution_backend: str = "inprocess"
     model_provider: str
 
 
@@ -39,6 +40,10 @@ class ServerConfig(BaseModel):
     queue_backend: str
     cache_backend: str
     embeddings_semantic: bool
+    #: What actually produces vectors: "provider:<model>", "local:<model>" or
+    #: "lexical". `embeddings_semantic` alone could not distinguish a provider
+    #: embedding model from an in-process one, and the two fail differently.
+    embeddings_backend: str = "lexical"
     rag_enabled: bool
     council_enabled: bool
     requires_api_key: bool
@@ -51,6 +56,16 @@ class ServerConfig(BaseModel):
     agent_grounding_check: bool = True
     context_docs_enabled: bool = True
     supported_document_formats: list[str] = Field(default_factory=list)
+    # Where generated code runs, and on what machine. `sandbox_available` says
+    # only whether Docker answered; these say what is actually in use.
+    execution_backend: Literal["docker", "local", "inprocess"] = "inprocess"
+    execution_backend_setting: str = "auto"
+    sandbox_tier: str = "standard"
+    system_profile: str = "server"
+    host_cores: int = 0
+    host_ram_gb: float | None = None
+    sandbox_mem_limit: str = ""
+    max_sessions: int = 0
 
 
 class SessionResponse(BaseModel):
@@ -62,7 +77,10 @@ class SessionResponse(BaseModel):
     datasets: list[dict[str, Any]] = Field(default_factory=list)
     documents: list[dict[str, Any]] = Field(default_factory=list)
     models: dict[str, Any] = Field(default_factory=dict)
+    #: True only for a container. A local runtime is isolated from the API
+    #: process but is not a security boundary, so it does not claim to be one.
     sandboxed: bool = False
+    execution_backend: str = "inprocess"
 
 
 class ModelInfoResponse(BaseModel):

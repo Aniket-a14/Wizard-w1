@@ -34,7 +34,7 @@ from src.core.database import db_mgr
 from src.core.execution import CodeExecutor
 from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
-from src.core.tools.sandbox import sandbox_pool
+from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
 
@@ -128,7 +128,7 @@ class Session:
 
     @property
     def workspace(self) -> Path:
-        return sandbox_pool.workspace_for(self.id)
+        return runtime_backend.workspace_for(self.id)
 
     @property
     def df(self) -> pd.DataFrame | None:
@@ -379,12 +379,14 @@ class Session:
             "datasets": [handle.summary() for handle in self.datasets.values()],
             "documents": [document.summary() for document in self.documents.values()],
             "models": self.models.to_dict(),
-            "sandboxed": sandbox_pool.available,
+            "sandboxed": runtime_backend.active_backend() == "docker",
+            "execution_backend": runtime_backend.active_backend(),
         }
 
     def dispose(self):
         """Releases the container and forgets persisted rows for this session."""
-        sandbox_pool.release(self.id)
+        runtime_backend.release_runtime(self.id)
+        runtime_backend.forget_capabilities(self.id)
         db_mgr.delete_session_data(self.id)
         with self._lock:
             self.datasets.clear()
@@ -460,7 +462,7 @@ class SessionManager:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         for session in sessions:
-            sandbox_pool.release(session.id)
+            runtime_backend.release_runtime(session.id)
 
     @property
     def active_count(self) -> int:
@@ -471,8 +473,8 @@ class SessionManager:
             "active_sessions": self.active_count,
             "max_sessions": settings.SESSION_MAX_ACTIVE,
             "ttl_seconds": settings.SESSION_TTL_SECONDS,
-            "sandbox_available": sandbox_pool.available,
-            "active_sandboxes": sandbox_pool.active_count,
+            "execution_backend": runtime_backend.active_backend(),
+            "active_runtimes": runtime_backend.active_runtime_count(),
         }
 
 

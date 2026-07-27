@@ -118,7 +118,9 @@ BANNED_ATTRIBUTES = frozenset(
     }
 )
 
-# Roots the generated code may read from / write to inside the sandbox.
+# Roots the generated code may read from / write to inside a container. The
+# local subprocess runtime works out of the session's own directory instead, so
+# callers pass that in as an extra root -- see `CodeGuard.scan(extra_roots=...)`.
 ALLOWED_PATH_ROOTS = ("/workspace", "/tmp/wizard")
 
 # Functions whose first positional argument is a filesystem path we must check.
@@ -158,12 +160,14 @@ class GuardVerdict:
         return self.syntax_error
 
 
-def _is_path_allowed(raw_path: str) -> bool:
-    """True when ``raw_path`` resolves inside an allowed sandbox root.
+def _is_path_allowed(raw_path: str, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> bool:
+    """True when ``raw_path`` resolves inside one of ``roots``.
 
-    Relative paths are resolved against ``/workspace`` because that is the
-    sandbox working directory. ``posixpath`` is used explicitly so the decision
-    does not change when the backend itself runs on Windows.
+    Relative paths resolve against the first root, which is the runtime's own
+    working directory. ``posixpath`` is used explicitly so the decision does not
+    change when the backend runs on Windows -- but backslashes are folded to
+    forward slashes first, because a local runtime there really does hand out
+    ``C:/...`` paths and a drive letter is not ``posixpath.isabs``.
     """
     if not raw_path:
         return False
@@ -171,16 +175,24 @@ def _is_path_allowed(raw_path: str) -> bool:
     if "://" in raw_path or raw_path.startswith("\\\\"):
         return False
 
-    candidate = raw_path if posixpath.isabs(raw_path) else posixpath.join("/workspace", raw_path)
-    normalised = posixpath.normpath(candidate)
-    return any(normalised == root or normalised.startswith(root + "/") for root in ALLOWED_PATH_ROOTS)
+    cleaned = raw_path.replace("\\", "/")
+    base = roots[0] if roots else "/workspace"
+    rooted = posixpath.isabs(cleaned) or cleaned[1:3] == ":/"
+    normalised = posixpath.normpath(cleaned if rooted else posixpath.join(base, cleaned))
+    return any(normalised == root.rstrip("/") or normalised.startswith(root.rstrip("/") + "/") for root in roots)
 
 
 class CodeGuard:
     """Scans generated Python and decides whether it is safe to execute."""
 
     @classmethod
-    def scan(cls, code: str) -> GuardVerdict:
+    def scan(cls, code: str, extra_roots: tuple[str, ...] = ()) -> GuardVerdict:
+        """Scans ``code``. ``extra_roots`` widens the writable path allowlist.
+
+        The local runtime works out of the session's directory rather than
+        ``/workspace``, and without this every absolute path the model wrote --
+        including the chart path the prompt itself gave it -- would be rejected.
+        """
         if not code or not code.strip():
             return GuardVerdict(ok=False, reason="Code generation produced an empty program.")
 
@@ -194,9 +206,10 @@ class CodeGuard:
                 syntax_error=True,
             )
 
+        roots = tuple(dict.fromkeys((*extra_roots, *ALLOWED_PATH_ROOTS)))
         violations: list[str] = []
         for node in ast.walk(tree):
-            violations.extend(cls._inspect_node(node))
+            violations.extend(cls._inspect_node(node, roots))
 
         if violations:
             return GuardVerdict(ok=False, reason=violations[0], violations=violations)
@@ -204,7 +217,7 @@ class CodeGuard:
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def _inspect_node(cls, node: ast.AST) -> list[str]:
+    def _inspect_node(cls, node: ast.AST, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> list[str]:
         if isinstance(node, ast.Import):
             return [
                 f"Import of restricted module '{alias.name}' is not permitted."
@@ -229,12 +242,12 @@ class CodeGuard:
             return []
 
         if isinstance(node, ast.Call):
-            return cls._inspect_call(node)
+            return cls._inspect_call(node, roots)
 
         return []
 
     @classmethod
-    def _inspect_call(cls, node: ast.Call) -> list[str]:
+    def _inspect_call(cls, node: ast.Call, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> list[str]:
         violations: list[str] = []
 
         func = node.func
@@ -272,7 +285,7 @@ class CodeGuard:
         )
         if checkable:
             path_literal = cls._first_string_arg(node)
-            if path_literal is not None and not _is_path_allowed(path_literal):
+            if path_literal is not None and not _is_path_allowed(path_literal, roots):
                 violations.append(f"File access outside the workspace is not permitted (path: '{path_literal}').")
 
         return violations

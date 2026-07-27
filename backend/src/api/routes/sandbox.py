@@ -11,7 +11,7 @@ from src.api.schemas import JobResponse, VariablesResponse
 from src.core.infra.queue import get_queue
 from src.core.security.code_guard import is_safe_identifier
 from src.core.session import Session
-from src.core.tools.sandbox import sandbox_pool
+from src.core.tools import runtime as runtime_backend
 
 
 router = APIRouter(prefix="/api/sandbox", tags=["sandbox"])
@@ -23,7 +23,10 @@ jobs_router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 async def list_variables(session: Session = Depends(get_session)) -> VariablesResponse:
     """Variables currently live in this session's sandbox namespace."""
     variables = await asyncio.to_thread(session.executor.inspect_variables)
-    return VariablesResponse(variables=variables, sandbox_available=sandbox_pool.available)
+    return VariablesResponse(
+        variables=variables,
+        sandbox_available=runtime_backend.active_backend() == "docker",
+    )
 
 
 @router.post("/interrupt", dependencies=[Depends(require_api_key)])

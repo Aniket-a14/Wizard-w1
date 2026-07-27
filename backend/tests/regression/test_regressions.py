@@ -135,19 +135,27 @@ def test_sandbox_daemon_source_is_valid_python() -> None:
     """
     import ast
 
-    from src.core.tools.sandbox import DAEMON_PORT, DAEMON_SCRIPT
+    from src.core.tools.daemon import render_daemon
 
-    for allow_pip in ("True", "False"):
-        rendered = DAEMON_SCRIPT % {
-            "port": DAEMON_PORT,
-            "pid_file": PID_FILE,
-            "allow_pip": allow_pip,
-        }
-        ast.parse(rendered)  # must not raise
+    for allow_pip in (True, False):
+        for mem_bytes in (0, 1 << 30):
+            rendered = render_daemon(
+                pid_file=PID_FILE,
+                allow_pip=allow_pip,
+                workspace="/workspace",
+                mem_bytes=mem_bytes,
+            )
+            ast.parse(rendered)  # must not raise
 
     # The placeholders must all be substituted; a stray one would be a runtime
     # NameError inside the container.
     assert "%(" not in rendered
+
+    # A Windows workspace path reaches the daemon as a string literal, so an
+    # unescaped backslash would be a syntax error in the rendered source.
+    windows = render_daemon(workspace="C:\\Users\\a\\workspace\\sessions\\abc")
+    ast.parse(windows)
+    assert "C:/Users/a/workspace/sessions/abc" in windows
 
 
 def test_rate_limiter_evicts_idle_clients() -> None:
