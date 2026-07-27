@@ -23,7 +23,7 @@ scikit-learn==1.5.1
 # The CPU build. Plain `xgboost` ships a CUDA-enabled libxgboost.so: 154 MB
 # compressed against 4.5 MB here, for a GPU a local install will not be using.
 xgboost-cpu==2.1.1
-lightgbm==4.5.0
+lightgbm==4.6.0
 
 # Charting. plotly is what PLOT_FORMAT=html needs; without it the worker is
 # told to use matplotlib instead rather than to import something absent.
