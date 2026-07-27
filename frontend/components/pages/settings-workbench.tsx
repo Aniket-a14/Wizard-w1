@@ -150,48 +150,80 @@ export function SettingsWorkbench() {
       </Section>
 
       <Section
-        title="Runtime"
-        description="Resolved by the backend at boot. Change these in backend/.env and restart."
+        title="Execution"
+        description="Where generated code runs. Docker is not required — set EXECUTION_BACKEND in backend/.env."
       >
         <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
           <Fact
-            label="Isolation"
-            value={config?.sandbox_available ? "Docker container" : "In-process fallback"}
-            tone={config ? (config.sandbox_available ? "ok" : "warn") : undefined}
+            label="Runtime"
+            value={config ? BACKEND_LABELS[config.execution_backend] ?? config.execution_backend : "—"}
+            tone={config ? BACKEND_TONE[config.execution_backend] : undefined}
           />
-          <Fact label="Default provider" value={config?.model_provider ?? "—"} />
+          <Fact
+            label="Setting"
+            value={
+              config
+                ? config.execution_backend_setting === "auto"
+                  ? `auto → ${config.execution_backend}`
+                  : config.execution_backend_setting
+                : "—"
+            }
+            mono
+          />
+          <Fact
+            label="Toolkit tier"
+            value={config ? TIER_TOOLKIT_LABELS[config.sandbox_tier] ?? config.sandbox_tier : "—"}
+          />
+          <Fact label="Memory per runtime" value={config?.sandbox_mem_limit || "—"} mono />
+          <Fact label="Concurrent sessions" value={config ? String(config.max_sessions) : "—"} />
           <Fact label="Plot format" value={config?.plot_format ?? "—"} />
+        </dl>
+
+        {config && <IsolationNote backend={config.execution_backend} />}
+      </Section>
+
+      <Section
+        title="This machine"
+        description="Measured at boot. Thread count, runtime memory and the session cap are derived from these unless you set them yourself."
+      >
+        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+          <Fact
+            label="Profile"
+            value={config ? PROFILE_LABELS[config.system_profile] ?? config.system_profile : "—"}
+          />
+          <Fact label="CPU cores" value={config?.host_cores ? String(config.host_cores) : "—"} />
+          <Fact
+            label="Memory"
+            value={config?.host_ram_gb ? `${config.host_ram_gb} GB` : "—"}
+          />
+          <Fact
+            label="Embeddings"
+            value={config ? EMBEDDING_LABEL(config.embeddings_backend) : "—"}
+            tone={config ? (config.embeddings_semantic ? "ok" : undefined) : undefined}
+          />
+        </dl>
+        <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+          Embeddings come from whichever model server you already run — Ollama&apos;s{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11.5px]">/api/embed</code> or
+          an OpenAI-compatible{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11.5px]">/v1/embeddings</code>
+          . Pull an embedding model to get semantic retrieval; without one, matching falls back to
+          word overlap and nothing breaks.
+        </p>
+      </Section>
+
+      <Section
+        title="Services"
+        description="Optional infrastructure. None of it is required."
+      >
+        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
+          <Fact label="Default provider" value={config?.model_provider ?? "—"} />
           <Fact label="Job queue" value={config?.queue_backend ?? "—"} />
           <Fact label="Cache" value={config?.cache_backend ?? "—"} />
-          <Fact
-            label="Retrieval"
-            value={config ? (config.embeddings_semantic ? "Semantic embeddings" : "Lexical fallback") : "—"}
-          />
           <Fact label="RAG" value={config ? (config.rag_enabled ? "On" : "Off") : "—"} />
           <Fact label="Review council" value={config ? (config.council_enabled ? "On" : "Off") : "—"} />
           <Fact label="Max upload" value={config ? `${config.max_upload_mb} MB` : "—"} />
         </dl>
-
-        {config && !config.sandbox_available && (
-          <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[13px] leading-relaxed text-warning">
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              Docker is unreachable, so generated code runs in a restricted in-process interpreter.
-              The static guard still applies, but process-level isolation does not. Start Docker and
-              reload to restore it.
-            </span>
-          </div>
-        )}
-
-        {config?.sandbox_available && (
-          <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-success/25 bg-success/8 p-3.5 text-[13px] leading-relaxed text-success">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              Generated code runs in a container of its own, with capabilities dropped and memory,
-              PID and CPU ceilings applied.
-            </span>
-          </div>
-        )}
       </Section>
 
       <Section
@@ -265,6 +297,82 @@ export function SettingsWorkbench() {
           </div>
         </div>
       </Section>
+    </div>
+  )
+}
+
+const BACKEND_LABELS: Record<string, string> = {
+  docker: "Docker container",
+  local: "Local subprocess",
+  inprocess: "In-process (no isolation)",
+}
+
+const BACKEND_TONE: Record<string, "ok" | "warn" | undefined> = {
+  docker: "ok",
+  local: "ok",
+  inprocess: "warn",
+}
+
+const TIER_TOOLKIT_LABELS: Record<string, string> = {
+  core: "Core — pandas, duckdb, charts",
+  standard: "Standard — + stats and ML",
+  full: "Full — + survival and geospatial",
+}
+
+const PROFILE_LABELS: Record<string, string> = {
+  laptop: "Laptop",
+  server: "Server",
+  hpc: "HPC",
+}
+
+/** Turns "provider:ollama:nomic-embed-text" into something readable. */
+function EMBEDDING_LABEL(backend: string): string {
+  if (backend === "lexical") return "Word overlap"
+  const model = backend.split(":").slice(-1)[0]
+  return backend.startsWith("provider:") ? `${model} (provider)` : `${model} (local)`
+}
+
+/**
+ * Says what the isolation actually is, per backend. The local runtime is a
+ * supported way to run rather than a failure, so it gets a statement of what it
+ * does and does not protect — not a warning banner.
+ */
+function IsolationNote({ backend }: { backend: string }) {
+  if (backend === "docker") {
+    return (
+      <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-success/25 bg-success/8 p-3.5 text-[13px] leading-relaxed text-success">
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Generated code runs in a container of its own, with capabilities dropped and memory, PID
+          and CPU ceilings applied.
+        </span>
+      </div>
+    )
+  }
+
+  if (backend === "local") {
+    return (
+      <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-border bg-muted/40 p-3.5 text-[13px] leading-relaxed text-muted-foreground">
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
+        <span>
+          Generated code runs in a separate process with its own memory ceiling, a per-step timeout
+          and a working Stop button, and it keeps its variables between steps. It is not a security
+          boundary: it runs as you, with your files. The static guard still applies. Use Docker for
+          data or questions you did not write yourself.
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[13px] leading-relaxed text-warning">
+      <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>
+        Code runs inside the API process itself, with no isolation and no memory ceiling, and its
+        variables do not survive between steps. Set{" "}
+        <code className="font-mono text-[11.5px]">EXECUTION_BACKEND=local</code> to run it in a
+        subprocess instead, or start Docker.
+      </span>
     </div>
   )
 }

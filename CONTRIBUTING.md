@@ -11,12 +11,13 @@ Wizard is a **local-first** agent. Read [CLAUDE.md](./CLAUDE.md) for the full to
 1. **Manager model** — reasons about the request and produces a plan, then writes the final answer from the real execution output.
 2. **Worker model** — turns the plan into Python. Nothing else.
 3. **Code guard** — one AST policy check, in [`backend/src/core/security/code_guard.py`](backend/src/core/security/code_guard.py). It is the only authority on whether generated code may run.
-4. **Sandbox** — one Docker container per session, created lazily.
+4. **Runtime** — one Docker container *or* one subprocess per session, created lazily. Both run the same daemon; `EXECUTION_BACKEND` chooses.
 
 Two rules that are easy to violate by accident:
 
 - **There is one workflow implementation.** `AnalysisOrchestrator.run` is it. The REST and WebSocket handlers only translate events into frames. If you find yourself adding step-sequencing logic to a transport, it belongs in the orchestrator — that split is exactly what drifted before and caused features to work on one path only.
 - **Everything degrades.** No Docker, no embedding model, no Redis and no model server are all supported states. New dependencies must be optional or gracefully absent.
+- **Weight is a feature.** This runs on laptops. A dependency that adds gigabytes needs to justify them: `sentence-transformers` was removed because torch pulls ~2.8 GB of CUDA wheels on Linux to run a 90 MB model. Check what a package actually installs before pinning it.
 
 > [!IMPORTANT]
 > Keep the local-first default intact. Cloud providers are supported through `API_PROVIDER`, but nothing may *require* an external service to run.
@@ -25,7 +26,7 @@ Two rules that are easy to violate by accident:
 
 ## Setup
 
-**Prerequisites:** Python 3.11+, Node.js 20+, Docker Desktop, Ollama.
+**Prerequisites:** Python 3.11+, Node.js 20+, Ollama. Docker Desktop is recommended but optional — without it, `EXECUTION_BACKEND=auto` runs generated code in a subprocess instead.
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/Wizard-w1.git
@@ -37,7 +38,8 @@ git remote add upstream https://github.com/Aniket-a14/Wizard-w1.git
 ollama pull qwen2.5-coder:7b
 ollama pull qwen3:8b
 
-pip install -r requirements.txt
+pip install -r requirements.txt        # API server
+pip install -r requirements-local.txt  # + analysis toolkit, if you run without Docker
 cd frontend && npm ci && cd ..
 
 pre-commit install --hook-type commit-msg   # conventional commits are enforced
@@ -94,7 +96,9 @@ Four layers under `backend/tests/`:
 | `regression/` | A specific past defect, with a docstring saying what broke |
 | `negative/` | Hostile, malformed and degenerate input |
 
-**The suite must never need Docker, a model server or the network.** `backend/tests/conftest.py` pins `SANDBOX_ENABLED=false` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is built at import time. If you add a test that needs a real service, mark it `@pytest.mark.requires_docker` or `@pytest.mark.requires_llm`.
+**The suite must never need Docker, a model server, the network, or a spawned process.** `backend/tests/conftest.py` pins `EXECUTION_BACKEND=inprocess`, `SANDBOX_ENABLED=false` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is built at import time. If you add a test that needs a real service, mark it `@pytest.mark.requires_docker` or `@pytest.mark.requires_llm`.
+
+`EXECUTION_BACKEND=inprocess` matters: `SANDBOX_ENABLED=false` alone now means only "no Docker", and `auto` would fall through to the local subprocess runtime — spawning a child that imports pandas for every session the suite creates.
 
 When you fix a bug, add a regression test whose docstring explains the original failure. Anyone can write `assert x == y`; the value is in recording why it was ever `z`.
 

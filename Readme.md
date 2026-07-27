@@ -2,7 +2,7 @@
 
 > A local-first autonomous data analysis agent. Ask a real question about your data; it investigates — looking, computing, revising its approach when the data disagrees with it — then verifies the result and explains it, streaming its reasoning as it goes.
 
-![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v3.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
+![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v3.1.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
 
 ## What it is
 
@@ -23,11 +23,13 @@ Every stage streams to the browser as it happens — the reasoning, each move an
 - **It checks its own work.** The headline result is recomputed by a different route, and any figure in the answer that appears in no execution output is flagged rather than quietly presented.
 - **It tells you what it assumed.** Dropped nulls, inner joins, top-N cuts — read back out of the code that actually ran, not out of the model's description of it.
 - **It corrects itself.** Failures are fed back with the traceback, and successful repairs are remembered as negative examples for next time.
-- **It is honest about degradation.** No Docker? It says so and runs in a restricted interpreter. No embedding model? Retrieval falls back to lexical matching. Model unreachable? You get a clear message, not a hang.
+- **Docker is optional, not a fallback.** Without it, code runs in a subprocess per session — its own memory ceiling, a per-step timeout, a working Stop button, and variables that persist between steps. Same behaviour, no image to build.
+- **It fits the machine it is on.** Thread count, sandbox memory and the session cap are measured from your CPU and RAM at boot rather than assumed.
+- **It is honest about degradation.** No embedding model? Retrieval falls back to word overlap. Model unreachable? You get a clear message, not a hang. Nothing silently pretends.
 
 ## Quick start
 
-**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) and [Ollama](https://ollama.com/).
+**Prerequisites:** [Ollama](https://ollama.com/) (or LM Studio). [Docker Desktop](https://www.docker.com/products/docker-desktop/) is recommended but **not required** — see [Running without Docker](#running-without-docker).
 
 ```bash
 # Any two models work. These are small enough for a laptop; a reasoning model
@@ -41,6 +43,29 @@ docker compose up --build -d
 ```
 
 Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**.
+
+Optionally `ollama pull embeddinggemma` (or `nomic-embed-text`). Wizard embeds through whichever model server you already run, so this is all that semantic retrieval needs — no extra install, and no GPU libraries. Without one, matching falls back to word overlap.
+
+### Disk space
+
+The sandbox image ships in tiers. `standard` is the default; pick a smaller one if you are tight on space, and the agent is simply told about a smaller toolkit rather than writing code that then fails to import.
+
+```bash
+SANDBOX_TIER=core docker compose up --build -d   # pandas, numpy, pyarrow, duckdb, matplotlib, openpyxl
+SANDBOX_TIER=full docker compose up --build -d   # adds survival analysis and geospatial
+```
+
+### Running without Docker
+
+```bash
+pip install -r requirements.txt -r requirements-local.txt
+cd backend && uvicorn src.api.api:app --port 8000
+cd frontend && npm ci && npm run dev
+```
+
+`EXECUTION_BACKEND` defaults to `auto`: it finds no Docker and runs generated code in a **subprocess** of the backend instead — a separate process with a memory ceiling, a per-step timeout, an interrupt that works, and a namespace that survives between steps. Set `EXECUTION_BACKEND=local` to choose it explicitly even where Docker is available.
+
+It is not a security boundary: the subprocess runs as you, with your files. The static code guard still applies. Use Docker for data or questions you did not write yourself.
 
 Any model you have pulled appears in the picker, and the app picks a sensible one per role on its own — no model name is configured anywhere by default.
 
@@ -107,7 +132,7 @@ Underneath it, the retry loop still applies: when the sandbox raises, the traceb
 - Chooses each next move from real execution output, and revises its plan when the data contradicts it
 - Three depths: **Auto** (it decides), **Fast** (one pass), **Deep** (investigate thoroughly)
 - Self-corrects on execution failure using the real traceback
-- The full analytical stack, not just pandas: duckdb for SQL over dataframes, statsmodels and scipy for inference, scikit-learn/xgboost/lightgbm for modelling, lifelines for survival, networkx for graphs, geopandas for spatial
+- The full analytical stack, not just pandas: duckdb for SQL over dataframes, statsmodels and scipy for inference, scikit-learn/xgboost/lightgbm for modelling, lifelines for survival, networkx for graphs, geopandas for spatial — and the model is told what is *actually* installed, so a smaller image narrows the toolkit rather than producing code that fails
 - Interactive Plotly charts (or static matplotlib, via `PLOT_FORMAT`)
 - Optional plan approval before anything runs, and explicit consent before any web search
 
@@ -125,8 +150,10 @@ Underneath it, the retry loop still applies: when the sandbox raises, the traceb
 - Every loaded table is available to generated code at once as `tables['name']`, so cross-table joins need no extra step
 
 **Operational**
-- Per-session isolation: separate dataset, sandbox namespace, workspace and history
-- Runs without Docker (degraded, and it tells you), without an embedding model, and without Redis
+- Per-session isolation: separate dataset, execution namespace, workspace and history
+- **Two execution backends**: a container per session, or a subprocess per session with no Docker at all
+- Sizes itself to the host — inference threads from physical cores, runtime memory and the session cap from installed RAM
+- Runs without Docker, without an embedding model, and without Redis
 - Optional Redis for a shared cache and job state
 - Optional `API_KEY` for deployments beyond localhost
 
@@ -148,12 +175,18 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything 
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Where Ollama lives |
 | `LMSTUDIO_BASE_URL` | `http://host.docker.internal:1234` | Where LM Studio lives (root, not `/v1`) |
 | `PLOT_FORMAT` | `html` | `html` for interactive Plotly, `png` for static |
+| `EXECUTION_BACKEND` | `auto` | `docker`, `local` (subprocess, no Docker) or `inprocess` |
+| `SANDBOX_TIER` | `standard` | `core`, `standard` or `full` — how much toolkit the image installs |
+| `SYSTEM_PROFILE` | `auto` | `auto` measures the machine; or pin `laptop`/`server`/`hpc` |
 | `SANDBOX_ENABLED` | `True` | `False` disables containers entirely |
 | `SANDBOX_NETWORK_DISABLED` | `False` | `True` is safer, but blocks on-demand package installs |
 | `SANDBOX_DOCKER_RUNTIME` | `""` | Set `runsc` for gVisor kernel isolation |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:3000` | Comma-separated allowlist |
 | `API_KEY` | `""` | When set, mutating routes require `X-API-Key` |
+| `EMBEDDING_REMOTE_MODEL` | `""` | Pin the embedding model. Empty = discover one from the provider |
 | `REDIS_URL` | `""` | Empty means in-process cache and queue |
+
+Resource limits — `LLM_NUM_THREAD`, `SANDBOX_MEM_LIMIT`, `SESSION_MAX_ACTIVE`, `QUEUE_MAX_WORKERS` — are **left unset on purpose**. They are derived from the machine at boot, and setting one pins it.
 
 ## API
 
@@ -199,7 +232,7 @@ Reasoning and the final answer arrive as separate delta streams, so the client c
 Generated code is untrusted. Three layers apply:
 
 1. **Static analysis** — an AST policy check rejects restricted imports, dynamic execution, interpreter-internals traversal, reflection with computed attribute names, and file access outside the workspace. Malformed code is treated as retryable rather than hostile, so the model gets to fix its own typo.
-2. **Container isolation** — one container per session, with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout. Set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor.
+2. **Process isolation** — with `EXECUTION_BACKEND=docker`, one container per session with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout; set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor. With `local`, a subprocess per session with an address-space cap (POSIX; Windows has no equivalent without pywin32) and the same timeout — which contains runaway code, but is **not** a security boundary. Use Docker for input you did not write yourself.
 3. **Scoped filesystem** — each session reads and writes only its own workspace directory.
 
 > [!IMPORTANT]
@@ -210,10 +243,11 @@ Report vulnerabilities privately — see [SECURITY.md](./SECURITY.md).
 ## Development
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt       # API server
+pip install -r requirements-local.txt # + the analysis toolkit, for running without Docker
 cd frontend && npm ci && cd ..
 
-pytest                                # 300+ tests; no Docker, model or network needed
+pytest                                # 600+ tests; no Docker, model, network or subprocess
 ruff check . --fix && ruff format .
 
 cd frontend && npm run lint && npx tsc --noEmit && npm run build
@@ -227,7 +261,11 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](.
 
 **The backend cannot reach Ollama.** On Linux, `host.docker.internal` is not automatic; the compose file adds a `host-gateway` alias for it. If you still cannot connect, set `OLLAMA_BASE_URL=http://172.17.0.1:11434`.
 
-**"No sandbox" appears in the header.** Docker is unreachable, so code is running in a restricted in-process interpreter with weaker isolation. Start Docker Desktop and reload.
+**Settings shows "Local subprocess" instead of "Docker container".** Docker is unreachable, so code is running in a subprocess of the backend. That is a supported mode — bounded, interruptible, and it keeps variables between steps — but it is not isolated from your filesystem. Start Docker Desktop and reload to get a container back.
+
+**Settings shows "In-process (no isolation)".** Neither backend was permitted. Set `EXECUTION_BACKEND=local` (or `auto`) in `backend/.env`. Only this mode has no isolation and no persistent namespace.
+
+**Retrieval says "Word overlap".** No embedding model is installed on your provider. `ollama pull embeddinggemma` and reload. Nothing breaks without one; matching is just less good at paraphrases.
 
 **The model picker is empty.** Nothing is pulled yet, or Ollama is not running. Pull anything — `ollama pull qwen3:8b` — then use the refresh button.
 

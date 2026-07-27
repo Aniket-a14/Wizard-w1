@@ -229,7 +229,16 @@ export interface SessionInfo {
   documents: DocumentSummary[]
   models: Record<string, string | number | null>
   sandboxed: boolean
+  execution_backend: ExecutionBackend
 }
+
+/**
+ * Where generated code runs. `docker` is a container per session; `local` is a
+ * subprocess per session — isolated from the API process, bounded and
+ * interruptible, but sharing the user's filesystem; `inprocess` is the last
+ * resort with no isolation at all.
+ */
+export type ExecutionBackend = "docker" | "local" | "inprocess"
 
 export interface ServerConfig {
   app_name: string
@@ -243,6 +252,8 @@ export interface ServerConfig {
   queue_backend: string
   cache_backend: string
   embeddings_semantic: boolean
+  /** "provider:<model>", "local:<model>" or "lexical". */
+  embeddings_backend: string
   rag_enabled: boolean
   council_enabled: boolean
   requires_api_key: boolean
@@ -254,6 +265,17 @@ export interface ServerConfig {
   agent_grounding_check: boolean
   context_docs_enabled: boolean
   supported_document_formats: string[]
+
+  /** Where generated code runs, and what the server measured about this host. */
+  execution_backend: ExecutionBackend
+  /** The configured preference — "auto" resolves to one of the above. */
+  execution_backend_setting: string
+  sandbox_tier: string
+  system_profile: string
+  host_cores: number
+  host_ram_gb: number | null
+  sandbox_mem_limit: string
+  max_sessions: number
 }
 
 export interface WorkspaceFileEntry {

@@ -13,13 +13,25 @@ Monorepo: `backend/` (Python 3.11, FastAPI) + `frontend/` (Next.js 16 / React 19
 ### Full stack
 ```bash
 ollama pull qwen3:8b && ollama pull qwen2.5-coder:7b   # any two models; nothing is pinned
+ollama pull embeddinggemma                   # optional: semantic retrieval instead of word overlap
 docker compose up --build -d                 # backend :8000, frontend :3000
 docker compose --profile redis up -d         # optional shared cache/queue
+
+SANDBOX_TIER=core docker compose up --build -d   # smaller sandbox image
+EXECUTION_BACKEND=local docker compose up -d     # no sandbox image at all
+```
+
+### Without Docker
+```bash
+pip install -r requirements.txt -r requirements-local.txt
+uvicorn src.api.api:app --port 8000          # from backend/; EXECUTION_BACKEND=auto finds no
+                                             # Docker and runs code in a subprocess instead
 ```
 
 ### Backend
 ```bash
-pip install -r requirements.txt              # root file, not backend/
+pip install -r requirements.txt              # root file, not backend/ — API server only
+pip install -r requirements-local.txt        # the analysis toolkit, for running without Docker
 pip install -r requirements-optional.txt     # only for Redis or an OpenAI gateway
 
 uvicorn src.api.api:app --reload --port 8000 # run from backend/
@@ -34,7 +46,9 @@ ruff check . --fix && ruff format .          # CI runs `ruff check` + `ruff form
 
 `asyncio_mode = "auto"`, so async tests need no decorator.
 
-**Tests never touch Docker, Ollama or the network.** `backend/tests/conftest.py` sets `SANDBOX_ENABLED=false` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is instantiated at import time. Keep new env pinning at the top of that file.
+**Tests never touch Docker, Ollama or the network, and never spawn a process.** `backend/tests/conftest.py` sets `EXECUTION_BACKEND=inprocess`, `SANDBOX_ENABLED=false` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is instantiated at import time. Keep new env pinning at the top of that file.
+
+`EXECUTION_BACKEND=inprocess` is load-bearing: `SANDBOX_ENABLED=false` alone now means only "no Docker", and `auto` would fall through to the **local subprocess** runtime — spawning a child that imports pandas for every session the suite creates.
 
 ### Frontend
 ```bash
@@ -88,9 +102,24 @@ Deterministic, no LLM calls, and it **reports rather than edits** — post-proce
 - `assumptions_from_code` reads silent decisions back out of the code that ran — `dropna`, `how='inner'`, `nlargest`, `errors='coerce'`. Each changes what the number means.
 - `_verify` re-derives the headline result by a different route and looks for `VERIFIED:` / `MISMATCH:`. A wrong join grain produces a confident, plausible, wrong number that no self-review catches, because the reviewer is the model that made it.
 
-### Execution — [execution.py](backend/src/core/execution.py)
+### Execution — [execution.py](backend/src/core/execution.py) + [tools/runtime.py](backend/src/core/tools/runtime.py)
 
-`CodeExecutor.execute` is the **only** way generated code reaches an interpreter. It guards first, then runs in the session's container, falling back to a restricted in-process interpreter when Docker is unreachable (reported via `ExecutionResult.sandboxed=False` and a warning). Semantic cleaning on upload goes through here too.
+`CodeExecutor.execute` is the **only** way generated code reaches an interpreter. It guards first, then hands the code to whichever runtime `runtime.active_backend()` names. Semantic cleaning on upload goes through here too.
+
+**Two supported backends and one last resort**, selected by `EXECUTION_BACKEND`:
+
+| Value | What runs the code | Isolation |
+|-------|--------------------|-----------|
+| `docker` | one container per session | process, filesystem, network, memory, PIDs, caps |
+| `local` | one **subprocess** per session | separate process with `RLIMIT_AS`, timeout, interrupt — **not** a security boundary |
+| `inprocess` | guarded `exec` in the API process | none, and the namespace does not persist |
+| `auto` (default) | docker if reachable, else local | — |
+
+`local` is not a degraded mode and does not warn per message; only `inprocess` does. Docker remains the right answer for input you did not write yourself.
+
+Both real backends run the **same daemon** over the same protocol — see [tools/daemon.py](backend/src/core/tools/daemon.py). That is what stops them drifting: the container preloaded every session table while the old in-process fallback rebuilt its globals on every call, so an investigation lost whatever iteration 1 computed — the one thing the agentic loop is built around.
+
+`ExecutionResult.sandboxed` means **container specifically**; `ExecutionResult.backend` names which of the three actually ran it.
 
 ### Security — [code_guard.py](backend/src/core/security/code_guard.py)
 
@@ -98,18 +127,37 @@ One AST-based analyzer, not regex. It distinguishes:
 - **policy violation** → stop and tell the user (`GuardVerdict.ok=False`)
 - **syntax error** → retryable, feed back into the correction loop (`verdict.syntax_error`)
 
-Blocks banned modules, banned builtins, interpreter-internals attributes, bare `__builtins__`, reflection with a computed or dunder attribute name, and literal file paths outside `/workspace`. The container is the real boundary; this is defence in depth that also covers the Docker-less path.
+Blocks banned modules, banned builtins, interpreter-internals attributes, bare `__builtins__`, reflection with a computed or dunder attribute name, and literal file paths outside the writable roots. The container is the real boundary; this is defence in depth, and on the `local` backend it is the *only* static check there is.
 
-### Sandbox — [sandbox.py](backend/src/core/tools/sandbox.py)
+`CodeGuard.scan(code, extra_roots=...)` — a local runtime works out of the session's own directory, not `/workspace`, and `CodeExecutor.guard` passes that in. Without it the guard rejects the very chart path the prompt handed the model. A drive-letter path is not `posixpath.isabs`, so `_is_path_allowed` folds backslashes and checks for `X:/` explicitly.
 
-`SandboxPool` creates **one container per session**, lazily. `DAEMON_SCRIPT` is a string literal injected via tar — edit execution semantics inside that string.
+### The daemon — [tools/daemon.py](backend/src/core/tools/daemon.py)
 
-- Length-prefixed (`>I`) JSON over TCP:5005. Actions: `execute`, `inspect_variables`, `reload_dataset`, `reset`, `ping`.
-- `df` is **not** passed per call; the daemon preloads it from the session's bind-mounted `dataset.feather`. `Session._materialize` writes it; `reload_dataset` refreshes it without recreating the container.
-- **Every** session table is preloaded into `tables['<table_key>']` from `workspace/tables/*.feather`, with `df` still bound to the active one. Cross-table questions need them all in the namespace at once. `remove_dataset` must call `reload_dataset()`, or the deleted frame stays queryable.
-- The Docker-less fallback mirrors this: `CodeExecutor.execute` takes a `tables` mapping, supplied from `Session.tables`. The container ignores it — it already read them off the mount.
+`DAEMON_SCRIPT` is a string literal because the container receives it over `put_archive` into a stock Python image — edit execution semantics inside that string. Render it through `render_daemon()`; it is `%`-formatted, so **no bare `%` may appear in it**.
+
+- Length-prefixed (`>I`) JSON over TCP. Actions: `execute`, `inspect_variables`, `reload_dataset`, `reset`, `capabilities`, `ping`.
+- `df` is **not** passed per call; the daemon preloads it from `<workspace>/dataset.feather`. `Session._materialize` writes it; `reload_dataset` refreshes it without restarting the runtime.
+- **Every** session table is preloaded into `tables['<table_key>']` from `<workspace>/tables/*.feather`, with `df` still bound to the active one. Cross-table questions need them all in the namespace at once. `remove_dataset` must call `reload_dataset()`, or the deleted frame stays queryable.
+- `WORKSPACE` is parameterised: `/workspace` in a container, the session directory locally. Paths go through `Path.as_posix()`, because a Windows path inside a string literal is a set of escape sequences.
+- `capabilities` probes with `find_spec`, so it costs a path search rather than twenty imports. It is consulted on every prompt build.
+- `DaemonClient` owns the protocol; `SandboxSession` and `LocalSession` add only lifecycle.
+
+### Docker backend — [tools/sandbox.py](backend/src/core/tools/sandbox.py)
+
+`SandboxPool` creates **one container per session**, lazily.
+
 - The daemon records its own PID; `interrupt()` signals it directly. Signalling PID 1 would kill the container, since PID 1 is `sleep infinity`.
-- Limits: `mem_limit`, `pids_limit`, optional `cpu_quota`, `cap_drop=ALL`, `no-new-privileges`, plus a socket deadline per execution.
+- Limits: `mem_limit`, `pids_limit`, optional `cpu_quota`, `cap_drop=ALL`, `no-new-privileges`, plus a socket deadline per execution. The daemon's own `RLIMIT_AS` is deliberately left off here — Docker already enforces the ceiling, and a soft limit inside a hard-limited cgroup turns an OOM kill into a confusing `MemoryError`.
+- The image tag carries the tier (`settings.sandbox_image`), so switching `SANDBOX_TIER` builds a new image instead of reusing one with different libraries in it.
+
+### Local backend — [tools/local_runtime.py](backend/src/core/tools/local_runtime.py)
+
+`LocalRuntimePool` creates **one subprocess per session**, lazily. Same daemon, same protocol, no image.
+
+- `RLIMIT_AS` from `LOCAL_RUNTIME_MEM_LIMIT` on POSIX. **Windows has no equivalent without pywin32**, so there the cap is documented rather than enforced — do not claim otherwise in the UI.
+- Interrupt: `SIGINT` on POSIX, `CTRL_BREAK_EVENT` on Windows — which needs `CREATE_NEW_PROCESS_GROUP` at spawn, or the signal reaches the API process too.
+- `get()` restarts a child that has exited (OOM kill, crash) rather than handing out a dead one.
+- Runtime pip is off by default here: unlike a container, it would install into the environment the backend itself runs in.
 
 ### Sessions — [session.py](backend/src/core/session.py)
 
@@ -129,7 +177,13 @@ Data dictionaries, metric definitions, business rules — `.md/.txt/.rst/.html` 
 
 "Named in the question" goes through `mentions_column`, which matches on **word boundaries**. A substring test looks equivalent and is not: a column called `C` matches inside "check" and `id` matches inside "provide", so nearly every column reported as explicitly requested and the budget stopped budgeting.
 
-`prompts.TOOLKIT` declares the libraries available to generated code, and is **filtered by what is actually importable** when Docker is unreachable — the container has the full set, the API process does not. Anything added to `backend/docker/Dockerfile` must be added to `TOOLKIT` too, or the model never learns it can use it. That is not hypothetical: scikit-learn and statsmodels were installed for months while the prompt advertised only pandas and matplotlib.
+`prompts.TOOLKIT` is a **catalogue, not a promise**. `_toolkit_block(session_id)` filters it through `runtime.capabilities(session_id)`, which asks the runtime what it can actually import. That removes a coupling which had to be maintained by hand and was wrong in both directions: scikit-learn and statsmodels sat installed and unadvertised for months, so generated code hand-rolled statistics that were already there, and duckdb was advertised to a process without it, costing a correction retry every time.
+
+Entries are **atomic** — one naming three libraries is dropped unless all three are present — which is why charts and file output are listed separately rather than together.
+
+`_visualization_rules` and `_workspace_root` are capability- and backend-aware for the same reason: `PLOT_FORMAT=html` needs plotly, which the `core` image tier does not ship, and the writable root differs per backend.
+
+`runtime.TIER_MODULES` mirrors the Dockerfile for the case where no runtime exists yet. A test parses the Dockerfile and asserts the two agree.
 
 ### Infrastructure — [infra/](backend/src/core/infra/)
 
@@ -163,11 +217,39 @@ Pydantic-settings singleton reading `backend/.env` (see `backend/.env.example`).
 - `LLM_NUM_CTX` reaches Ollama only. OpenAI-compatible servers fix context length when the model is loaded, so it is deliberately not sent there.
 - `cors_origins` / `cors_allow_credentials` are resolved together: a wildcard origin forces credentials off, because the combination is invalid in every browser.
 - `PLOT_FORMAT` is coupled across two places — the visualization rule in `create_prompt` and the artifact branch in `_execute`. Change both.
-- `SANDBOX_ENABLED=false` disables container creation entirely; `EMBEDDINGS_FORCE_FALLBACK=true` skips the model download. Both are set in CI.
+- `SANDBOX_ENABLED=false` disables container creation entirely; `EMBEDDINGS_FORCE_FALLBACK=true` skips every real encoder. Both are set in CI, alongside `EXECUTION_BACKEND=inprocess`.
+- **`SYSTEM_PROFILE` finally does something.** On `auto` the host is measured at boot ([utils/hostinfo.py](backend/src/utils/hostinfo.py)) and `LLM_NUM_THREAD`, `QUEUE_MAX_WORKERS`, `SANDBOX_MEM_LIMIT`, `LOCAL_RUNTIME_MEM_LIMIT` and `SESSION_MAX_ACTIVE` are derived from it. It was previously read by nothing at all, so those were server constants on every machine: eight inference threads on a four-core laptop, and `32 x 2g` = 64 GB of permitted containers.
+- The derivation runs in a `model_validator(mode="after")` and **only fills fields the user did not set** — `model_fields_set` carries anything from the environment or the .env. A **blank** string counts as unset, because `docker-compose.yml` passes optional knobs as `${VAR:-}` and an empty environment variable is still present.
+- `hostinfo` is under `utils/`, not `core/infra/`: `Settings` is constructed at import time and `core.infra.__init__` imports the cache, which imports `settings` back.
+- Host sizing and `AGENT_TIER` are **separate axes**. How much memory a runtime gets depends on the machine; how many iterations the agent gets depends on the model. A frontier gateway model still gets a `full` budget on a laptop.
+- `EXECUTION_BACKEND` (`auto`/`docker`/`local`/`inprocess`) picks the runtime; `SANDBOX_TIER` (`core`/`standard`/`full`) picks how much toolkit the image installs. `settings.docker_backend_allowed` / `local_backend_allowed` express *permission* only — whether Docker is reachable belongs to `core.tools.runtime`, since config cannot import the sandbox.
 - **`MODEL_NAME` / `WORKER_MODEL_NAME` / `VISION_MODEL_NAME` are empty by default**, meaning "use whatever this provider has installed", resolved through `model_registry.suggest`. Setting one pins it. They used to be hardcoded Ollama tags, which made those two models load-bearing — both 404 on LM Studio and on every gateway.
 - `AGENT_TIER` (`auto`/`compact`/`balanced`/`full`) sizes the loop. On `auto` it is inferred from the manager model's parameter count via `tier_for_parameter_size`: <4B compact, 4–30B balanced, ≥30B full. Gateways report no size and get `balanced` — guessing `compact` would cripple the strongest models available.
 - `settings.budget_for(mode, parameter_size)` is the single place mode and tier combine. `TierBudget` carries its own `tier` name so callers never reverse-match numbers back to a tier. `fast` returns `allow_verification=False` — verification is a second code generation *and* a second execution.
 - `AGENT_MAX_ITERATIONS` is a hard ceiling above the tier, deliberately not derived: a runaway loop on a paid gateway is a billing incident.
+
+### Embeddings — [embeddings.py](backend/src/core/embeddings.py)
+
+Resolution order: **provider endpoint → local sentence-transformers (only if installed) → hashing encoder**. Nothing here raises; a retrieval feature degrading always beats a question failing.
+
+`sentence-transformers` is no longer a dependency. It requires torch, and on linux/x86_64 torch hard-depends on eleven `nvidia-*-cu12` wheels — ~2.8 GB of compressed wheels installed with or without a GPU, to run a 90 MB MiniLM model. It was the single largest thing in the backend image, larger than the whole analysis sandbox. See `requirements-optional.txt` for how to put it back **from the CPU index**.
+
+- Ollama: `POST /api/embed` → `{"embeddings": [[...]]}`. Everything else: `POST /v1/embeddings` → `{"data": [{"index", "embedding"}]}`, **sorted by index** — order is not promised, and a swap attaches every vector to the wrong text without anything downstream noticing.
+- The model is discovered through `model_registry`'s own classification, then **probed once** before adoption: a name that classifies as an embedding model is not the same as one the server will embed with.
+- A missing or unreachable encoder is remembered for `REMOTE_RETRY_SECONDS`. Encoding happens several times per question, so retrying each call would make an offline machine feel broken.
+- `rank()` re-encodes a stored vector whose **width** differs from the query's. Changing encoder (384 → 768, or back to hashing) would otherwise score every stored row at exactly 0.0, silently emptying the semantic cache and trajectory memory rather than rebuilding them.
+
+### Image size
+
+Measured, not estimated — from PyPI wheel metadata for the pinned versions, and `du` for the frontend.
+
+| Image | Was | Now | How |
+|-------|-----|-----|-----|
+| backend API | torch + 11 CUDA wheels = **2.8 GB** compressed, plus `build-essential` and a second copy of the analysis stack | none of it | embeddings via the provider; `requirements.txt` is the server only; every dep is a manylinux wheel so no compiler is needed |
+| sandbox | `xgboost` alone = **154 MB** compressed (the wheel bundles CUDA) | `xgboost-cpu`, **4.5 MB**, same import name | plus `SANDBOX_TIER` layers |
+| frontend | whole `node_modules`, **580 MB** | `.next/standalone`, **30 MB** | `output: "standalone"` |
+
+The backend Dockerfile installs with `--compile` explicitly. `PYTHONDONTWRITEBYTECODE=1` is set for the runtime, and without the flag the image would ship no `.pyc` at all — meaning every new session re-parses the whole of pandas from source before it can answer anything.
 
 ## Frontend
 
@@ -188,6 +270,7 @@ Four routes, no landing page — `/` **is** the workspace:
 - Grounding and verification arrive **twice**: as a warning string (for REST clients with no richer surface) and as structured fields. `message.tsx` filters the two known prefixes out of the plain warning list so nothing is said twice. Those prefixes are coupled to `GroundingReport.warning()` and `orchestrator._verify`.
 - `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
 - The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.
+- `/settings` reports the runtime **actually in force**, not just "Docker or not": `local` gets a plain statement of what it does and does not protect, and only `inprocess` gets a warning. It also shows the measured host facts the resource limits were derived from — the answer to "why is it only using four threads" should be one screen, not a support conversation.
 - Chat components: [chat/message.tsx](frontend/components/chat/message.tsx), [chat/reasoning-panel.tsx](frontend/components/chat/reasoning-panel.tsx), [chat/step-timeline.tsx](frontend/components/chat/step-timeline.tsx), [chat/artifacts-panel.tsx](frontend/components/chat/artifacts-panel.tsx) (slide-over), [chat/model-picker.tsx](frontend/components/chat/model-picker.tsx) (quick swap; `/models` is the full surface).
 - The picker browses one provider at a time and always sends the provider alongside the model name — the list on screen may belong to a different backend than the role currently uses, and a bare name would be routed to the wrong daemon.
 
