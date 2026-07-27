@@ -32,7 +32,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 }
 
 const EMPTY_HINTS: Record<ProviderId, string> = {
-  ollama: "Nothing pulled yet, or the daemon is not running. Try `ollama pull qwen2.5-coder:1.5b`.",
+  ollama: "Nothing pulled yet, or the daemon is not running. Any model works — try `ollama pull qwen3:8b`.",
   lmstudio:
     "Start the server from LM Studio's Developer tab, and enable “Serve on Local Network” so the backend can reach it from its container.",
   openai: "Set GATEWAY_API_URL and GATEWAY_API_KEY in backend/.env.",

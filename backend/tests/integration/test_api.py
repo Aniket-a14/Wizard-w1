@@ -385,3 +385,115 @@ def test_partial_selection_leaves_other_roles_alone(client: TestClient) -> None:
     assert models["manager"] == "keep-me"
     assert models["manager_provider"] == "ollama"
     assert models["temperature"] == 0.4
+
+
+# --------------------------------------------------------------------------- #
+# Context documents
+# --------------------------------------------------------------------------- #
+def test_a_document_can_be_attached_listed_and_removed(client: TestClient) -> None:
+    """The full lifecycle the /data page drives."""
+    upload = client.post(
+        "/api/documents",
+        files={"file": ("dictionary.md", b"# Dictionary\n\n`status` C means cancelled.\n", "text/markdown")},
+    )
+    assert upload.status_code == 200
+
+    document = upload.json()["document"]
+    assert document["name"] == "dictionary.md"
+    assert document["chunks"] >= 1
+    assert document["chars"] > 0
+
+    session_id = upload.json()["session_id"]
+    listed = client.get("/api/datasets", headers={"X-Session-Id": session_id}).json()
+    assert [entry["name"] for entry in listed["documents"]] == ["dictionary.md"]
+
+    removed = client.delete("/api/documents/dictionary.md", headers={"X-Session-Id": session_id})
+    assert removed.status_code == 200
+    assert client.get("/api/datasets", headers={"X-Session-Id": session_id}).json()["documents"] == []
+
+
+def test_documents_are_scoped_to_their_session(client: TestClient) -> None:
+    """Reference documents carry business rules; leaking them across sessions
+    would be the same class of defect as the shared dataset this app already
+    fixed once."""
+    first = client.post(
+        "/api/documents",
+        files={"file": ("secret.md", b"Internal margin formula.", "text/markdown")},
+    ).json()["session_id"]
+
+    other = client.post("/api/session").json()["session_id"]
+    assert other != first
+
+    listing = client.get("/api/datasets", headers={"X-Session-Id": other}).json()
+    assert listing["documents"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Config surface the client renders from
+# --------------------------------------------------------------------------- #
+def test_config_reports_the_agent_settings(client: TestClient) -> None:
+    """The settings page renders these directly; a missing field is a blank row."""
+    config = client.get("/api/config").json()
+
+    assert config["agent_tier"] in {"auto", "compact", "balanced", "full"}
+    assert config["agent_max_iterations"] >= 1
+    assert isinstance(config["agent_require_approval"], bool)
+    assert isinstance(config["agent_verify"], bool)
+    assert isinstance(config["agent_grounding_check"], bool)
+    assert isinstance(config["context_docs_enabled"], bool)
+    assert ".md" in config["supported_document_formats"]
+
+
+def test_only_genuinely_ambiguous_formats_are_claimed_by_both_loaders(client: TestClient) -> None:
+    """A `.txt` really can be either a tab-delimited export or a data dictionary,
+    and the endpoint the user posts to decides which. That is the *only*
+    acceptable overlap: a structured format appearing in the document list, or a
+    prose format in the data list, means one of them will be parsed the wrong way.
+    """
+    config = client.get("/api/config").json()
+
+    data = {f".{extension.lstrip('.')}" for extension in config["supported_formats"]}
+    documents = set(config["supported_document_formats"])
+
+    assert data & documents == {".txt"}, f"unexpected overlap: {(data & documents) - {'.txt'}}"
+    # The formats that carry structure must belong to exactly one loader.
+    assert {".csv", ".parquet", ".xlsx", ".feather"} <= data
+    assert not ({".csv", ".parquet", ".xlsx", ".feather"} & documents)
+    assert {".md", ".pdf", ".docx"} <= documents
+    assert not ({".md", ".pdf", ".docx"} & data)
+
+
+def test_a_dataset_summary_exposes_its_table_key(client: TestClient) -> None:
+    """Generated code addresses tables by key, and /data shows the user which."""
+    response = client.post(
+        "/api/datasets?clean=false",
+        files={"file": ("Q3 orders (final).csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dataset"]["table_key"] == "q3_orders_final"
+
+
+def test_chat_response_carries_the_investigation_fields(client: TestClient, monkeypatch) -> None:
+    """The REST path is used by scripts that have no event stream, so everything
+    the WebSocket emits as frames has to also be present on the final object."""
+    from stubs import ScriptedLLM
+
+    monkeypatch.setattr(
+        "src.core.agent.orchestrator.llm_provider",
+        ScriptedLLM(["1. Count", "```python\nprint(len(df))\n```", "There is 1 row."]),
+    )
+    session_id = client.post("/api/datasets?clean=false", files={"file": ("d.csv", b"a\n1\n", "text/csv")}).json()[
+        "session_id"
+    ]
+
+    body = client.post(
+        "/api/chat",
+        json={"message": "how many rows", "mode": "fast"},
+        headers={"X-Session-Id": session_id},
+    ).json()
+
+    for field in ("findings", "assumptions", "iterations", "tier", "mode", "verification", "grounding"):
+        assert field in body, f"missing {field}"
+    assert body["mode"] == "fast"
+    assert body["iterations"] >= 1

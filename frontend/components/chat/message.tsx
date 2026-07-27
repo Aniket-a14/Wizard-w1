@@ -5,6 +5,8 @@ import { useState } from "react"
 
 import { AnimatedOrb } from "@/components/animated-orb"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
+import { AnswerTrust } from "@/components/chat/answer-trust"
+import { InvestigationTrail } from "@/components/chat/investigation-trail"
 import { ReasoningPanel } from "@/components/chat/reasoning-panel"
 import { StepTimeline } from "@/components/chat/step-timeline"
 import { workspaceFileUrl } from "@/lib/api"
@@ -16,6 +18,11 @@ interface MessageProps {
   onApprove: (message: ChatMessage, approved: boolean) => void
   onOpenArtifact: (artifact: Artifact) => void
 }
+
+// Openings of the two warnings that AnswerTrust renders as callouts. Kept in
+// sync with `grounding.GroundingReport.warning()` and `orchestrator._verify`.
+const GROUNDING_WARNING_PREFIX = "These figures in the answer"
+const VERIFICATION_WARNING_PREFIX = "Independent verification disagreed"
 
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false)
@@ -58,6 +65,14 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
   const showCursor = message.streaming && message.content.length > 0
   const waitingForFirstToken = message.streaming && !message.content && !message.reasoning
 
+  // Grounding and verification arrive both as a warning string (for REST
+  // clients, which have no richer surface) and as structured fields. Rendering
+  // both would say the same thing twice, so the ones AnswerTrust owns are
+  // dropped from the plain list.
+  const plainWarnings = message.warnings.filter(
+    (warning) => !warning.startsWith(GROUNDING_WARNING_PREFIX) && !warning.startsWith(VERIFICATION_WARNING_PREFIX),
+  )
+
   return (
     <div className="group px-4 py-3">
       <div className="flex gap-3">
@@ -76,7 +91,17 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
             />
           )}
 
-          <StepTimeline steps={message.steps} code={message.code} stdout={message.stdout} />
+          {/* The trail is what the agent *chose* to do; the timeline is the
+              mechanics of each attempt. Trail first — it is the narrative. */}
+          <div className="mb-3 space-y-2">
+            <InvestigationTrail
+              trail={message.trail}
+              iteration={message.iteration}
+              budget={message.iterationBudget}
+              streaming={message.streaming}
+            />
+            <StepTimeline steps={message.steps} code={message.code} stdout={message.stdout} />
+          </div>
 
           {message.plan && !message.content && (
             <div className="mb-3 rounded-xl border border-border bg-card p-3.5 shadow-xs">
@@ -106,6 +131,19 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
               {/* Marks where the stream has reached. The text itself arrives token
                   by token from the socket — this is not a reveal animation. */}
               {showCursor && <span className="caret" aria-hidden="true" />}
+            </div>
+          )}
+
+          {!message.streaming && (
+            <div className="mt-3">
+              <AnswerTrust
+                verification={message.verification}
+                grounding={message.grounding}
+                assumptions={message.assumptions}
+                findings={message.findings}
+                tier={message.tier}
+                iterations={message.iteration}
+              />
             </div>
           )}
 
@@ -139,9 +177,9 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
             </div>
           )}
 
-          {message.warnings.length > 0 && (
+          {plainWarnings.length > 0 && (
             <ul className="mt-3 space-y-1.5">
-              {message.warnings.map((warning, index) => (
+              {plainWarnings.map((warning, index) => (
                 <li
                   key={`${index}-${warning.slice(0, 24)}`}
                   className="flex items-start gap-2 text-[12.5px] leading-relaxed text-warning"

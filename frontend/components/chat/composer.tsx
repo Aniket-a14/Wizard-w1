@@ -3,10 +3,11 @@
 import { ArrowUp, Loader2, Paperclip, Square, UploadCloud } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import type { AnalysisMode } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 interface ComposerProps {
-  onSend: (content: string, mode: "planning" | "fast") => void
+  onSend: (content: string, mode: AnalysisMode) => void
   onStop: () => void
   onUpload: (file: File) => void
   isRunning: boolean
@@ -14,22 +15,35 @@ interface ComposerProps {
   hasData: boolean
   disabled?: boolean
   acceptedFormats: string[]
-  mode: "planning" | "fast"
-  onModeChange: (mode: "planning" | "fast") => void
+  mode: AnalysisMode
+  onModeChange: (mode: AnalysisMode) => void
 }
 
 const MAX_HEIGHT = 200
 
-const MODES = [
+/**
+ * How much investigation to do.
+ *
+ * These are depth settings, not workflow settings. The pair they replace —
+ * "Plan first" and "Direct" — described whether you would be asked to approve a
+ * plan, which is a permissions question and now lives in Settings. What you
+ * actually want to control per question is how hard the agent works on it.
+ */
+const MODES: { key: AnalysisMode; label: string; title: string }[] = [
   {
-    key: "planning" as const,
-    label: "Plan first",
-    title: "Drafts a plan and waits for your approval before running anything",
+    key: "auto",
+    label: "Auto",
+    title: "The agent decides how deep to go, and stops as soon as it can answer",
   },
   {
-    key: "fast" as const,
-    label: "Direct",
-    title: "Skips the approval gate and executes immediately",
+    key: "fast",
+    label: "Fast",
+    title: "One pass: write the code, run it, answer. No investigation, no verification",
+  },
+  {
+    key: "deep",
+    label: "Deep",
+    title: "Investigate thoroughly — more steps, and the result is recomputed to check it",
   },
 ]
 
@@ -197,13 +211,13 @@ export function Composer({
 
           {/*
             A segmented control rather than a toggle button. The old version
-            showed only the *current* mode, so the other one — and the fact that
-            a choice existed at all — was invisible until you clicked it.
+            showed only the *current* mode, so the others — and the fact that
+            a choice existed at all — were invisible until you clicked it.
           */}
           <div
             className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5"
             role="radiogroup"
-            aria-label="Execution mode"
+            aria-label="Analysis depth"
           >
             {MODES.map((option) => (
               <button

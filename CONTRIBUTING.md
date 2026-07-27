@@ -32,8 +32,10 @@ git clone https://github.com/YOUR_USERNAME/Wizard-w1.git
 cd Wizard-w1
 git remote add upstream https://github.com/Aniket-a14/Wizard-w1.git
 
-ollama pull deepseek-r1:1.5b
-ollama pull qwen2.5-coder:1.5b
+# Any two models. Nothing in the app is tied to a particular one — an empty
+# MODEL_NAME means "use whatever this provider has installed".
+ollama pull qwen2.5-coder:7b
+ollama pull qwen3:8b
 
 pip install -r requirements.txt
 cd frontend && npm ci && cd ..

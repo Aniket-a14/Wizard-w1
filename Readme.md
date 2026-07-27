@@ -1,6 +1,6 @@
 # 🧙‍♂️ Wizard w1
 
-> A local-first autonomous data analysis agent. Ask a question about your data; it plans the analysis, writes Python, runs it in an isolated sandbox, and explains the result — streaming its reasoning as it goes.
+> A local-first autonomous data analysis agent. Ask a real question about your data; it investigates — looking, computing, revising its approach when the data disagrees with it — then verifies the result and explains it, streaming its reasoning as it goes.
 
 ![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v3.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
 
@@ -8,15 +8,20 @@
 
 Wizard runs entirely on your machine. Your data never leaves it, and no API key is required.
 
-You upload a file and ask a question in plain language. A **manager** model reasons about the request and produces a plan; a **worker** model turns that plan into Python; the code is statically screened and executed inside a Docker container scoped to your session; the manager then reads the real output and writes the answer. If the code fails, the traceback goes back to the model and it fixes itself.
+You upload a file and ask a question in plain language. A **manager** model works out what to do; a **worker** model writes the Python; the code is statically screened and executed inside a Docker container scoped to your session.
 
-Every stage streams to the browser as it happens — the reasoning, the plan, the generated code, the program's stdout, and the answer token by token.
+The important part is what happens next. Rather than following a plan fixed before anything ran, the manager sees the **real output** and decides what to do next — examine a column, compute something else, consult an attached document, revise the plan outright, or stop and answer. It repeats until it has an answer or runs out of budget. Real analytical questions are not one step; you find out the join key is dirty, or that "active customer" means three different things in three tables, only once you have looked.
+
+Every stage streams to the browser as it happens — the reasoning, each move and what it found, the generated code, the program's stdout, and the answer token by token.
 
 ## Why you might want it
 
 - **Local first.** Two small Ollama models are enough to be useful. Nothing is sent anywhere.
-- **You choose the models.** The UI lists what you have actually pulled and lets you assign a model to each role per session.
+- **You choose the models.** Nothing is hardcoded — the app uses whatever your provider actually has, and you can assign a different model, on a different backend, to each role.
+- **It sizes itself to your hardware.** A 1.5B model gets a short leash and deterministic fallbacks; a large model gets a long investigation. Same app, one setting, and `auto` works it out from the model itself.
 - **It runs the code, it doesn't just suggest it.** Results come from execution, not from a model claiming an answer.
+- **It checks its own work.** The headline result is recomputed by a different route, and any figure in the answer that appears in no execution output is flagged rather than quietly presented.
+- **It tells you what it assumed.** Dropped nulls, inner joins, top-N cuts — read back out of the code that actually ran, not out of the model's description of it.
 - **It corrects itself.** Failures are fed back with the traceback, and successful repairs are remembered as negative examples for next time.
 - **It is honest about degradation.** No Docker? It says so and runs in a restricted interpreter. No embedding model? Retrieval falls back to lexical matching. Model unreachable? You get a clear message, not a hang.
 
@@ -25,8 +30,10 @@ Every stage streams to the browser as it happens — the reasoning, the plan, th
 **Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) and [Ollama](https://ollama.com/).
 
 ```bash
-ollama pull deepseek-r1:1.5b     # reasoning
-ollama pull qwen2.5-coder:1.5b   # code
+# Any two models work. These are small enough for a laptop; a reasoning model
+# and a code model is the useful split. Nothing in the app is tied to them.
+ollama pull qwen2.5-coder:7b     # code
+ollama pull qwen3:8b             # reasoning
 
 git clone https://github.com/Aniket-a14/Wizard-w1.git
 cd Wizard-w1
@@ -35,7 +42,9 @@ docker compose up --build -d
 
 Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**.
 
-Any model you have pulled will appear in the model picker; the two above are just small defaults that fit on a laptop.
+Any model you have pulled appears in the picker, and the app picks a sensible one per role on its own — no model name is configured anywhere by default.
+
+**A note on model size.** The agent decides its own next step each iteration, which is a lot to ask of a very small model. Under 4B parameters it automatically runs a shorter loop with no self-revision and no verification pass; 7B and up is where the investigation behaviour starts to earn its cost. It still works below that — it just does less.
 
 ### Using LM Studio instead of (or alongside) Ollama
 
@@ -59,46 +68,61 @@ graph TD
     classDef sandbox fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#000;
     classDef store fill:#64748b,stroke:#334155,stroke-width:2px,color:#fff;
 
-    UI["Next.js client<br/>(streams every stage)"]:::client
+    UI["Next.js client<br/>(streams every move)"]:::client
     WS["FastAPI · WS /ws/chat"]:::api
-    Session["Session<br/>datasets · history · sandbox"]:::api
-    Orch["Orchestrator"]:::api
+    Session["Session<br/>tables · documents · sandbox"]:::api
+    Loop["Analysis loop<br/>bounded by the tier budget"]:::api
 
-    Manager["Manager model<br/>plan · answer"]:::brain
+    Manager["Manager model<br/>decide · revise · answer"]:::brain
     Worker["Worker model<br/>Python"]:::brain
 
     Guard["Code guard<br/>AST policy check"]:::sandbox
     Box["Per-session container<br/>cap_drop · mem/pid limits"]:::sandbox
 
+    Trust["Trust layer<br/>verify · ground · assumptions"]:::store
     Store["SQLite<br/>cache · trajectories · memory"]:::store
-    Retr["Retriever<br/>column + memory selection"]:::store
+    Retr["Retriever<br/>columns · memory · documents"]:::store
 
     UI <-->|typed event frames| WS
-    WS --> Session --> Orch
-    Orch <--> Retr <--> Store
-    Orch -->|1 plan| Manager
-    Manager -->|2 spec| Worker
-    Worker -->|3 code| Guard
-    Guard -->|allowed| Box
-    Box -->|stdout · charts · errors| Orch
-    Orch -->|4 synthesise from real output| Manager
+    WS --> Session --> Loop
+    Loop <--> Retr <--> Store
+
+    Loop -->|"1 what next?"| Manager
+    Manager -->|"2 inspect / consult"| Retr
+    Manager -->|"3 write code for this sub-task"| Worker
+    Worker --> Guard -->|allowed| Box
+    Box -->|"4 real output"| Loop
+    Loop -.->|"repeat until answerable"| Manager
+    Loop -->|5| Trust
+    Trust -->|"6 synthesise from real output"| Manager
 ```
 
-The retry loop is the part that matters in practice: when the sandbox raises, the traceback is added to the worker's prompt and the step is retried, up to `MAX_CORRECTION_RETRIES`. A failure that is successfully repaired is stored so the same mistake is shown as a counter-example next time a similar question is asked.
+The dotted line is the part that matters. Step 4 feeds back into step 1: the manager sees what the code actually produced and picks the next move from it, so a plan that turns out to be wrong gets rewritten instead of carried out. How many times round that loop is allowed depends on the model — see `AGENT_TIER` below.
+
+Underneath it, the retry loop still applies: when the sandbox raises, the traceback is added to the worker's prompt and the sub-task is retried, up to `MAX_CORRECTION_RETRIES`. A failure that is successfully repaired is stored so the same mistake is shown as a counter-example next time a similar question is asked. A sub-task that fails outright is not fatal — it is an observation, and the agent can route around it.
 
 ## Features
 
 **Analysis**
-- Plans multi-step analyses and executes them one step at a time, feeding earlier outputs forward
+- Chooses each next move from real execution output, and revises its plan when the data contradicts it
+- Three depths: **Auto** (it decides), **Fast** (one pass), **Deep** (investigate thoroughly)
 - Self-corrects on execution failure using the real traceback
+- The full analytical stack, not just pandas: duckdb for SQL over dataframes, statsmodels and scipy for inference, scikit-learn/xgboost/lightgbm for modelling, lifelines for survival, networkx for graphs, geopandas for spatial
 - Interactive Plotly charts (or static matplotlib, via `PLOT_FORMAT`)
 - Optional plan approval before anything runs, and explicit consent before any web search
 
+**Trust**
+- The headline result is recomputed by a different route, and a disagreement is reported prominently
+- Every figure in the answer is traced back to real output; anything that was not computed is flagged
+- Silent decisions in the code — dropped nulls, inner joins, top-N cuts, coerced dates — are listed alongside the answer
+- Each analysis is written out as a runnable script you can re-run next month against fresh data
+
 **Data**
 - CSV, TSV, Excel, JSON, NDJSON, Parquet and Feather
+- **Reference documents** — data dictionaries, metric definitions, business rules as Markdown, text, PDF or .docx — which the agent consults mid-analysis when a question turns on what a column means
 - Large files are sampled for analysis while the full file stays available in the workspace
 - Column names are normalised for safe code generation **and de-duplicated**
-- Multiple tables per session, with primary-key and join-key inference between them
+- Every loaded table is available to generated code at once as `tables['name']`, so cross-table joins need no extra step
 
 **Operational**
 - Per-session isolation: separate dataset, sandbox namespace, workspace and history
@@ -113,8 +137,14 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything 
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `API_PROVIDER` | `ollama` | Default backend: `ollama`, `lmstudio`, `openai` or `custom_gateway` |
-| `MODEL_NAME` | `deepseek-r1:1.5b` | Default reasoning model |
-| `WORKER_MODEL_NAME` | `qwen2.5-coder:1.5b` | Default code model |
+| `MODEL_NAME` | `""` | Pin the reasoning model. Empty = use what the provider has |
+| `WORKER_MODEL_NAME` | `""` | Pin the code model. Empty = use what the provider has |
+| `AGENT_TIER` | `auto` | `auto`, `compact`, `balanced` or `full` — how long an investigation may run |
+| `AGENT_MAX_ITERATIONS` | `24` | Hard ceiling, whatever the tier says |
+| `AGENT_REQUIRE_APPROVAL` | `False` | `True` to approve every plan before it runs |
+| `AGENT_VERIFY` | `True` | Recompute the headline result a second way |
+| `AGENT_GROUNDING_CHECK` | `True` | Flag figures that appear in no execution output |
+| `CONTEXT_DOCS_ENABLED` | `True` | Accept reference documents alongside the data |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Where Ollama lives |
 | `LMSTUDIO_BASE_URL` | `http://host.docker.internal:1234` | Where LM Studio lives (root, not `/v1`) |
 | `PLOT_FORMAT` | `html` | `html` for interactive Plotly, `png` for static |
@@ -138,6 +168,8 @@ The session id is returned in the `X-Session-Id` header and should be sent back 
 | `GET` | `/api/models` | Models installed on the host |
 | `POST` | `/api/models` | Choose models for this session |
 | `POST` | `/api/datasets` | Upload a file |
+| `POST` | `/api/documents` | Attach a reference document |
+| `DELETE` | `/api/documents/{name}` | Remove one |
 | `GET` | `/api/data/preview` | Paginated table view |
 | `POST` | `/api/chat` | Run a turn, buffered |
 | `WS` | `/ws/chat` | Run a turn, streamed |
@@ -197,7 +229,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](.
 
 **"No sandbox" appears in the header.** Docker is unreachable, so code is running in a restricted in-process interpreter with weaker isolation. Start Docker Desktop and reload.
 
-**The model picker is empty.** Nothing is pulled yet, or Ollama is not running. Try `ollama pull qwen2.5-coder:1.5b`, then use the refresh button.
+**The model picker is empty.** Nothing is pulled yet, or Ollama is not running. Pull anything — `ollama pull qwen3:8b` — then use the refresh button.
 
 **The LM Studio tab is empty but LM Studio is running.** Almost always **Serve on Local Network** being off — with it off LM Studio accepts loopback connections only, and the backend runs in a container. The error under the tab names the exact URL that was tried. Note that `LMSTUDIO_BASE_URL` wants the root (`http://host.docker.internal:1234`), not the `/v1` endpoint the LM Studio UI displays; a trailing `/v1` is stripped for you.
 

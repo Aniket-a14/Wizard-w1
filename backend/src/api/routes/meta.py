@@ -18,6 +18,7 @@ from src.config import settings
 from src.core.embeddings import embedding_service
 from src.core.infra.cache import get_cache
 from src.core.infra.queue import get_queue
+from src.core.ingest.documents import supported_document_extensions
 from src.core.ingest.loader import DatasetLoader
 from src.core.llm import llm_provider, model_registry
 from src.core.session import Session
@@ -57,6 +58,13 @@ async def server_config() -> ServerConfig:
         rag_enabled=settings.RAG_ENABLED,
         council_enabled=settings.COUNCIL_ENABLED,
         requires_api_key=bool(settings.API_KEY),
+        agent_tier=settings.AGENT_TIER,
+        agent_max_iterations=settings.AGENT_MAX_ITERATIONS,
+        agent_require_approval=settings.AGENT_REQUIRE_APPROVAL,
+        agent_verify=settings.AGENT_VERIFY,
+        agent_grounding_check=settings.AGENT_GROUNDING_CHECK,
+        context_docs_enabled=settings.CONTEXT_DOCS_ENABLED,
+        supported_document_formats=supported_document_extensions(),
     )
 
 
@@ -80,9 +88,13 @@ async def list_models(
         models=[model.to_dict() for model in models],
         suggested=suggested,
         selected={
-            "manager": session.models.manager or settings.MODEL_NAME,
-            "worker": session.models.worker or settings.WORKER_MODEL_NAME,
-            "vision": session.models.vision or settings.VISION_MODEL_NAME,
+            # Falls back to what discovery resolved, not to the configured
+            # default -- that is empty now, and reporting "" as the selected
+            # model would leave the picker showing nothing while the run used
+            # something real.
+            "manager": session.models.manager or settings.MODEL_NAME or suggested.get("manager"),
+            "worker": session.models.worker or settings.WORKER_MODEL_NAME or suggested.get("worker"),
+            "vision": session.models.vision or settings.VISION_MODEL_NAME or suggested.get("vision"),
             "temperature": session.models.temperature
             if session.models.temperature is not None
             else settings.TEMPERATURE,
@@ -106,9 +118,9 @@ async def select_models(selection: ModelSelection, session: Session = Depends(ge
         if provider is not None:
             setattr(session.models, f"{role}_provider", provider or None)
             # A provider switch without a model name would otherwise send the
-            # previous backend's model id to the new one -- an Ollama tag like
-            # "deepseek-r1:1.5b" is a 404 on LM Studio. Resolve a real default
-            # from what that provider actually has.
+            # previous backend's model id to the new one, and an Ollama tag is a
+            # 404 on LM Studio. Resolve a real default from what that provider
+            # actually has.
             if model is None:
                 suggested = await asyncio.to_thread(model_registry.suggest, provider)
                 setattr(session.models, role, suggested.get(role))

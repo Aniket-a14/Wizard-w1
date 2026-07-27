@@ -42,6 +42,15 @@ class ServerConfig(BaseModel):
     rag_enabled: bool
     council_enabled: bool
     requires_api_key: bool
+    # How the agentic loop is configured. The client shows these read-only —
+    # they come from backend/.env and changing one needs a restart.
+    agent_tier: str = "auto"
+    agent_max_iterations: int = 24
+    agent_require_approval: bool = False
+    agent_verify: bool = True
+    agent_grounding_check: bool = True
+    context_docs_enabled: bool = True
+    supported_document_formats: list[str] = Field(default_factory=list)
 
 
 class SessionResponse(BaseModel):

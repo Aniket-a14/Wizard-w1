@@ -14,12 +14,17 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { storeSessionId, websocketUrl } from "./api"
 import type {
+  ActionKind,
+  AnalysisMode,
   ApprovalRequest,
   Artifact,
   ChatMessage,
+  Grounding,
   Phase,
   RunStep,
   ServerEvent,
+  TrailEntry,
+  Verification,
 } from "./types"
 
 const HEARTBEAT_MS = 25_000
@@ -39,8 +44,27 @@ function blankAssistant(): ChatMessage {
     artifacts: [],
     warnings: [],
     downloads: [],
+    trail: [],
+    findings: [],
+    assumptions: [],
     streaming: true,
     phase: "planning",
+  }
+}
+
+function blankUser(content: string): ChatMessage {
+  return {
+    id: newId(),
+    role: "user",
+    content,
+    createdAt: Date.now(),
+    steps: [],
+    artifacts: [],
+    warnings: [],
+    downloads: [],
+    trail: [],
+    findings: [],
+    assumptions: [],
   }
 }
 
@@ -184,6 +208,95 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
           }))
           break
 
+        case "iteration_start":
+          patchActive((message) => ({
+            ...message,
+            iteration: Number(event.n ?? 0),
+            iterationBudget: Number(event.budget ?? 0),
+            mode: (event.mode as AnalysisMode) ?? message.mode,
+          }))
+          break
+
+        case "action": {
+          // Opens a trail entry. Its observation arrives in a separate frame,
+          // so the entry is rendered as in-flight until then.
+          const entry: TrailEntry = {
+            id: newId(),
+            iteration: 0,
+            kind: (event.kind as ActionKind) ?? "code",
+            goal: String(event.goal ?? ""),
+            rationale: (event.rationale as string) || undefined,
+            inferred: Boolean(event.inferred),
+          }
+          patchActive((message) => ({
+            ...message,
+            trail: [...message.trail, { ...entry, iteration: message.iteration ?? message.trail.length + 1 }],
+          }))
+          break
+        }
+
+        case "observation": {
+          // Closes the most recent open entry. Matching on "last without an
+          // observation" rather than an id keeps the protocol one-way: the
+          // backend never has to correlate the two frames.
+          patchActive((message) => {
+            const trail = [...message.trail]
+            for (let index = trail.length - 1; index >= 0; index -= 1) {
+              if (trail[index].observation === undefined) {
+                trail[index] = {
+                  ...trail[index],
+                  observation: String(event.summary ?? ""),
+                  ok: Boolean(event.ok),
+                  truncated: Boolean(event.truncated),
+                  chars: Number(event.chars ?? 0),
+                }
+                break
+              }
+            }
+            return { ...message, trail }
+          })
+          break
+        }
+
+        case "finding":
+          patchActive((message) => ({
+            ...message,
+            findings: [...message.findings, String(event.text ?? "")],
+          }))
+          break
+
+        case "assumption": {
+          const text = String(event.text ?? "")
+          patchActive((message) =>
+            // The backend re-emits the full ledger at the end, so dedupe here
+            // rather than showing every caveat twice.
+            message.assumptions.includes(text)
+              ? message
+              : { ...message, assumptions: [...message.assumptions, text] },
+          )
+          break
+        }
+
+        case "plan_revised": {
+          const plan = String(event.plan ?? "")
+          const why = String(event.why ?? "")
+          patchActive((message) => ({
+            ...message,
+            plan,
+            findings: why && !message.findings.includes(why) ? [...message.findings, why] : message.findings,
+          }))
+          break
+        }
+
+        case "verification": {
+          const verification: Verification = {
+            status: (event.status as Verification["status"]) ?? "inconclusive",
+            detail: String(event.detail ?? ""),
+          }
+          patchActive((message) => ({ ...message, verification }))
+          break
+        }
+
         case "approval_required": {
           const approval: ApprovalRequest = {
             tool: (event.tool as ApprovalRequest["tool"]) ?? "execute_plan",
@@ -234,7 +347,20 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
             content: message.content || finalText,
             code: (event.code as string) || message.code,
             downloads: (event.downloads as string[]) ?? [],
-            warnings: [...message.warnings, ...(((event.warnings as string[]) ?? []) || [])],
+            // The run emits warnings as they happen and again in the terminal
+            // frame; without deduping, every one is shown twice.
+            warnings: Array.from(
+              new Set([...message.warnings, ...(((event.warnings as string[]) ?? []) || [])]),
+            ),
+            findings: Array.from(
+              new Set([...message.findings, ...(((event.findings as string[]) ?? []) || [])]),
+            ),
+            assumptions: Array.from(
+              new Set([...message.assumptions, ...(((event.assumptions as string[]) ?? []) || [])]),
+            ),
+            grounding: (event.grounding as Grounding) ?? message.grounding,
+            iteration: Number(event.iterations ?? message.iteration ?? 0),
+            tier: (event.tier as string) ?? message.tier,
             elapsedMs: Number(event.elapsed_ms ?? 0),
             streaming: false,
             phase: "done",
@@ -362,21 +488,12 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
   )
 
   const sendMessage = useCallback(
-    (content: string, mode: "planning" | "fast") => {
+    (content: string, mode: AnalysisMode) => {
       const trimmed = content.trim()
       if (!trimmed || isRunning) return
 
-      const userMessage: ChatMessage = {
-        id: newId(),
-        role: "user",
-        content: trimmed,
-        createdAt: Date.now(),
-        steps: [],
-        artifacts: [],
-        warnings: [],
-        downloads: [],
-      }
-      const assistant = blankAssistant()
+      const userMessage = blankUser(trimmed)
+      const assistant = { ...blankAssistant(), mode }
       activeIdRef.current = assistant.id
 
       setMessages((previous) => [...previous, userMessage, assistant])

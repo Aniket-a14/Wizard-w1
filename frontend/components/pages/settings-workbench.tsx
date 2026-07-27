@@ -194,20 +194,87 @@ export function SettingsWorkbench() {
         )}
       </Section>
 
+      <Section
+        title="Agent"
+        description="How the analysis loop behaves. The agent chooses its next move from real execution output, so these govern how far it is allowed to go and how hard its answer is checked."
+      >
+        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
+          <Fact
+            label="Depth tier"
+            value={config ? TIER_LABELS[config.agent_tier] ?? config.agent_tier : "—"}
+          />
+          <Fact label="Iteration ceiling" value={config ? String(config.agent_max_iterations) : "—"} />
+          <Fact
+            label="Approval gate"
+            value={config ? (config.agent_require_approval ? "Required" : "Off") : "—"}
+          />
+          <Fact
+            label="Verification"
+            value={config ? (config.agent_verify ? "Recomputes the result" : "Off") : "—"}
+          />
+          <Fact
+            label="Grounding check"
+            value={config ? (config.agent_grounding_check ? "On" : "Off") : "—"}
+          />
+          <Fact
+            label="Reference documents"
+            value={config ? (config.context_docs_enabled ? "Accepted" : "Disabled") : "—"}
+          />
+        </dl>
+
+        <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+          On <span className="font-medium text-foreground">auto</span>, depth is inferred from the
+          reasoning model&apos;s parameter count: under 4B runs a short loop with no reflection or
+          verification, 4–30B the default, 30B and above the longest. Hosted models report no size and
+          are treated as the middle tier. Web search always asks before it runs, whatever the approval
+          gate is set to.
+        </p>
+      </Section>
+
       <Section title="Formats" description="Read natively, without conversion.">
-        <div className="flex flex-wrap gap-1.5">
-          {(config?.supported_formats ?? []).map((format) => (
-            <span
-              key={format}
-              className="rounded-md border border-border bg-card px-2 py-1 font-mono text-[11.5px] text-muted-foreground shadow-xs"
-            >
-              .{format}
-            </span>
-          ))}
+        <div className="space-y-3">
+          <div>
+            <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              Data
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {(config?.supported_formats ?? []).map((format) => (
+                <span
+                  key={format}
+                  className="rounded-md border border-border bg-card px-2 py-1 font-mono text-[11.5px] text-muted-foreground shadow-xs"
+                >
+                  .{format}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              Reference documents
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {(config?.supported_document_formats ?? []).map((format) => (
+                <span
+                  key={format}
+                  className="rounded-md border border-border bg-card px-2 py-1 font-mono text-[11.5px] text-muted-foreground shadow-xs"
+                >
+                  {format}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       </Section>
     </div>
   )
+}
+
+/** Plain-English names for the budget tiers the backend reports. */
+const TIER_LABELS: Record<string, string> = {
+  auto: "Auto — inferred from the model",
+  compact: "Compact — short loop for small models",
+  balanced: "Balanced",
+  full: "Full — longest investigation",
 }
 
 function Fact({

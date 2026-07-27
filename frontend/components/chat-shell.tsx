@@ -9,7 +9,7 @@ import { Composer } from "@/components/chat/composer"
 import { Message } from "@/components/chat/message"
 import { ModelPicker } from "@/components/chat/model-picker"
 import { api, clearStoredSessionId } from "@/lib/api"
-import type { Artifact, DatasetSummary, ServerConfig } from "@/lib/types"
+import type { AnalysisMode, Artifact, DatasetSummary, ServerConfig } from "@/lib/types"
 import { useChatStream } from "@/lib/use-chat-stream"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
@@ -48,7 +48,7 @@ export function ChatShell() {
   const [activeDataset, setActiveDataset] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
-  const [mode, setMode] = useState<"planning" | "fast">("planning")
+  const [mode, setMode] = useState<AnalysisMode>("auto")
 
   const [panelOpen, setPanelOpen] = useState(false)
   const [panelTab, setPanelTab] = useState<ArtifactTab>("chart")
@@ -134,7 +134,7 @@ export function ChatShell() {
   )
 
   const handleSend = useCallback(
-    (content: string, sendMode: "planning" | "fast") => {
+    (content: string, sendMode: AnalysisMode) => {
       playSound("click")
       sendMessage(content, sendMode)
     },

@@ -21,7 +21,7 @@ The backend is expected at `http://localhost:8000`. Point elsewhere with
 | Route       | What it is                                                          |
 |-------------|---------------------------------------------------------------------|
 | `/`         | The conversation: streamed reasoning, generated code, live output    |
-| `/data`     | Datasets in this session — load, inspect, switch, remove             |
+| `/data`     | Datasets and reference documents — load, inspect, switch, remove     |
 | `/models`   | Every provider and installed model, and which role each one fills    |
 | `/settings` | Session controls, interface preferences, resolved server diagnostics |
 
@@ -35,6 +35,20 @@ never disturbed by a route change.
 a heartbeat and exponential-backoff reconnect, appending each `*_delta` frame to
 the live message. This is real token streaming — do not reintroduce a
 timer-based word reveal on top of it.
+
+The backend is a loop, not a pipeline, so alongside the delta frames it emits
+`iteration_start`, `action`, `observation`, `finding`, `plan_revised`,
+`assumption` and `verification`. An `observation` closes the most recent `action`
+that has none — the two are never correlated by id, which keeps the protocol
+one-way. [`chat/investigation-trail.tsx`](components/chat/investigation-trail.tsx)
+renders what the agent chose to do; [`chat/answer-trust.tsx`](components/chat/answer-trust.tsx)
+renders how far the answer can be trusted. Both collapse by default: the answer
+is the headline, these are the evidence.
+
+Grounding and verification arrive **twice** — once as a warning string, for REST
+clients that have no richer surface, and once as structured fields. `message.tsx`
+filters the two known prefixes out of the plain warning list so nothing is shown
+twice; those prefixes are coupled to the backend strings that produce them.
 
 The session id lives in `localStorage` and is sent on every request, so a reload
 rejoins the same server-side session, dataset and sandbox container.

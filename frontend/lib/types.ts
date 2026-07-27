@@ -22,19 +22,73 @@ export type EventType =
   | "error"
   | "final"
   | "pong"
+  // Investigation frames. The run is a loop, not a pipeline, so "step 3 of 5"
+  // no longer describes it — these carry what the agent chose to do and what it
+  // learned. A client that ignores them degrades to the frames above.
+  | "iteration_start"
+  | "action"
+  | "observation"
+  | "finding"
+  | "plan_revised"
+  | "assumption"
+  | "verification"
 
 export type Phase =
   | "idle"
   | "planning"
   | "awaiting_approval"
   | "searching"
+  | "deciding"
+  | "inspecting"
+  | "consulting"
   | "generating"
   | "executing"
   | "correcting"
+  | "reflecting"
   | "reviewing"
+  | "verifying"
   | "answering"
   | "done"
   | "failed"
+
+/** What the agent can spend an iteration on. */
+export type ActionKind = "inspect" | "code" | "consult" | "search" | "reflect" | "answer"
+
+/**
+ * `auto` lets the agent choose its own depth; `fast` is a single shot; `deep`
+ * forces a full investigation. `planning` is the legacy name for "investigate,
+ * but let me approve the plan first".
+ */
+export type AnalysisMode = "auto" | "fast" | "deep" | "planning"
+
+/** One completed move in the investigation, as the trail renders it. */
+export interface TrailEntry {
+  id: string
+  iteration: number
+  kind: ActionKind
+  goal: string
+  rationale?: string
+  /** True when the model's choice could not be read and a default was applied. */
+  inferred?: boolean
+  observation?: string
+  ok?: boolean
+  truncated?: boolean
+  chars?: number
+}
+
+export interface Verification {
+  status: "verified" | "mismatch" | "inconclusive"
+  detail: string
+}
+
+/** How much of the answer traced back to something actually computed. */
+export interface Grounding {
+  checked: number
+  grounded: number
+  ungrounded: string[]
+  ok: boolean
+  ratio: number
+}
 
 export interface ServerEvent {
   type: EventType
@@ -51,7 +105,7 @@ export interface RunStep {
 }
 
 export interface Artifact {
-  kind: "plot_html" | "plot_png" | "plot_description" | "file"
+  kind: "plot_html" | "plot_png" | "plot_description" | "script" | "file"
   name?: string
   data?: string
   text?: string
@@ -88,6 +142,20 @@ export interface ChatMessage {
   elapsedMs?: number
   /** True while this message is still receiving frames. */
   streaming?: boolean
+
+  /** What the agent did, move by move. */
+  trail: TrailEntry[]
+  iteration?: number
+  iterationBudget?: number
+  /** Facts the investigation established along the way. */
+  findings: string[]
+  /** Silent decisions the code made that change what the number means. */
+  assumptions: string[]
+  verification?: Verification | null
+  grounding?: Grounding | null
+  /** Which budget tier the run was sized to — compact, balanced or full. */
+  tier?: string
+  mode?: AnalysisMode
 }
 
 export type ProviderId = "ollama" | "lmstudio" | "openai" | "custom_gateway"
@@ -123,8 +191,18 @@ export interface ModelListResponse {
   error: string | null
 }
 
+export interface DocumentSummary {
+  name: string
+  chars: number
+  chunks: number
+  source_format: string
+  preview: string
+}
+
 export interface DatasetSummary {
   name: string
+  /** How generated code addresses this table: `tables['<table_key>']`. */
+  table_key: string
   rows: number
   columns: string[]
   column_count: number
@@ -148,6 +226,7 @@ export interface SessionInfo {
   has_data: boolean
   active_dataset: string | null
   datasets: DatasetSummary[]
+  documents: DocumentSummary[]
   models: Record<string, string | number | null>
   sandboxed: boolean
 }
@@ -167,6 +246,14 @@ export interface ServerConfig {
   rag_enabled: boolean
   council_enabled: boolean
   requires_api_key: boolean
+  /** How the agentic loop is configured. Read-only — these come from the .env. */
+  agent_tier: string
+  agent_max_iterations: number
+  agent_require_approval: boolean
+  agent_verify: boolean
+  agent_grounding_check: boolean
+  context_docs_enabled: boolean
+  supported_document_formats: string[]
 }
 
 export interface WorkspaceFileEntry {

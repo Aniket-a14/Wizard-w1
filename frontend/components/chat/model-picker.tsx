@@ -21,7 +21,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 
 /** What to suggest when a provider returns nothing, keyed by why it is usually empty. */
 const EMPTY_HINTS: Record<ProviderId, string> = {
-  ollama: "No models found. Pull one first, e.g. `ollama pull qwen2.5-coder:1.5b`.",
+  ollama: "No models found. Pull one first — any model works, e.g. `ollama pull qwen3:8b`.",
   lmstudio:
     "No models found. Start the LM Studio server (Developer tab) and enable “Serve on Local Network” so the backend can reach it.",
   openai: "No models found. Check GATEWAY_API_URL and GATEWAY_API_KEY.",

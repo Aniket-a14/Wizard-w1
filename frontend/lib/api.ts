@@ -7,6 +7,7 @@
  */
 
 import type {
+  DocumentSummary,
   ModelListResponse,
   ServerConfig,
   SessionInfo,
@@ -122,6 +123,26 @@ export const api = {
   },
 
   datasets: () => request<SessionInfo>("/api/datasets"),
+
+  /**
+   * Attaches a reference document — a data dictionary, a rules page, a set of
+   * metric definitions. These are not data: the agent retrieves from them
+   * during a run rather than having them pasted into every prompt.
+   */
+  uploadDocument: (file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return request<{
+      message: string
+      document: DocumentSummary
+      session_id: string
+    }>("/api/documents", { method: "POST", body: form })
+  },
+
+  deleteDocument: (name: string) =>
+    request<{ message: string }>(`/api/documents/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
 
   activateDataset: (name: string) =>
     request<SessionInfo>(`/api/datasets/${encodeURIComponent(name)}/activate`, {
