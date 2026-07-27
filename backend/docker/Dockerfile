@@ -5,7 +5,27 @@
 # "html", which needs plotly, so a bare image forced a network install before the
 # very first chart could render -- and that install is impossible when
 # SANDBOX_NETWORK_DISABLED is on.
+#
+# The set is layered, because "everything a data analyst might want" is a lot of
+# gigabytes to ask of a laptop that also has to hold a language model:
+#
+#   SANDBOX_TIER=core      pandas, numpy, pyarrow, matplotlib, duckdb, openpyxl
+#   SANDBOX_TIER=standard  + stats, ML, plotly/seaborn, networkx  (default)
+#   SANDBOX_TIER=full      + survival analysis and geospatial
+#
+# Nothing needs to be kept in step with the prompt by hand any more: the daemon
+# reports which modules it can import and the model is told exactly that, so a
+# `core` image simply advertises less. That coupling used to be manual and was
+# twice wrong in both directions -- scikit-learn and statsmodels sat installed
+# and unmentioned for months, and duckdb was advertised to a process without it.
+#
+#   docker build --build-arg SANDBOX_TIER=core -t wizard-sandbox:core backend/docker
+#
+# The tag carries the tier (see `settings.sandbox_image`), so switching tiers
+# builds a new image rather than silently reusing one with different libraries.
 FROM python:3.11-slim
+
+ARG SANDBOX_TIER=standard
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -14,39 +34,51 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /workspace
 
-# The library set is declared to the model in `prompts.TOOLKIT`. Anything added
-# here must be added there too, or the model will never know it can use it --
-# which is exactly what happened with scikit-learn and statsmodels: both were
-# installed for months while the prompt advertised only pandas and matplotlib,
-# so generated code hand-rolled statistics that were sitting right there.
-RUN pip install --no-cache-dir \
+# `--compile` is explicit rather than left to pip's default, because
+# PYTHONDONTWRITEBYTECODE is set above and the two interact. Bytecode costs some
+# image size and buys it back on every container start: without it, each new
+# session re-parses the whole of pandas and matplotlib from source before it can
+# answer anything, which on a laptop is seconds of dead time per session.
+ARG PIP="pip install --no-cache-dir --compile"
+
+# Tier: core. Enough to load, reshape, query and chart a dataset.
+RUN $PIP \
     "pandas==2.2.2" \
     "numpy==1.26.4" \
     "pyarrow==17.0.0" \
     "matplotlib==3.9.1" \
-    "seaborn==0.13.2" \
-    "plotly==5.23.0" \
+    "duckdb==1.1.0" \
+    "openpyxl==3.1.5"
+
+# Tier: standard. Statistics, machine learning and the interactive chart stack.
+#
+# xgboost-cpu, not xgboost: the default wheel bundles a CUDA-enabled
+# libxgboost.so and is 154 MB compressed against 4.5 MB here. The import name is
+# identical, so nothing in the prompt or in generated code changes.
+RUN if [ "$SANDBOX_TIER" != "core" ]; then $PIP \
     "scipy==1.14.0" \
     "statsmodels==0.14.2" \
     "scikit-learn==1.5.1" \
-    "xgboost==2.1.1" \
+    "xgboost-cpu==2.1.1" \
     "lightgbm==4.5.0" \
-    "lifelines==0.29.0" \
+    "plotly==5.23.0" \
+    "seaborn==0.13.2" \
     "networkx==3.3" \
-    "duckdb==1.1.0" \
-    "openpyxl==3.1.5" \
     "xlsxwriter==3.2.0" \
     "tabulate==0.9.0" \
-    "pillow==10.4.0"
+    "pillow==10.4.0" \
+    ; fi
 
-# Geospatial is split out: it pulls GDAL/PROJ binaries and is the single largest
-# contributor to image size, so a build that fails here still yields a usable
-# image for every non-spatial question rather than no image at all.
-RUN pip install --no-cache-dir "geopandas==1.0.1" "shapely==2.0.6" || \
-    echo "geopandas unavailable; spatial analysis will fall back to runtime pip"
+# Tier: full. Survival analysis, and geospatial -- which carries GDAL and PROJ
+# through pyogrio/pyproj, around 45 MB of compressed wheels.
+RUN if [ "$SANDBOX_TIER" = "full" ]; then $PIP \
+    "lifelines==0.29.0" \
+    "geopandas==1.0.1" \
+    "shapely==2.0.6" \
+    ; fi
 
 # Warm the matplotlib font cache so the first plot is not penalised by it.
-RUN python -c "import matplotlib.pyplot as plt; plt.plot([0,1],[0,1]); plt.close('all')"
+RUN python -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; plt.plot([0,1],[0,1]); plt.close('all')"
 
 # Deliberately left as root *inside the container*. Switching to a fixed UID
 # breaks writes to the bind-mounted workspace on Linux hosts, where the mount is

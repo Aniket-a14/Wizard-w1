@@ -1,33 +1,42 @@
-# Base Image
+# Frontend image.
+#
+# The runner stage previously copied the whole of `node_modules` out of the
+# builder, which meant shipping every build-time dependency -- typescript,
+# eslint, tailwind, the Next compiler -- into the production image to serve a
+# handful of prerendered routes.
+#
+# `output: "standalone"` in next.config.ts makes Next trace which files the
+# server actually loads at runtime and emit exactly those, so only that is
+# copied here.
 FROM node:20-alpine AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Install dependencies
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Copy source
 COPY . .
 
-# Build the application
 RUN npm run build
 
-# Production Image
+# Production image.
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
 
-# Copy necessary files from builder
-COPY --from=builder /app/package.json .
-COPY --from=builder /app/.next ./.next
+# The standalone bundle carries its own minimal node_modules and a server.js.
+# `static` and `public` are not traced into it -- Next expects them to be placed
+# alongside, and their absence shows up as unstyled pages rather than a crash.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
 
-# Expose port
+# Runs unprivileged: unlike the backend, nothing here needs the Docker socket.
+USER node
+
 EXPOSE 3000
 
-# Start command
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

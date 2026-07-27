@@ -3,6 +3,17 @@
 # Python 3.11 to match `target-version` in pyproject.toml and the version CI
 # tests against; the previous 3.10 base meant the deployed runtime was never the
 # runtime the test suite exercised.
+#
+# Two things are deliberately *not* installed here:
+#
+#   build-essential   ~250 MB of compiler toolchain for a dependency set that is
+#                     entirely manylinux wheels on cp311. It was only ever
+#                     needed by a package that no longer appears below.
+#   curl              the healthcheck runs on the interpreter that is already
+#                     here, so the image needs no apt layer at all.
+#
+# Generated code does not run in this image -- it runs in `backend/docker` or in
+# a local subprocess -- so the analysis toolkit is not installed here either.
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -12,12 +23,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     ENV=prod
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --compile -r requirements.txt
 
 COPY backend/ .
 
@@ -30,7 +37,7 @@ RUN adduser --disabled-password --gecos '' appuser && \
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:8000/health || exit 1
+    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status == 200 else 1)"]
 
 EXPOSE 8000
 
