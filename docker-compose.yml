@@ -15,9 +15,15 @@ services:
       - ENV=${ENV:-prod}
       - SYSTEM_PROFILE=${SYSTEM_PROFILE:-server}
       - API_PROVIDER=${API_PROVIDER:-ollama}
-      - MODEL_NAME=${MODEL_NAME:-deepseek-r1:1.5b}
-      - WORKER_MODEL_NAME=${WORKER_MODEL_NAME:-qwen2.5-coder:1.5b}
-      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-llava:7b}
+      # Empty means "use whatever this provider has installed", discovered at
+      # runtime. Set one to pin it. Hardcoding a tag here made two specific
+      # Ollama models load-bearing, and neither exists on LM Studio or a gateway.
+      - MODEL_NAME=${MODEL_NAME:-}
+      - WORKER_MODEL_NAME=${WORKER_MODEL_NAME:-}
+      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-}
+      # auto | compact | balanced | full — sizes the agent's iteration budget to
+      # the model behind it. auto infers it from the model's parameter count.
+      - AGENT_TIER=${AGENT_TIER:-auto}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       # LM Studio serves loopback only until "Serve on Local Network" is enabled,
       # so this address is unreachable from the container until you turn that on.

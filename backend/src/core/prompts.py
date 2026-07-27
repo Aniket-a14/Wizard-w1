@@ -11,6 +11,7 @@ question, and per-section output is capped.
 from __future__ import annotations
 
 import io
+from functools import lru_cache
 from typing import Any
 
 import pandas as pd
@@ -233,6 +234,78 @@ A pandas DataFrame named `df` is already loaded with columns: {columns}
 </instructions>"""
 
 
+#: What the execution environment can actually do, grouped by the kind of
+#: question it answers. Each entry carries the import names it depends on, so
+#: the block can be filtered to what is genuinely importable.
+#:
+#: The worker prompt used to declare only `pd`, `np`, `plt` and `sns`, so the
+#: model had no idea it could fit a model, run a hypothesis test or query with
+#: SQL -- and duly wrote hand-rolled loops for things scikit-learn and statsmodels
+#: were sitting right there to do. Anything added to `backend/docker/Dockerfile`
+#: belongs here too, or it may as well not be installed.
+TOOLKIT: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("Dataframes & numerics", "pandas (`pd`), numpy (`np`), pyarrow", ("pandas", "numpy")),
+    (
+        "SQL over dataframes",
+        "duckdb — `duckdb.sql('SELECT ... FROM df').df()`, joins and window functions included",
+        ("duckdb",),
+    ),
+    (
+        "Statistics & inference",
+        "scipy.stats, statsmodels (OLS/GLM, ANOVA, ARIMA/SARIMAX, seasonal decomposition)",
+        ("scipy", "statsmodels"),
+    ),
+    ("Machine learning", "scikit-learn, xgboost, lightgbm", ("sklearn",)),
+    ("Survival & duration", "lifelines (Kaplan-Meier, Cox proportional hazards)", ("lifelines",)),
+    ("Graphs & networks", "networkx (centrality, communities, shortest paths)", ("networkx",)),
+    ("Geospatial", "geopandas, shapely", ("geopandas",)),
+    ("Charts", "plotly (`px`, `go`), matplotlib (`plt`), seaborn (`sns`)", ("matplotlib",)),
+    (
+        "File output",
+        "openpyxl and xlsxwriter for .xlsx, pyarrow for parquet, all under `/workspace/`",
+        ("openpyxl",),
+    ),
+)
+
+
+@lru_cache(maxsize=1)
+def _importable() -> frozenset[str]:
+    """Modules importable in *this* process.
+
+    Only consulted on the Docker-less path. Advertising duckdb to a model that
+    is about to run in the API process, where it is not installed, produces a
+    confident ImportError and burns a correction retry -- the prompt has to
+    describe the environment the code will actually meet.
+    """
+    from importlib.util import find_spec
+
+    available = set()
+    for _, _, modules in TOOLKIT:
+        for module in modules:
+            try:
+                if find_spec(module) is not None:
+                    available.add(module)
+            except (ImportError, ValueError):
+                continue
+    return frozenset(available)
+
+
+def _toolkit_block() -> str:
+    from src.core.tools.sandbox import sandbox_pool
+
+    # The container is built from `docker/Dockerfile` and has the full set; the
+    # local fallback has only whatever the backend itself installed.
+    entries = TOOLKIT
+    if not sandbox_pool.available:
+        importable = _importable()
+        entries = tuple(entry for entry in TOOLKIT if all(module in importable for module in entry[2]))
+
+    lines = [f"- **{area}**: {libraries}" for area, libraries, _ in entries]
+    if not sandbox_pool.available:
+        lines.append("- *Nothing else is installed. Do not import a library that is not listed above.*")
+    return "\n".join(lines)
+
+
 def _visualization_rules() -> str:
     if settings.PLOT_FORMAT == "html":
         return (
@@ -296,14 +369,23 @@ Translate the request into flawless, executable Python.
 {examples_block}
 <environment>
 1. Headless and non-interactive. Never call `input()`.
-2. The dataset is ALREADY loaded as a pandas DataFrame named `df`. Never reload it from disk.
-3. `pd`, `np`, `plt` and `sns` are already imported.
-4. Print anything the user should see. Results that are not printed are invisible.
-5. Never print a whole DataFrame -- use `.head()`, `.describe()` or an aggregation.
+2. The active dataset is ALREADY loaded as a pandas DataFrame named `df`. Never reload it from disk.
+3. Every other table in this session is loaded too, in the dict `tables` keyed by name. Join
+   across them directly -- `tables['orders'].merge(tables['customers'], on='customer_id')`.
+4. `pd`, `np`, `plt`, `sns`, `px` and `go` are already imported. Everything else must be imported.
+5. Print anything the user should see. Results that are not printed are invisible.
+6. Never print a whole DataFrame -- use `.head()`, `.describe()` or an aggregation.
 {_visualization_rules()}
-7. File writes are permitted only under `/workspace/`.
-8. The `os`, `sys`, `subprocess` and networking modules are unavailable.
+8. File writes are permitted only under `/workspace/`.
+9. The `os`, `sys`, `subprocess` and networking modules are unavailable.
 </environment>
+
+<available_libraries>
+{_toolkit_block()}
+
+Use the right tool for the job. Write vectorised pandas or a duckdb query rather than a Python
+loop over rows, and use the library that already implements a method rather than reimplementing it.
+</available_libraries>
 
 {context}
 {plan_block}{error_block}{revision_block}{negative_block}
@@ -404,15 +486,187 @@ Do not emit another SEARCH line. Do not write Python.
 </instructions>"""
 
 
-def create_answer_prompt(instruction: str, code: str, output: str, plan: str = "") -> str:
-    """Turns raw execution output into a written answer.
+def create_decision_prompt(
+    instruction: str,
+    plan: str,
+    transcript: str,
+    iteration: int,
+    remaining: int,
+    allowed: list[str],
+    findings: list[str] | None = None,
+) -> str:
+    """Manager prompt: choose the next action from what has actually happened.
+
+    This is the heart of the loop. It is written to be answerable by a small
+    model: a fixed two-line output format, an explicit menu, and a stated budget
+    so the model can see it is running out of room rather than being cut off.
+    """
+    menu = {
+        "inspect": "inspect  — look at the data (schema, distributions, nulls, sample rows). Costs nothing.",
+        "code": "code     — write and run Python for one concrete sub-task.",
+        "consult": "consult  — search the attached reference documents for a definition or rule.",
+        "reflect": "reflect  — revise the plan because what you found changed the problem.",
+        "answer": "answer   — you have enough to answer the question. Stop and write it.",
+    }
+    options = "\n".join(menu[name] for name in allowed if name in menu)
+
+    findings_block = ""
+    if findings:
+        joined = "\n".join(f"- {item}" for item in findings)
+        findings_block = f"\n<established_so_far>\n{joined}\n</established_so_far>\n"
+
+    urgency = ""
+    if remaining <= 1:
+        urgency = (
+            "\nThis is your LAST iteration. Choose `answer` and work with what you have, "
+            "stating clearly what remains unknown.\n"
+        )
+    elif remaining <= 2:
+        urgency = f"\nOnly {remaining} iterations remain. Start converging.\n"
+
+    return f"""<role>
+You are directing a data analysis. You do not write code yourself -- you decide the next move,
+and a coding engine carries it out. You have already seen the results below; use them.
+</role>
+
+<question>
+{instruction}
+</question>
+
+<working_plan>
+{plan}
+</working_plan>
+{findings_block}
+<what_has_happened>
+{transcript}
+</what_has_happened>
+
+<budget>
+Iteration {iteration}. {remaining} remaining.
+</budget>
+{urgency}
+<options>
+{options}
+</options>
+
+<instructions>
+Decide the single next action. Answer in EXACTLY this format and nothing else:
+
+ACTION: <one word from the options above>
+GOAL: <one sentence describing precisely what that action should achieve>
+
+Rules:
+- Choose `answer` as soon as the question is genuinely answered. Do not keep exploring.
+- Do not repeat an action that has already produced the result you need.
+- If a previous step failed, the goal should address why it failed.
+- The goal must be one concrete sub-task, not a restatement of the whole question.
+</instructions>"""
+
+
+def create_reflection_prompt(instruction: str, plan: str, transcript: str) -> str:
+    """Manager prompt: rewrite the plan in light of what execution revealed."""
+    return f"""<role>
+You are the principal data scientist. Your plan met the real data, and now you are revising it.
+</role>
+
+<question>
+{instruction}
+</question>
+
+<previous_plan>
+{plan}
+</previous_plan>
+
+<what_the_data_showed>
+{transcript}
+</what_the_data_showed>
+
+<instructions>
+1. State in one line what you learned that the previous plan did not anticipate.
+2. Then output the revised numbered plan: only the steps that still need doing.
+3. Reference real column names and real values seen above. Never invent one.
+4. If the previous plan is still correct, say so in one line and repeat it unchanged.
+5. Do not write Python.
+</instructions>"""
+
+
+def create_verification_prompt(instruction: str, code: str, output: str) -> str:
+    """Worker prompt: re-derive the headline result by a different route.
+
+    An independent recomputation catches the errors a self-review never does --
+    a wrong join grain, a filter applied in the wrong order, a mean over the
+    wrong denominator all produce confident, plausible, wrong numbers.
+    """
+    trimmed = output if len(output) <= 2000 else output[:2000] + "\n... (truncated)"
+    return f"""<role>
+You are verifying someone else's analysis. Assume it may be wrong.
+</role>
+
+<question>
+{instruction}
+</question>
+
+<analysis_that_ran>
+```python
+{code}
+```
+</analysis_that_ran>
+
+<result_it_produced>
+{trimmed}
+</result_it_produced>
+
+<instructions>
+Write Python that recomputes the SAME headline number by a DIFFERENT route -- a different
+aggregation path, a reconciliation against row counts or totals, or a bounds check.
+
+1. Do not copy the approach above. If it used groupby, use a pivot or a duckdb query.
+2. Print a line starting `VERIFIED:` when your number matches, or `MISMATCH:` when it does not,
+   followed by both values.
+3. Also print any sanity violation you find (negative counts, percentages over 100,
+   totals exceeding the population).
+4. Keep it short. Return ONLY one ```python code block.
+</instructions>"""
+
+
+def create_answer_prompt(
+    instruction: str,
+    code: str,
+    output: str,
+    plan: str = "",
+    findings: list[str] | None = None,
+    assumptions: list[str] | None = None,
+    verification: str = "",
+) -> str:
+    """Turns a completed investigation into a written answer.
 
     Without this the UI showed unformatted stdout, which is why the frontend had
     accumulated regexes that stripped tracebacks and numeric rows out of the
     response -- deleting real analytical output in the process.
+
+    The output budget is generous and the truncation is *middle-out*: a tail-cut
+    threw away exactly the summary lines an analysis prints last, which is where
+    the answer usually lives.
     """
-    trimmed = output if len(output) <= 4000 else output[:4000] + "\n... (output truncated)"
+    trimmed = _middle_out(output, 12000)
+
     plan_block = f"\n<plan_followed>\n{plan}\n</plan_followed>\n" if plan else ""
+
+    findings_block = ""
+    if findings:
+        joined = "\n".join(f"- {item}" for item in findings)
+        findings_block = f"\n<findings>\n{joined}\n</findings>\n"
+
+    assumptions_block = ""
+    if assumptions:
+        joined = "\n".join(f"- {item}" for item in assumptions)
+        assumptions_block = (
+            f"\n<assumptions_made>\n{joined}\n</assumptions_made>\n"
+            "<assumption_handling>\nThese are reported to the user separately. Mention one only "
+            "when it materially changes how the headline number should be read.\n</assumption_handling>\n"
+        )
+
+    verification_block = f"\n<verification_result>\n{verification}\n</verification_result>\n" if verification else ""
 
     return f"""<role>
 You are a data analyst explaining a finished result to the person who asked for it.
@@ -421,7 +675,7 @@ You are a data analyst explaining a finished result to the person who asked for 
 <user_request>
 {instruction}
 </user_request>
-{plan_block}
+{plan_block}{findings_block}
 <code_executed>
 ```python
 {code}
@@ -431,11 +685,29 @@ You are a data analyst explaining a finished result to the person who asked for 
 <execution_output>
 {trimmed}
 </execution_output>
-
+{verification_block}{assumptions_block}
 <instructions>
 1. Answer the question directly in the first sentence, using the actual numbers from the output.
-2. Add 2-4 sentences of interpretation: what the numbers mean, notable patterns, caveats.
-3. Preserve any table in the output as a markdown table. Never invent numbers that are not shown.
-4. If the output is an error, explain the cause in plain language and suggest the fix.
-5. Do not repeat the code. Do not describe what you are about to do.
+2. Add 2-4 sentences of interpretation: what the numbers mean, notable patterns, what they imply.
+3. Preserve any table in the output as a markdown table.
+4. EVERY number you write must appear in the execution output above. Do not round into a figure
+   that is not there, do not compute a new one, do not estimate. If you need a number that was
+   not computed, say it was not computed.
+5. If verification reported a mismatch, lead with that -- the result is not trustworthy.
+6. If the output is an error, explain the cause in plain language and suggest the fix.
+7. Do not repeat the code. Do not describe what you are about to do.
 </instructions>"""
+
+
+def _middle_out(text: str, limit: int) -> str:
+    """Trims from the middle, keeping both ends.
+
+    Analysis output puts context first and conclusions last; cutting the tail
+    removes the answer, and cutting the head removes what it is an answer about.
+    """
+    if len(text) <= limit:
+        return text
+    head = int(limit * 0.6)
+    tail = limit - head
+    omitted = len(text) - head - tail
+    return f"{text[:head]}\n\n... [{omitted:,} characters of output omitted] ...\n\n{text[-tail:]}"

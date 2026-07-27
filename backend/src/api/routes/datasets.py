@@ -12,12 +12,21 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, Up
 from src.api.deps import SESSION_HEADER, get_session, require_api_key, require_dataset
 from src.api.schemas import (
     DatasetSummary,
+    DocumentSummary,
+    DocumentUploadResponse,
     PreviewResponse,
     SessionResponse,
     UploadResponse,
 )
 from src.config import settings
 from src.core.agent.flow import science_agent
+from src.core.ingest.documents import (
+    DocumentExtractionError,
+    UnsupportedDocumentError,
+    is_supported_document,
+    load_document,
+    supported_document_extensions,
+)
 from src.core.ingest.loader import (
     DatasetLoader,
     EmptyDatasetError,
@@ -117,6 +126,67 @@ async def upload_dataset(
 async def list_datasets(response: Response, session: Session = Depends(get_session)) -> SessionResponse:
     response.headers[SESSION_HEADER] = session.id
     return SessionResponse(**session.describe())
+
+
+@router.post("/documents", response_model=DocumentUploadResponse, dependencies=[Depends(require_api_key)])
+async def upload_document(
+    response: Response,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+) -> DocumentUploadResponse:
+    """Attaches a reference document — a data dictionary, rules, definitions.
+
+    These are not data. They are the context that says what the data *means*,
+    and the agent retrieves from them mid-analysis rather than having them
+    pasted into every prompt.
+    """
+    if not settings.CONTEXT_DOCS_ENABLED:
+        raise HTTPException(status_code=403, detail="Context documents are disabled on this deployment.")
+
+    filename = os.path.basename(file.filename or "document.md")
+    if not is_supported_document(filename):
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Unsupported document type. Supported formats: {', '.join(supported_document_extensions())}"),
+        )
+
+    temp_path = make_temp_path(suffix=Path(filename).suffix)
+    try:
+        try:
+            await asyncio.to_thread(DatasetLoader.spool_to_disk, file.file, temp_path, settings.CONTEXT_DOC_MAX_BYTES)
+        except ValueError as exc:
+            raise HTTPException(status_code=413, detail=str(exc))
+
+        try:
+            document = await asyncio.to_thread(load_document, temp_path, filename)
+        except UnsupportedDocumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except DocumentExtractionError as exc:
+            # A parser the deployment chose not to install is a configuration
+            # problem, not a bad request — say which one and how to fix it.
+            raise HTTPException(status_code=501, detail=str(exc))
+        except Exception as exc:
+            logger.error("Document parse failed", filename=filename, error=str(exc))
+            raise HTTPException(status_code=400, detail=f"Could not read the document: {exc}")
+
+        session.add_document(document)
+        logger.info("Context document attached", document=filename, chunks=len(document.chunks), session=session.id)
+        response.headers[SESSION_HEADER] = session.id
+
+        return DocumentUploadResponse(
+            message="Document attached.",
+            document=DocumentSummary(**document.summary()),
+            session_id=session.id,
+        )
+    finally:
+        cleanup_path(temp_path)
+
+
+@router.delete("/documents/{name}", dependencies=[Depends(require_api_key)])
+async def delete_document(name: str, session: Session = Depends(get_session)) -> dict:
+    if not session.remove_document(os.path.basename(name)):
+        raise HTTPException(status_code=404, detail=f"No document named '{name}' in this session.")
+    return {"message": f"Removed '{name}'."}
 
 
 @router.post(

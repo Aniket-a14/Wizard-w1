@@ -109,6 +109,28 @@ class StreamingStdout:
 
 
 def load_dataset(exec_globals, pd):
+    """Binds `df` to the active table and `tables` to every loaded table.
+
+    Cross-table questions are the common case for a real analytical request, so
+    every table the session holds is in the namespace at once. `df` stays bound
+    to the active one, which is what every existing prompt, cache entry and
+    generated script already assumes.
+    """
+    tables = {}
+    tables_dir = "/workspace/tables"
+    if os.path.isdir(tables_dir):
+        for entry in sorted(os.listdir(tables_dir)):
+            if not entry.endswith(".feather"):
+                continue
+            key = entry[: -len(".feather")]
+            try:
+                tables[key] = pd.read_feather(os.path.join(tables_dir, entry))
+            except Exception as exc:
+                print("Could not load table " + key + ": " + str(exc))
+    exec_globals["tables"] = tables
+    if tables:
+        print("Tables available: " + ", ".join(sorted(tables)))
+
     for filename, reader in (
         ("/workspace/dataset.feather", pd.read_feather),
         ("/workspace/dataset.parquet", pd.read_parquet),
@@ -125,6 +147,9 @@ def load_dataset(exec_globals, pd):
 
 
 def install_missing(module_name):
+    # Import name -> distribution name, for the cases where they differ. A
+    # missing entry is not a problem: the import name is tried as-is, which is
+    # correct for the large majority of packages.
     mapping = {
         "sklearn": "scikit-learn",
         "bs4": "beautifulsoup4",
@@ -132,6 +157,22 @@ def install_missing(module_name):
         "PIL": "pillow",
         "docx": "python-docx",
         "cv2": "opencv-python-headless",
+        "dateutil": "python-dateutil",
+        "sqlalchemy": "SQLAlchemy",
+        "skimage": "scikit-image",
+        "statsmodels.api": "statsmodels",
+        "mpl_toolkits": "matplotlib",
+        "pyarrow.parquet": "pyarrow",
+        "Levenshtein": "python-Levenshtein",
+        "fuzzywuzzy": "fuzzywuzzy",
+        "wordcloud": "wordcloud",
+        "umap": "umap-learn",
+        "shap": "shap",
+        "prophet": "prophet",
+        "pmdarima": "pmdarima",
+        "arch": "arch",
+        "geopy": "geopy",
+        "folium": "folium",
     }
     package = mapping.get(module_name, module_name)
     print("[sandbox] installing missing package: " + package)

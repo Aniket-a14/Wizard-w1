@@ -105,6 +105,21 @@ def tokenize(text: str) -> set[str]:
     return {t for t in tokens if t not in STOPWORDS}
 
 
+def mentions_column(query: str, column: str) -> bool:
+    """Whether ``query`` names ``column``, matched on word boundaries.
+
+    A substring test looks equivalent and is not: a column called ``C`` matches
+    inside "check", ``id`` matches inside "provide", ``n`` matches everywhere.
+    Short column names are extremely common, so a substring test reports almost
+    every column as explicitly requested and the relevance budget stops
+    budgeting anything.
+    """
+    name = str(column).strip()
+    if not name:
+        return False
+    return re.search(rf"(?<![a-zA-Z0-9_]){re.escape(name.lower())}(?![a-zA-Z0-9_])", str(query).lower()) is not None
+
+
 def lexical_overlap(query_tokens: set[str], candidate: str) -> float:
     """Jaccard-ish overlap used when no embedding model is available."""
     candidate_tokens = tokenize(candidate)
@@ -143,10 +158,9 @@ class ContextRetriever:
         if len(all_columns) <= limit:
             return all_columns, False
 
-        query_lower = str(query).lower()
         query_tokens = tokenize(query)
 
-        explicit = [c for c in all_columns if str(c).lower() in query_lower]
+        explicit = [c for c in all_columns if mentions_column(query, c)]
         remaining = [c for c in all_columns if c not in explicit]
 
         scored: list[tuple[float, str]] = []

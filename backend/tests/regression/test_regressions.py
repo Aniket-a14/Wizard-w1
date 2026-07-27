@@ -20,7 +20,10 @@ from src.core.database import DatabaseManager, db_mgr
 from src.core.execution import CodeExecutor
 from src.core.ingest.loader import json_safe_records, sanitize_columns
 from src.core.llm import LLMRole, llm_provider
+from src.core.llm.provider import ModelSpec
 from src.core.memory import working_memory
+from src.core.prompts import TOOLKIT, _toolkit_block
+from src.core.rag.retriever import ContextRetriever, mentions_column
 from src.core.reporting import ReportingEngine
 from src.core.security.code_guard import CodeGuard
 from src.core.semantic_cache import semantic_cache
@@ -316,3 +319,109 @@ def test_clearing_the_semantic_cache_also_clears_the_in_process_layer() -> None:
 
     assert semantic_cache.lookup("how many rows", columns) is None
     assert db_mgr.get_cache_entries(columns) == []
+
+
+# --------------------------------------------------------------------------- #
+# The agentic rewrite
+# --------------------------------------------------------------------------- #
+def test_a_short_column_name_is_not_matched_inside_an_unrelated_word() -> None:
+    """Column relevance used a substring test: `str(column).lower() in query`.
+
+    A column named `C` therefore matched inside "check", `id` matched inside
+    "provide", and `n` matched everywhere. Short column names are extremely
+    common, so nearly every column reported as "explicitly named by the user"
+    and was pinned into the prompt — which defeated the whole point of the
+    column budget on exactly the wide frames it exists for.
+    """
+    assert mentions_column("check the nulls", "C") is False
+    assert mentions_column("provide a summary", "id") is False
+    assert mentions_column("plot revenue by region", "revenue") is True
+    assert mentions_column("what is C", "C") is True
+    # Word boundaries, not whitespace: punctuation still delimits.
+    assert mentions_column("group by `region`,", "region") is True
+
+
+def test_the_column_budget_still_budgets_on_a_wide_frame() -> None:
+    """The consequence of the bug above, measured end to end."""
+    frame = pd.DataFrame({name: [1] for name in ["a", "b", "c", "id", "n"] + [f"col_{i}" for i in range(60)]})
+    retriever = ContextRetriever()
+
+    selected, truncated = retriever.select_columns("check and provide an analysis of col_7", frame, max_columns=10)
+
+    assert truncated
+    assert len(selected) <= 10
+    assert "col_7" in selected
+
+
+def test_fast_mode_does_not_pay_for_verification() -> None:
+    """`budget_for` applied the iteration count for `fast` but left the tier's
+    verification flag alone, so the cheapest mode silently ran a second code
+    generation *and* a second execution — the most expensive thing a turn does.
+    """
+    budget = Settings().budget_for("fast", "70B")
+    assert budget.iterations == 1
+    assert not budget.allow_verification
+    assert not budget.allow_reflection
+
+
+def test_no_model_name_is_hardcoded_in_the_defaults() -> None:
+    """MODEL_NAME/WORKER_MODEL_NAME defaulted to two specific Ollama tags.
+
+    That made those exact models load-bearing: the tag 404s on LM Studio and on
+    every gateway, so switching provider failed with an opaque error until the
+    user also edited their .env. Empty means "use what this provider has".
+    """
+    fresh = Settings()
+    assert fresh.MODEL_NAME == ""
+    assert fresh.WORKER_MODEL_NAME == ""
+    assert fresh.VISION_MODEL_NAME == ""
+
+
+def test_an_unresolvable_model_names_the_endpoint_it_tried() -> None:
+    """ "No LLM client available" alone is undebuggable, and with empty defaults
+    the model name can now legitimately be blank — so the message has to say
+    that discovery found nothing rather than quoting an empty string."""
+    spec = ModelSpec(provider="lmstudio", model="", temperature=0.0, max_tokens=10, num_ctx=10, base_url="http://x/v1")
+    message = llm_provider._unavailable_message(spec)
+
+    assert "http://x/v1" in message
+    assert "lmstudio" in message
+    assert "discovery" in message.lower()
+
+
+def test_removing_a_table_drops_it_from_the_sandbox_namespace(session: Session) -> None:
+    """Every session table is preloaded into the daemon's `tables` dict. Without
+    an explicit reload the removed frame stayed queryable from generated code
+    after the user deleted it."""
+    session.add_dataset("orders.csv", pd.DataFrame({"id": [1]}))
+    session.add_dataset("customers.csv", pd.DataFrame({"id": [1]}))
+
+    session.remove_dataset("orders.csv")
+
+    assert "orders" not in session.tables
+    assert not (session.workspace / "tables" / "orders.feather").exists()
+
+
+def test_the_toolkit_block_does_not_advertise_what_is_not_installed(monkeypatch) -> None:
+    """The worker prompt lists the libraries available. In the Docker-less
+    fallback the code runs in the API process, which has a much smaller set than
+    the sandbox image — advertising duckdb there produced a confident
+    ImportError and burned a correction retry."""
+    monkeypatch.setattr("src.core.tools.sandbox.sandbox_pool._client_checked", True, raising=False)
+    monkeypatch.setattr("src.core.tools.sandbox.sandbox_pool._client", None, raising=False)
+
+    block = _toolkit_block()
+
+    assert "Do not import a library that is not listed" in block
+    for area, _, modules in TOOLKIT:
+        if "duckdb" in modules and not _module_present("duckdb"):
+            assert area not in block
+
+
+def _module_present(name: str) -> bool:
+    from importlib.util import find_spec
+
+    try:
+        return find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False

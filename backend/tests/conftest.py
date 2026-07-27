@@ -143,6 +143,25 @@ def _clean_database():
 
 
 @pytest.fixture
+def stub_llm(monkeypatch):
+    """Installs a scripted LLM into every module that reached for the provider.
+
+    Shared rather than per-file: the loop tests and the workflow tests drive the
+    same orchestrator, and two copies of this fixture would drift.
+    """
+    from stubs import ScriptedLLM
+
+    def install(responses: list[str]) -> ScriptedLLM:
+        stub = ScriptedLLM(responses)
+        for target in ("src.core.agent.orchestrator.llm_provider", "src.core.agent.flow.llm_provider"):
+            module, _, attribute = target.rpartition(".")
+            monkeypatch.setattr(f"{module}.{attribute}", stub, raising=False)
+        return stub
+
+    return install
+
+
+@pytest.fixture
 def csv_file(tmp_path: Path, simple_df: pd.DataFrame) -> Path:
     path = tmp_path / "sample.csv"
     simple_df.to_csv(path, index=False)

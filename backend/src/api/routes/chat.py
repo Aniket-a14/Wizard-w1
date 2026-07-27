@@ -60,6 +60,13 @@ async def chat(
         approval=payload["approval"],
         downloads=payload["downloads"],
         elapsed_ms=payload["elapsed_ms"],
+        findings=payload["findings"],
+        assumptions=payload["assumptions"],
+        iterations=payload["iterations"],
+        tier=payload["tier"],
+        mode=payload["mode"],
+        verification=payload["verification"],
+        grounding=payload["grounding"],
     )
 
 
@@ -92,7 +99,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
     Client frames
     -------------
-    ``{"type": "message", "content": str, "mode": "planning"|"fast"}``
+    ``{"type": "message", "content": str, "mode": "auto"|"fast"|"deep"|"planning"}``
     ``{"type": "approval", "approved": bool, "tool": str, "content": str, "plan"?: str, "query"?: str}``
     ``{"type": "cancel"}``  ``{"type": "ping"}``
 
@@ -160,7 +167,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 )
                 continue
 
-            mode = payload.get("mode", "planning")
+            mode = payload.get("mode", "auto")
             approved_plan: str | None = None
             approved_search: str | None = None
 
@@ -175,7 +182,11 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     approved_search = payload.get("query") or ""
                 else:
                     approved_plan = payload.get("plan") or instruction
-                    mode = "fast"  # already approved; do not gate again
+                    # Already approved, so the gate must not fire again — but the
+                    # investigation still gets its full budget. Downgrading to
+                    # `fast` here would have made approving a plan silently
+                    # reduce the work done to carry it out.
+                    mode = "auto" if mode == "planning" else mode
             else:
                 session.append_message("user", instruction)
 

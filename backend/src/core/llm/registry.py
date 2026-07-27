@@ -282,19 +282,38 @@ class ModelRegistry:
             return None
 
         def pick(configured: str, capability: str) -> str | None:
-            # The configured default is only meaningful on the provider that
-            # holds it: "deepseek-r1:1.5b" is an Ollama tag and will 404 on a
-            # gateway, so on any other provider fall straight through to what
-            # is actually there.
-            if configured in names:
+            # A configured default is only meaningful on the provider that holds
+            # it: an Ollama tag will 404 on a gateway, so on any other provider
+            # fall straight through to what is actually there. It is also empty
+            # by default now -- pinning a model is an override, not a
+            # requirement.
+            if configured and configured in names:
                 return configured
             return first_with(capability) or (names[0] if names else None)
 
         return {
             "manager": pick(settings.MODEL_NAME, "reasoning"),
             "worker": pick(settings.WORKER_MODEL_NAME, "code"),
-            "vision": settings.VISION_MODEL_NAME if settings.VISION_MODEL_NAME in names else first_with("vision"),
+            "vision": (
+                settings.VISION_MODEL_NAME
+                if settings.VISION_MODEL_NAME and settings.VISION_MODEL_NAME in names
+                else first_with("vision")
+            ),
         }
+
+    def parameter_size_of(self, name: str, provider: str | None = None) -> str | None:
+        """Reported parameter count for a model, e.g. ``"7B"``.
+
+        Used to size the agent loop's budget. Returns None for anything not
+        discoverable -- hosted gateways report no size, and ``resolve_tier``
+        treats that as the mid tier rather than guessing.
+        """
+        if not name:
+            return None
+        for model in self.list_models(provider=provider):
+            if model.name == name or model.name.split(":")[0] == name.split(":")[0]:
+                return model.parameter_size or None
+        return None
 
     def is_installed(self, name: str, provider: str | None = None) -> bool:
         """Whether ``name`` is present. Tag-insensitive: ``llama3`` matches ``llama3:latest``."""

@@ -76,12 +76,32 @@ class LLMProvider:
     # ------------------------------------------------------------------ #
     # Resolution
     # ------------------------------------------------------------------ #
-    def default_model_for(self, role: LLMRole) -> str:
-        if role is LLMRole.WORKER:
-            return settings.WORKER_MODEL_NAME
-        if role is LLMRole.VISION:
-            return settings.VISION_MODEL_NAME
-        return settings.MODEL_NAME
+    def default_model_for(self, role: LLMRole, provider: str | None = None) -> str:
+        """The model to use when the caller names none.
+
+        A configured ``*_MODEL_NAME`` is an explicit pin and always wins. When it
+        is empty -- the default -- the model is discovered from what the provider
+        actually has installed, so the app runs against any model on any backend
+        instead of failing on two hardcoded Ollama tags that do not exist
+        anywhere else.
+        """
+        pinned = {
+            LLMRole.WORKER: settings.WORKER_MODEL_NAME,
+            LLMRole.VISION: settings.VISION_MODEL_NAME,
+            LLMRole.MANAGER: settings.MODEL_NAME,
+        }.get(role, settings.MODEL_NAME)
+        if pinned.strip():
+            return pinned.strip()
+
+        # Imported lazily: `llm/__init__` loads this module before `registry`,
+        # and discovery must not run as an import side effect.
+        from src.core.llm.registry import model_registry
+
+        try:
+            return (model_registry.suggest(provider).get(role.value) or "").strip()
+        except Exception as exc:  # pragma: no cover - discovery is best effort
+            logger.warning("Model discovery failed while resolving a default", role=role.value, error=str(exc))
+            return ""
 
     def resolve(
         self,
@@ -95,7 +115,7 @@ class LLMProvider:
         resolved_provider = settings.resolve_provider(provider)
         return ModelSpec(
             provider=resolved_provider,
-            model=(model or self.default_model_for(role)).strip(),
+            model=(model or self.default_model_for(role, resolved_provider)).strip(),
             temperature=settings.TEMPERATURE if temperature is None else float(temperature),
             max_tokens=max_tokens or settings.MAX_TOKENS,
             num_ctx=settings.LLM_NUM_CTX,
@@ -124,6 +144,12 @@ class LLMProvider:
             return client
 
     def _build_client(self, spec: ModelSpec):
+        if not spec.model:
+            # Reached when no model is pinned and discovery found nothing, i.e.
+            # the daemon is down or has no models pulled. Constructing a client
+            # for the empty string would fail later with a far worse message.
+            logger.warning("No model resolved", provider=spec.provider, base_url=spec.base_url)
+            return None
         try:
             if spec.provider == "ollama":
                 from langchain_ollama import ChatOllama
@@ -299,6 +325,11 @@ class LLMProvider:
         only check that if they are told which host was tried.
         """
         where = spec.base_url or "the configured endpoint"
+        if not spec.model:
+            return (
+                f"No model is available on {spec.provider} at {where}. "
+                "Nothing is pinned in the configuration and discovery found none installed."
+            )
         return f"No LLM client available for '{spec.model}' on {spec.provider} at {where}"
 
     @staticmethod

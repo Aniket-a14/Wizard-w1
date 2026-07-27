@@ -51,6 +51,7 @@ class SessionResponse(BaseModel):
     has_data: bool
     active_dataset: str | None = None
     datasets: list[dict[str, Any]] = Field(default_factory=list)
+    documents: list[dict[str, Any]] = Field(default_factory=list)
     models: dict[str, Any] = Field(default_factory=dict)
     sandboxed: bool = False
 
@@ -97,6 +98,8 @@ class ModelSelection(BaseModel):
 
 class DatasetSummary(BaseModel):
     name: str
+    #: How generated code addresses this table: `tables['<table_key>']`.
+    table_key: str = ""
     rows: int
     columns: list[str]
     column_count: int
@@ -123,9 +126,16 @@ class PreviewResponse(BaseModel):
     data: list[dict[str, Any]]
 
 
+#: ``auto`` lets the agent choose its own depth, ``fast`` forces a single shot,
+#: ``deep`` forces a full investigation. ``planning`` is the legacy name for
+#: "investigate, but let me approve the plan first" and is kept so existing
+#: clients and stored sessions keep working.
+AnalysisMode = Literal["auto", "fast", "deep", "planning"]
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
-    mode: Literal["planning", "fast"] = "planning"
+    mode: AnalysisMode = "auto"
     approved_plan: str | None = Field(default=None, max_length=20000)
 
 
@@ -141,6 +151,28 @@ class ChatResponse(BaseModel):
     approval: dict[str, Any] | None = None
     downloads: list[str] = Field(default_factory=list)
     elapsed_ms: int = 0
+    # What the investigation established, and how far it was trusted.
+    findings: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    iterations: int = 0
+    tier: str = "balanced"
+    mode: str = "auto"
+    verification: str = ""
+    grounding: dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentSummary(BaseModel):
+    name: str
+    chars: int
+    chunks: int
+    source_format: str
+    preview: str = ""
+
+
+class DocumentUploadResponse(BaseModel):
+    message: str
+    document: DocumentSummary
+    session_id: str
 
 
 class WorkspaceFile(BaseModel):

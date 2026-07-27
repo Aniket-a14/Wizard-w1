@@ -148,9 +148,22 @@ def test_planning_mode_emits_an_approval_request(client: TestClient, session_wit
 
 
 def test_approval_resumes_the_run(client: TestClient, session_with_data: str, monkeypatch) -> None:
+    """Approving a plan resumes it with the full investigation budget.
+
+    The approved plan must not re-enter the approval gate, and must not be
+    downgraded to a single-shot run: approving the work is not the same as
+    asking for less of it.
+    """
     monkeypatch.setattr(
         "src.core.agent.orchestrator.llm_provider",
-        StreamingStub(["```python\nprint('ok')\n```", "The step completed."]),
+        StreamingStub(
+            [
+                "```python\nprint('ok')\n```",  # iteration 1 writes the code
+                "ACTION: answer\nGOAL: report it",  # iteration 2 decides it is done
+                "```python\nprint('VERIFIED: ok')\n```",  # the verification pass
+                "The step completed.",  # answer synthesis
+            ]
+        ),
     )
 
     with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
@@ -168,6 +181,9 @@ def test_approval_resumes_the_run(client: TestClient, session_with_data: str, mo
 
     assert frames[-1]["type"] == "final"
     assert "completed" in frames[-1]["response"]
+    # No second approval_required: the gate lives in orientation, which an
+    # approved plan skips entirely.
+    assert not [frame for frame in frames if frame["type"] == "approval_required"]
 
 
 def test_rejected_approval_stops_cleanly(client: TestClient, session_with_data: str) -> None:

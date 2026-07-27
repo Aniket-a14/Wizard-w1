@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.api import app
+from src.config import settings
 from src.core.agent.events import EventCollector
 from src.core.agent.orchestrator import orchestrator
 from src.core.execution import CodeExecutor
@@ -331,3 +332,95 @@ def test_an_unreachable_provider_does_not_break_the_provider_list(client: TestCl
 
     assert {entry["id"] for entry in body["providers"]} >= {"ollama", "lmstudio"}
     assert any(entry["is_default"] for entry in body["providers"])
+
+
+# --------------------------------------------------------------------------- #
+# Context documents
+# --------------------------------------------------------------------------- #
+def test_a_data_file_is_rejected_as_a_document(client: TestClient) -> None:
+    """The two loaders must not overlap: a CSV posted to /documents would be
+    chunked as prose and retrieved as text, which is silently useless."""
+    response = client.post(
+        "/api/documents",
+        files={"file": ("data.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    assert response.status_code == 422
+    assert ".md" in response.json()["detail"]
+
+
+def test_an_empty_document_is_rejected(client: TestClient) -> None:
+    response = client.post(
+        "/api/documents",
+        files={"file": ("blank.md", b"   \n\n  ", "text/markdown")},
+    )
+
+    assert response.status_code == 422
+
+
+def test_an_oversized_document_is_refused(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CONTEXT_DOC_MAX_BYTES", 32)
+
+    response = client.post(
+        "/api/documents",
+        files={"file": ("big.md", b"x" * 4096, "text/markdown")},
+    )
+
+    assert response.status_code == 413
+
+
+def test_documents_can_be_switched_off(client: TestClient, monkeypatch) -> None:
+    """A deployment that does not want unstructured context attached to sessions
+    must be able to refuse it at the boundary, not just hide the button."""
+    monkeypatch.setattr(settings, "CONTEXT_DOCS_ENABLED", False)
+
+    response = client.post(
+        "/api/documents",
+        files={"file": ("notes.md", b"Some rules.", "text/markdown")},
+    )
+
+    assert response.status_code == 403
+
+
+def test_deleting_an_unknown_document_is_a_404(client: TestClient) -> None:
+    assert client.delete("/api/documents/nope.md").status_code == 404
+
+
+def test_a_path_traversing_document_name_is_neutralised(client: TestClient) -> None:
+    """The name becomes a dict key and is echoed back, so it must be a basename."""
+    response = client.post(
+        "/api/documents",
+        files={"file": ("../../etc/passwd.md", b"Rules go here.", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["document"]["name"] == "passwd.md"
+
+
+# --------------------------------------------------------------------------- #
+# Modes
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("mode", ["turbo", "PLANNING ", "", "deep-thought"])
+def test_an_unknown_mode_never_reaches_the_budget_lookup(mode: str) -> None:
+    """`budget_for` indexes TIER_BUDGETS; an unnormalised mode would be a
+    silent fall-through rather than a KeyError, which is worse."""
+    normalised = orchestrator.normalise_mode(mode)
+    assert normalised in {"auto", "fast", "deep", "planning"}
+    assert settings.budget_for(normalised, "7B").iterations >= 1
+
+
+def test_the_rest_boundary_rejects_a_bogus_mode(client: TestClient) -> None:
+    """Schema-level rejection: a typo must not silently become `auto`.
+
+    A dataset is loaded first because `require_dataset` runs ahead of body
+    validation and would otherwise answer 412 before the mode was ever read.
+    """
+    session_id = _session_with_data(client)
+    response = client.post(
+        "/api/chat",
+        json={"message": "hello", "mode": "turbocharged"},
+        headers={"X-Session-Id": session_id},
+    )
+
+    assert response.status_code == 422
+    assert any("mode" in str(error.get("loc", "")) for error in response.json()["detail"])

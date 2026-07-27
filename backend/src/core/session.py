@@ -19,6 +19,7 @@ reached so a public deployment cannot be made to spawn unbounded containers.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
@@ -31,6 +32,7 @@ import pandas as pd
 from src.config import settings
 from src.core.database import db_mgr
 from src.core.execution import CodeExecutor
+from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
 from src.core.tools.sandbox import sandbox_pool
 from src.utils.logging import logger
@@ -47,9 +49,22 @@ class DatasetHandle:
     source_format: str = "csv"
     loaded_at: float = field(default_factory=time.time)
 
+    @property
+    def table_key(self) -> str:
+        """The name this table is exposed under in the sandbox's ``tables`` dict.
+
+        Derived from the filename with the extension and any path-unsafe
+        character removed, so ``Q3 sales (final).csv`` becomes ``q3_sales_final``
+        — addressable from generated code and safe as a filename.
+        """
+        stem = Path(self.name).stem.strip().lower()
+        cleaned = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
+        return cleaned or "table"
+
     def summary(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "table_key": self.table_key,
             "rows": int(len(self.df)),
             "columns": list(map(str, self.df.columns)),
             "column_count": int(len(self.df.columns)),
@@ -101,6 +116,7 @@ class Session:
         self.created_at = time.time()
         self.last_seen = time.time()
         self.datasets: dict[str, DatasetHandle] = {}
+        self.documents: dict[str, ContextDocument] = {}
         self.active_dataset: str | None = None
         self.models = ModelPreferences()
         self.executor = CodeExecutor(session_id)
@@ -133,6 +149,15 @@ class Session:
     @property
     def has_data(self) -> bool:
         return self.active_handle is not None
+
+    @property
+    def tables(self) -> dict[str, pd.DataFrame]:
+        """Every loaded table, keyed as generated code will address it.
+
+        Mirrors what the sandbox daemon builds from the bind mount, so the
+        Docker-less fallback presents the same namespace as the container.
+        """
+        return {handle.table_key: handle.df for handle in self.datasets.values()}
 
     # ------------------------------------------------------------------ #
     def add_dataset(
@@ -180,18 +205,30 @@ class Session:
         db_mgr.delete_schema(name, session_id=self.id)
         for suffix in ("", ".feather"):
             (self.workspace / f"{name}{suffix}").unlink(missing_ok=True)
+        (self.workspace / "tables" / f"{handle.table_key}.feather").unlink(missing_ok=True)
+        # The daemon holds the removed frame in its `tables` dict until told
+        # otherwise; without this it stays queryable after the user deleted it.
+        self.executor.reload_dataset()
         return True
 
     def _materialize(self, handle: DatasetHandle, is_active: bool):
         """Writes the frame where the sandbox can read it.
 
-        The active dataset is additionally written as ``dataset.feather``, which
-        is the name the sandbox daemon preloads into ``df`` at startup.
+        Every dataset is written as ``tables/<name>.feather``, which the daemon
+        preloads into the ``tables`` dict, and the active one is additionally
+        written as ``dataset.feather`` to become ``df``. Cross-table questions
+        need every table in the namespace at once: previously only the active
+        frame was loaded and the others were merely *mentioned* in the prompt as
+        filenames the model might choose to read, which it usually did not, and
+        got wrong when it did.
         """
         workspace = self.workspace
         workspace.mkdir(parents=True, exist_ok=True)
+        tables_dir = workspace / "tables"
+        tables_dir.mkdir(parents=True, exist_ok=True)
         try:
             handle.df.to_csv(workspace / handle.name, index=False)
+            safe_write_feather(handle.df, tables_dir / f"{handle.table_key}.feather")
             if is_active:
                 dtypes_preserved = safe_write_feather(handle.df, workspace / "dataset.feather")
                 handle.df.to_csv(workspace / "dataset.csv", index=False)
@@ -202,6 +239,110 @@ class Session:
                     )
         except Exception as exc:
             logger.error("Failed to materialize dataset into workspace", dataset=handle.name, error=str(exc))
+
+    # ------------------------------------------------------------------ #
+    # Reference documents
+    # ------------------------------------------------------------------ #
+    @property
+    def has_documents(self) -> bool:
+        return bool(self.documents)
+
+    def add_document(self, document: ContextDocument) -> ContextDocument:
+        with self._lock:
+            self.documents[document.name] = document
+        self.touch()
+        return document
+
+    def remove_document(self, name: str) -> bool:
+        with self._lock:
+            return self.documents.pop(name, None) is not None
+
+    def search_documents(self, query: str, limit: int | None = None) -> list[tuple[str, str]]:
+        """Passages from the attached references that bear on ``query``."""
+        if not self.documents:
+            return []
+        return rank_document_chunks(self.documents, query, limit)
+
+    # ------------------------------------------------------------------ #
+    # Deterministic inspection
+    # ------------------------------------------------------------------ #
+    def inspect(self, goal: str = "", max_columns: int = 60) -> str:
+        """Describes the data without generating or running any code.
+
+        Schema, null structure and value distributions are facts about a frame.
+        Making the agent write and execute Python to discover them costs a code
+        round-trip plus an execution for something pandas can answer directly --
+        and it is the single most common thing an investigation needs first.
+        """
+        frame = self.df
+        if frame is None:
+            return "No dataset is loaded."
+
+        from src.core.rag.retriever import context_retriever, mentions_column
+
+        columns, truncated = context_retriever.select_columns(goal or "", frame, max_columns)
+        lowered = (goal or "").lower()
+        lines: list[str] = [
+            f"Active table `{self.active_dataset}`: {len(frame):,} rows x {len(frame.columns)} columns."
+        ]
+
+        if len(self.datasets) > 1:
+            others = ", ".join(f"`{name}` ({len(h.df):,} rows)" for name, h in self.datasets.items())
+            lines.append(f"All loaded tables (available as `tables[...]`): {others}")
+
+        if truncated:
+            lines.append(f"Describing {len(columns)} of {len(frame.columns)} columns, chosen for relevance.")
+
+        lines.append("\n| column | dtype | nulls | distinct | example |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for column in columns:
+            series = frame[column]
+            null_pct = (series.isna().mean() * 100) if len(frame) else 0.0
+            try:
+                distinct = int(series.nunique(dropna=True))
+            except (TypeError, ValueError):
+                distinct = -1
+            try:
+                example = str(series.dropna().iloc[0])[:40]
+            except (IndexError, KeyError):
+                example = ""
+            distinct_text = "n/a" if distinct < 0 else f"{distinct:,}"
+            lines.append(f"| {column} | {series.dtype} | {null_pct:.1f}% | {distinct_text} | {example} |")
+
+        # The goal steers what detail is worth spending characters on.
+        named = [c for c in columns if mentions_column(goal or "", c)]
+        if named:
+            lines.append("\nDistributions for the columns named in the request:")
+            for column in named[:5]:
+                lines.append(self._describe_column(frame, column))
+        elif "null" in lowered or "missing" in lowered or "quality" in lowered:
+            worst = frame[columns].isna().mean().sort_values(ascending=False).head(10)
+            lines.append("\nMissingness, worst first:")
+            lines.extend(f"- `{name}`: {rate:.1%} missing" for name, rate in worst.items() if rate > 0)
+        else:
+            lines.append("\nFirst rows:")
+            try:
+                lines.append(frame[columns].head(5).to_markdown(index=False))
+            except Exception:
+                lines.append(frame[columns].head(5).to_string())
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _describe_column(frame: pd.DataFrame, column: str) -> str:
+        series = frame[column]
+        if pd.api.types.is_numeric_dtype(series):
+            stats = series.describe()
+            return (
+                f"- `{column}`: min {stats.get('min'):,.4g}, median {series.median():,.4g}, "
+                f"mean {stats.get('mean'):,.4g}, max {stats.get('max'):,.4g}, std {stats.get('std'):,.4g}"
+            )
+        try:
+            counts = series.value_counts(dropna=True).head(8)
+        except (TypeError, ValueError):
+            return f"- `{column}`: values could not be counted."
+        rendered = ", ".join(f"{value!r} ({count:,})" for value, count in counts.items())
+        return f"- `{column}`: {series.nunique(dropna=True):,} distinct — {rendered}"
 
     # ------------------------------------------------------------------ #
     def append_message(self, role: str, content: str, meta: dict[str, Any] | None = None):
@@ -236,6 +377,7 @@ class Session:
             "has_data": self.has_data,
             "active_dataset": self.active_dataset,
             "datasets": [handle.summary() for handle in self.datasets.values()],
+            "documents": [document.summary() for document in self.documents.values()],
             "models": self.models.to_dict(),
             "sandboxed": sandbox_pool.available,
         }
@@ -246,6 +388,7 @@ class Session:
         db_mgr.delete_session_data(self.id)
         with self._lock:
             self.datasets.clear()
+            self.documents.clear()
             self.active_dataset = None
 
 

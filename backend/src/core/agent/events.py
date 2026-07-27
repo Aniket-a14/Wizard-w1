@@ -31,16 +31,39 @@ class EventType(StrEnum):
     ERROR = "error"
     FINAL = "final"
 
+    # ------------------------------------------------------------------ #
+    # Investigation frames.
+    #
+    # The run is a loop, not a pipeline, so "which step of five are we on" no
+    # longer describes it. These carry what the agent chose to do next and what
+    # it learned, which is the part a user actually needs in order to trust a
+    # multi-step answer. The frames above are all still emitted, so a client
+    # that ignores these degrades to the previous experience rather than
+    # breaking.
+    # ------------------------------------------------------------------ #
+    ITERATION_START = "iteration_start"  # {n, budget, mode}
+    ACTION = "action"  # {kind, goal, rationale}
+    OBSERVATION = "observation"  # {summary, ok, truncated, chars}
+    FINDING = "finding"  # {text}
+    PLAN_REVISED = "plan_revised"  # {plan, why}
+    ASSUMPTION = "assumption"  # {text, kind}
+    VERIFICATION = "verification"  # {status, detail}
+
 
 class Phase(StrEnum):
     IDLE = "idle"
     PLANNING = "planning"
     AWAITING_APPROVAL = "awaiting_approval"
     SEARCHING = "searching"
+    DECIDING = "deciding"
+    INSPECTING = "inspecting"
+    CONSULTING = "consulting"
     GENERATING = "generating"
     EXECUTING = "executing"
     CORRECTING = "correcting"
+    REFLECTING = "reflecting"
     REVIEWING = "reviewing"
+    VERIFYING = "verifying"
     ANSWERING = "answering"
     DONE = "done"
     FAILED = "failed"

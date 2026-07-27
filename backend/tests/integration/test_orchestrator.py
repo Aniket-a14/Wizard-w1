@@ -96,10 +96,22 @@ def test_visual_revision_detection() -> None:
     assert not AnalysisOrchestrator.is_visual_revision("make the colour red", "print(df.head())")
 
 
-def test_step_extraction_requires_at_least_two_steps() -> None:
-    plan = "1. Load the data properly\n2. Compute the averages\n3. Render the chart"
-    assert len(AnalysisOrchestrator._extract_steps(plan)) == 3
-    assert AnalysisOrchestrator._extract_steps("1. Just one step here") == []
+@pytest.mark.parametrize(
+    "raw,mode",
+    [
+        ("auto", "auto"),
+        ("fast", "fast"),
+        ("deep", "deep"),
+        ("planning", "planning"),  # legacy alias, still honoured
+        ("PLANNING", "planning"),
+        ("nonsense", "auto"),
+        ("", "auto"),
+        (None, "auto"),
+    ],
+)
+def test_mode_normalisation(raw: str | None, mode: str) -> None:
+    """An unknown mode must never reach the loop as a budget lookup miss."""
+    assert AnalysisOrchestrator.normalise_mode(raw) == mode
 
 
 @pytest.mark.parametrize(

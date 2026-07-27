@@ -81,8 +81,14 @@ class CodeExecutor:
         code: str,
         df: pd.DataFrame | None = None,
         on_stdout: Callable[[str], None] | None = None,
+        tables: dict[str, pd.DataFrame] | None = None,
     ) -> ExecutionResult:
-        """Runs ``code``, preferring the container and falling back to in-process."""
+        """Runs ``code``, preferring the container and falling back to in-process.
+
+        ``tables`` matters only on the local path: the container reads every
+        session table off its bind mount at startup, so passing them again would
+        pay a full serialisation per call for something already there.
+        """
         verdict, prepared = self.guard(code)
 
         if not verdict.ok:
@@ -120,7 +126,7 @@ class CodeExecutor:
             )
 
         logger.warning("Docker unavailable; running in degraded local mode", session=self.session_id)
-        return self._execute_locally(prepared, df, on_stdout)
+        return self._execute_locally(prepared, df, on_stdout, tables)
 
     # ------------------------------------------------------------------ #
     def _execute_locally(
@@ -128,6 +134,7 @@ class CodeExecutor:
         code: str,
         df: pd.DataFrame | None,
         on_stdout: Callable[[str], None] | None = None,
+        tables: dict[str, pd.DataFrame] | None = None,
     ) -> ExecutionResult:
         """In-process fallback used only when Docker is unreachable."""
         import matplotlib
@@ -150,6 +157,9 @@ class CodeExecutor:
             "plt": plt,
             "sns": sns,
             "stats": StatisticalToolkit,
+            # Always present, even when empty, so generated code can reference
+            # `tables` unconditionally rather than guarding every use.
+            "tables": {name: frame.copy() for name, frame in (tables or {}).items()},
             "__builtins__": safe_builtins,
         }
         if df is not None:

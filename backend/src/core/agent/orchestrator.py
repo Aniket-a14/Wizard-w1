@@ -1,28 +1,45 @@
-"""The analysis workflow.
+"""The analysis loop.
 
-This replaces ``LangGraphAgent`` plus the hand-copied node loop that lived in the
-WebSocket handler. There is now exactly one implementation of the sequence, and
-it streams: the manager's reasoning, the plan and the final answer are all
-emitted token-by-token as the model produces them.
+This is an observe -> decide -> act agent, not a pipeline. Each iteration the
+manager sees what has actually been run and what it produced, and chooses the
+next move; the loop ends when the agent says it can answer, or when its budget
+runs out.
 
-Flow
-----
-    cache lookup -> plan -> [approval gate] -> generate -> execute
-                                                  ^          |
-                                                  +-- correct-+   (bounded retries)
-                                                             |
-                                                       review -> answer
+    orient  ->  [approval gate]  ->  loop  ->  verify  ->  answer
+                                      |
+                       inspect / code+execute / consult / reflect
+                                      |
+                                 (correct on failure)
 
-Fixes carried in from the audit
--------------------------------
-* ``state.error`` is cleared on a successful execution. It previously persisted,
-  so the ``if code and not error`` condition in the review step was always False
-  after a self-heal -- meaning the semantic cache and the trajectory memory were
-  never written in exactly the situation they exist to capture.
+Why not the previous shape
+--------------------------
+It used to fix a plan before touching the data, then execute it step by step,
+feeding 200 characters of each step's output into the next. That cannot recover
+when the data contradicts the plan -- which is the ordinary case for a real
+question, where you learn the join key is dirty or the status column has four
+spellings only after you look. `DABstep <https://arxiv.org/abs/2506.23719>`_
+measures this directly: its hard tasks need six or more dependent steps, the
+best model scores 14.55% on them against 76.39% on single-step ones, and the
+largest error category is planning -- agents "missed necessary intermediate
+calculations" or "hallucinate incorrect analysis plans" precisely because the
+plan was committed before the evidence existed.
+
+Sizing
+------
+Every iteration costs a manager round-trip, so the budget comes from
+``settings.budget_for(mode, parameter_size)``. A 1.5B local model gets four
+iterations, no reflection and no verification pass; a frontier model gets
+twenty-four. Same code, three shapes.
+
+Fixes carried in from the earlier audit, still load-bearing
+-----------------------------------------------------------
+* ``error`` is cleared on a successful execution, so the semantic cache and the
+  trajectory memory are written after a self-heal -- the exact situation they
+  exist to capture.
 * Guard verdicts distinguish "malformed code" (retry) from "policy violation"
-  (stop), instead of terminating the run as ``completed`` in both cases.
+  (stop), rather than terminating the run as ``completed`` in both cases.
 * The Council and the vision model are awaited concurrently and are individually
-  optional, rather than serialising three extra LLM calls into every response.
+  optional, rather than serialising extra LLM calls into every response.
 """
 
 from __future__ import annotations
@@ -33,19 +50,29 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from src.config import settings
+from src.config import TierBudget, settings
+from src.core.agent.actions import ActionKind, Decision, Investigation, Step, parse_decision
 from src.core.agent.council import TheCouncil
 from src.core.agent.events import Emitter, EventType, Phase, emit
+from src.core.agent.grounding import (
+    GroundingReport,
+    assumptions_from_code,
+    assumptions_from_profile,
+    check_grounding,
+)
 from src.core.execution import ExecutionResult
 from src.core.feedback_store import FeedbackStore
-from src.core.llm import LLMRole, llm_provider
+from src.core.llm import LLMRole, llm_provider, model_registry
 from src.core.llm.provider import LLMUnavailableError
 from src.core.memory import working_memory
 from src.core.prompts import (
     create_answer_prompt,
+    create_decision_prompt,
     create_planning_prompt,
     create_prompt,
+    create_reflection_prompt,
     create_replan_prompt,
+    create_verification_prompt,
 )
 from src.core.rag.retriever import context_retriever
 from src.core.semantic_cache import semantic_cache
@@ -61,12 +88,20 @@ THOUGHT_PATTERN = re.compile(r"<thought>(.*?)</thought>", re.DOTALL)
 OPEN_THOUGHT = re.compile(r"<thought>", re.IGNORECASE)
 CLOSE_THOUGHT = re.compile(r"</thought>", re.IGNORECASE)
 SEARCH_PATTERN = re.compile(r'SEARCH:\s*"(.*?)"')
-STEP_PATTERN = re.compile(r"^\s*(?:\d+[.)]\s+|[-*]\s+)(.+)$", re.MULTILINE)
+
+#: Lines the verification step is asked to print, and what they mean.
+VERIFIED_MARKER = "VERIFIED:"
+MISMATCH_MARKER = "MISMATCH:"
 
 VISUAL_KEYWORDS = frozenset(
     {"color", "colour", "legend", "font", "axis", "label", "grid", "title", "theme", "style", "palette", "annotate"}
 )
 
+#: Requests whose answer is a single deterministic frame operation. Routing
+#: these without a planning round-trip is the one piece of the old keyword
+#: router worth keeping: it is free, it is never wrong for these phrasings, and
+#: it saves a full manager call on the most common question a user asks first.
+#: Everything else now goes to the loop, which decides its own depth.
 SIMPLE_PATTERNS = (
     "show first",
     "show top",
@@ -91,13 +126,18 @@ SIMPLE_PATTERNS = (
     "head of",
 )
 
+#: Modes accepted from the transport. ``planning`` is the legacy name for
+#: "investigate thoroughly but let me approve the plan first", kept so existing
+#: clients and stored sessions keep working.
+MODES = ("auto", "fast", "deep", "planning")
+
 
 @dataclass
 class RunState:
     """Everything one analysis turn needs to carry."""
 
     instruction: str
-    mode: str = "planning"
+    mode: str = "auto"
     phase: Phase = Phase.IDLE
 
     thought: str = ""
@@ -112,15 +152,17 @@ class RunState:
     retry_count: int = 0
     blocked: bool = False
 
-    steps: list[str] = field(default_factory=list)
-    step_outputs: list[str] = field(default_factory=list)
-    current_step: int = 0
+    investigation: Investigation = field(default_factory=Investigation)
+    iterations_used: int = 0
+    tier: str = "balanced"
 
     failed_code: str = ""
     failed_error: str = ""
     from_cache: bool = False
     warnings: list[str] = field(default_factory=list)
     pending_approval: dict[str, Any] | None = None
+    verification: str = ""
+    grounding: GroundingReport = field(default_factory=GroundingReport)
     started_at: float = field(default_factory=time.time)
 
     @property
@@ -141,6 +183,13 @@ class RunResult:
     pending_approval: dict[str, Any] | None = None
     downloads: list[str] = field(default_factory=list)
     elapsed_ms: int = 0
+    findings: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    iterations: int = 0
+    tier: str = "balanced"
+    mode: str = "auto"
+    verification: str = ""
+    grounding: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +204,13 @@ class RunResult:
             "approval": self.pending_approval,
             "downloads": self.downloads,
             "elapsed_ms": self.elapsed_ms,
+            "findings": self.findings,
+            "assumptions": self.assumptions,
+            "iterations": self.iterations,
+            "tier": self.tier,
+            "mode": self.mode,
+            "verification": self.verification,
+            "grounding": self.grounding,
         }
 
 
@@ -170,7 +226,7 @@ class AnalysisOrchestrator:
     # ------------------------------------------------------------------ #
     @staticmethod
     def is_simple(instruction: str) -> bool:
-        """Cheap keyword routing so trivial requests skip a planning round-trip."""
+        """Cheap keyword routing so trivial inspection skips a planning round-trip."""
         lowered = instruction.lower().strip()
         return any(pattern in lowered for pattern in SIMPLE_PATTERNS)
 
@@ -183,6 +239,30 @@ class AnalysisOrchestrator:
         lowered = instruction.lower()
         return any(keyword in lowered for keyword in VISUAL_KEYWORDS)
 
+    @staticmethod
+    def normalise_mode(mode: str | None) -> str:
+        candidate = (mode or "auto").strip().lower()
+        return candidate if candidate in MODES else "auto"
+
+    async def _budget_for(self, session: Session, mode: str) -> TierBudget:
+        """Sizes this turn to the model actually behind the manager role.
+
+        Discovery is a blocking HTTP call with its own cache, so it runs off the
+        event loop and never fails the turn -- an unreachable daemon simply
+        yields the mid tier.
+        """
+        parameter_size: str | None = None
+        try:
+            spec = llm_provider.resolve(
+                LLMRole.MANAGER,
+                model=session.models.manager,
+                provider=session.models.manager_provider,
+            )
+            parameter_size = await asyncio.to_thread(model_registry.parameter_size_of, spec.model, spec.provider)
+        except Exception as exc:
+            logger.debug("Could not size the agent budget from the model", error=str(exc))
+        return settings.budget_for(mode, parameter_size)
+
     # ------------------------------------------------------------------ #
     # Main entry point
     # ------------------------------------------------------------------ #
@@ -190,13 +270,14 @@ class AnalysisOrchestrator:
         self,
         session: Session,
         instruction: str,
-        mode: str = "planning",
+        mode: str = "auto",
         emitter: Emitter | None = None,
         approved_plan: str | None = None,
         approved_search: str | None = None,
         previous_code: str | None = None,
     ) -> RunResult:
         """Executes one turn. Returns when the run completes or pauses for approval."""
+        mode = self.normalise_mode(mode)
         state = RunState(instruction=instruction, mode=mode)
 
         if session.df is None:
@@ -204,29 +285,26 @@ class AnalysisOrchestrator:
             return self._result(state, "failed")
 
         try:
+            budget = await self._budget_for(session, mode)
+            state.tier = budget.tier
+
             if approved_search is not None:
                 await self._run_search(state, session, approved_search, emitter)
             elif approved_plan is not None:
                 # The user confirmed a plan produced by an earlier turn.
                 state.plan = approved_plan
-                state.steps = self._extract_steps(approved_plan)
             else:
-                should_continue = await self._plan(state, session, emitter, previous_code)
+                should_continue = await self._orient(state, session, emitter, previous_code, budget)
                 if not should_continue:
                     return self._result(state, "awaiting_approval")
 
-            await self._execute_loop(state, session, emitter, previous_code)
+            await self._investigate(state, session, emitter, previous_code, budget)
 
             if state.blocked:
                 await self._finalize(state, session, emitter)
                 return self._result(state, "completed")
 
-            if state.error and state.retry_count > settings.MAX_CORRECTION_RETRIES:
-                state.phase = Phase.FAILED
-                await self._answer(state, session, emitter)
-                await self._finalize(state, session, emitter)
-                return self._result(state, "completed")
-
+            await self._verify(state, session, emitter, budget)
             await self._review(state, session, emitter)
             await self._answer(state, session, emitter)
             await self._finalize(state, session, emitter)
@@ -235,12 +313,14 @@ class AnalysisOrchestrator:
         except LLMUnavailableError as exc:
             message = (
                 f"Could not reach the language model: {exc}. "
-                "Check that Ollama is running and the selected model is installed."
+                "Check that the provider is running and that a model is installed."
             )
             logger.error("Run aborted, LLM unavailable", error=str(exc))
             await emit(emitter, EventType.ERROR, content=message)
             state.answer = message
             return self._result(state, "failed")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("Run failed unexpectedly", error=str(exc))
             await emit(emitter, EventType.ERROR, content=f"Unexpected failure: {exc}")
@@ -248,19 +328,26 @@ class AnalysisOrchestrator:
             return self._result(state, "failed")
 
     # ------------------------------------------------------------------ #
-    # Planning
+    # Orientation: the opening plan
     # ------------------------------------------------------------------ #
-    async def _plan(
+    async def _orient(
         self,
         state: RunState,
         session: Session,
         emitter: Emitter | None,
         previous_code: str | None,
+        budget: TierBudget,
     ) -> bool:
-        """Produces a plan. Returns False when the run pauses for user approval."""
+        """Produces the opening plan. Returns False when the run pauses for approval.
+
+        The plan is a starting hypothesis, not a contract -- the loop revises it
+        as evidence arrives. It is still worth producing: it orients the first
+        few actions and it is what the user reads to decide whether the agent
+        understood the question.
+        """
         columns = [str(c) for c in session.df.columns]
 
-        # 1. Exact/semantic cache: skip planning and code generation entirely.
+        # 1. Exact/semantic cache: a verified solution for this exact question.
         cached = semantic_cache.lookup(state.instruction, columns)
         if cached:
             state.code = cached
@@ -269,7 +356,7 @@ class AnalysisOrchestrator:
             await emit(emitter, EventType.STATUS, content="Reusing a verified solution", phase=Phase.GENERATING.value)
             return True
 
-        # 2. Keyword fast path for trivial inspection requests.
+        # 2. Deterministic fast path for trivial inspection.
         if self.is_simple(state.instruction):
             state.plan = f"Directly answer the inspection request: {state.instruction}"
             await emit(
@@ -285,7 +372,7 @@ class AnalysisOrchestrator:
             state.instruction,
             session.df,
             catalog=session.catalog,
-            mode=state.mode,
+            mode="fast" if state.mode == "fast" else "standard",
             memory_context=working_memory.get_context_string(state.instruction, session_id=session.id),
             previous_code=previous_code if self.is_visual_revision(state.instruction, previous_code) else None,
             session_id=session.id,
@@ -303,7 +390,8 @@ class AnalysisOrchestrator:
 
         await emit(emitter, EventType.STEP_END, id="plan", ok=True, duration_ms=state.elapsed_ms)
 
-        # A plan may request a web search; that requires explicit consent.
+        # A plan may request a web search; that leaves the machine, so it always
+        # requires explicit consent regardless of the approval setting.
         search_match = SEARCH_PATTERN.search(state.plan)
         if search_match:
             query = search_match.group(1)
@@ -317,9 +405,9 @@ class AnalysisOrchestrator:
             await emit(emitter, EventType.APPROVAL_REQUIRED, **state.pending_approval)
             return False
 
-        state.steps = self._extract_steps(state.plan)
-
-        if state.mode == "planning":
+        # Plan approval is opt-in. `planning` mode is the legacy way of asking
+        # for it per-request; AGENT_REQUIRE_APPROVAL is the deployment-wide way.
+        if state.mode == "planning" or settings.AGENT_REQUIRE_APPROVAL:
             state.pending_approval = {
                 "tool": "execute_plan",
                 "plan": state.plan,
@@ -398,13 +486,6 @@ class AnalysisOrchestrator:
             await emit(emitter, EventType.PLAN_DELTA, content=pending)
         return "".join(buffer)
 
-    @staticmethod
-    def _extract_steps(plan: str) -> list[str]:
-        """Splits a numbered plan into individually executable steps."""
-        steps = [match.strip() for match in STEP_PATTERN.findall(plan)]
-        steps = [step for step in steps if len(step) > 8]
-        return steps if len(steps) >= 2 else []
-
     # ------------------------------------------------------------------ #
     # Web search
     # ------------------------------------------------------------------ #
@@ -425,78 +506,367 @@ class AnalysisOrchestrator:
 
         prompt = create_replan_prompt(state.instruction, results, state.thought)
         state.plan = await self._stream_plan(prompt, session, emitter)
-        state.steps = self._extract_steps(state.plan)
 
     # ------------------------------------------------------------------ #
-    # Generation + execution
+    # The loop
     # ------------------------------------------------------------------ #
-    async def _execute_loop(
+    async def _investigate(
         self,
         state: RunState,
         session: Session,
         emitter: Emitter | None,
         previous_code: str | None,
+        budget: TierBudget,
     ):
-        """Generates and runs code, retrying on recoverable failures.
+        """Runs the observe -> decide -> act loop until the agent answers."""
+        allowed = self._allowed_actions(session, budget)
 
-        Handles both the single-shot case and the multi-step case where a plan is
-        executed one numbered step at a time with prior outputs fed forward.
+        for iteration in range(1, budget.iterations + 1):
+            state.iterations_used = iteration
+            remaining = budget.iterations - iteration
+
+            await emit(
+                emitter,
+                EventType.ITERATION_START,
+                n=iteration,
+                budget=budget.iterations,
+                mode=state.mode,
+            )
+
+            decision = await self._decide(state, session, emitter, iteration, remaining, allowed, budget)
+
+            await emit(
+                emitter,
+                EventType.ACTION,
+                kind=decision.kind.value,
+                goal=decision.goal,
+                rationale=decision.rationale,
+                inferred=decision.inferred,
+            )
+
+            if decision.kind is ActionKind.ANSWER:
+                break
+
+            if decision.kind is ActionKind.INSPECT:
+                await self._act_inspect(state, session, emitter, decision, budget)
+            elif decision.kind is ActionKind.CONSULT:
+                await self._act_consult(state, session, emitter, decision, budget)
+            elif decision.kind is ActionKind.REFLECT:
+                await self._act_reflect(state, session, emitter, decision, budget)
+            else:
+                await self._act_code(state, session, emitter, decision, previous_code, budget)
+                if state.blocked:
+                    return
+
+        # Whatever the loop produced is what the answer is built from.
+        state.output = state.investigation.executed_output or state.output
+        state.code = state.investigation.last_successful_code or state.code
+
+    def _allowed_actions(self, session: Session, budget: TierBudget) -> tuple[ActionKind, ...]:
+        """The menu offered this turn.
+
+        Options are removed when they cannot succeed: a session with no attached
+        documents has nothing to consult, and a compact-tier model reliably
+        wastes a reflection iteration restating the question.
         """
-        total_steps = max(1, len(state.steps))
+        allowed = [ActionKind.INSPECT, ActionKind.CODE, ActionKind.ANSWER]
+        if budget.allow_reflection:
+            allowed.insert(2, ActionKind.REFLECT)
+        if settings.CONTEXT_DOCS_ENABLED and session.has_documents:
+            allowed.insert(2, ActionKind.CONSULT)
+        return tuple(allowed)
 
-        while state.current_step < total_steps:
-            state.retry_count = 0
-            state.error = None
-            if not state.from_cache:
-                state.code = ""
+    async def _decide(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        iteration: int,
+        remaining: int,
+        allowed: tuple[ActionKind, ...],
+        budget: TierBudget,
+    ) -> Decision:
+        """Chooses the next action.
 
-            while True:
-                await self._generate(state, session, emitter, previous_code)
-                if state.error and not state.code:
-                    return
+        The first iteration is not put to the model: there is nothing to observe
+        yet, so asking costs a round-trip to be told what is already known --
+        write the code. In ``fast`` mode that is the only iteration, which makes
+        a fast run exactly as cheap as the old single-shot pipeline.
+        """
+        if iteration == 1:
+            return Decision(kind=ActionKind.CODE, goal=state.instruction)
 
-                result = await self._execute(state, session, emitter)
+        # A cached solution is executed, not re-decided.
+        if state.from_cache and not state.error:
+            return Decision(kind=ActionKind.ANSWER, goal="Report the cached result.")
 
-                if result.blocked:
-                    state.blocked = True
-                    state.output = result.output
-                    state.answer = result.output
-                    return
+        state.phase = Phase.DECIDING
+        await emit(emitter, EventType.STATUS, content="Deciding what to do next", phase=Phase.DECIDING.value)
 
-                if result.ok:
-                    # Clearing the error here is what makes caching and trajectory
-                    # learning fire after a successful self-heal.
-                    state.error = None
-                    state.output = result.output
-                    state.image = result.image or state.image
-                    state.warnings.extend(result.warnings)
-                    break
+        prompt = create_decision_prompt(
+            instruction=state.instruction,
+            plan=state.plan,
+            transcript=state.investigation.render(budget.observation_chars),
+            iteration=iteration,
+            remaining=remaining,
+            allowed=[kind.value for kind in allowed],
+            findings=state.investigation.findings,
+        )
 
-                state.failed_code = state.code
-                state.failed_error = result.output
-                state.error = result.output
-                state.retry_count += 1
-                state.from_cache = False
+        try:
+            raw = await llm_provider.acomplete(
+                prompt,
+                role=LLMRole.MANAGER,
+                model=session.models.manager,
+                temperature=session.models.temperature,
+                provider=session.models.manager_provider,
+            )
+        except LLMUnavailableError:
+            # Losing the manager mid-run should not lose the work already done.
+            logger.warning("Manager unavailable mid-loop; answering with what is known")
+            return Decision(kind=ActionKind.ANSWER, goal="Report what has been established.", inferred=True)
 
-                if state.retry_count > settings.MAX_CORRECTION_RETRIES:
-                    state.output = result.output
-                    logger.warning("Exhausted correction retries", attempts=state.retry_count)
-                    return
+        # On the last iteration the only useful choice is to answer, so it is
+        # made here rather than trusted to a model watching its own budget.
+        default = ActionKind.ANSWER if remaining <= 0 else ActionKind.CODE
+        decision = parse_decision(raw, allowed=allowed, default=default)
+        if remaining <= 0:
+            decision.kind = ActionKind.ANSWER
+        return decision
 
-                state.phase = Phase.CORRECTING
+    # ------------------------------------------------------------------ #
+    # Actions
+    # ------------------------------------------------------------------ #
+    async def _act_inspect(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        decision: Decision,
+        budget: TierBudget,
+    ):
+        """Answers a question about the data's shape without an LLM call.
+
+        Schema, dtypes, null structure and value distributions are facts about a
+        frame, not something a model needs to write code to discover. Serving
+        them directly makes ``inspect`` free, which is what makes it worth
+        offering as an action at all.
+        """
+        state.phase = Phase.INSPECTING
+        await emit(emitter, EventType.STATUS, content="Examining the data", phase=Phase.INSPECTING.value)
+
+        summary = await asyncio.to_thread(session.inspect, decision.goal, budget.max_columns)
+
+        state.investigation.record(
+            Step(
+                index=state.iterations_used,
+                kind=ActionKind.INSPECT,
+                goal=decision.goal,
+                observation=summary,
+                ok=True,
+            )
+        )
+        await emit(
+            emitter,
+            EventType.OBSERVATION,
+            summary=summary[: budget.observation_chars],
+            ok=True,
+            truncated=len(summary) > budget.observation_chars,
+            chars=len(summary),
+        )
+
+    async def _act_consult(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        decision: Decision,
+        budget: TierBudget,
+    ):
+        """Retrieves from the session's attached reference documents."""
+        state.phase = Phase.CONSULTING
+        await emit(emitter, EventType.STATUS, content="Consulting reference documents", phase=Phase.CONSULTING.value)
+
+        query = decision.goal or state.instruction
+        passages = await asyncio.to_thread(session.search_documents, query, budget.doc_chunks)
+
+        if passages:
+            body = "\n\n".join(f"From `{name}`:\n{text}" for name, text in passages)
+            for _, text in passages:
+                state.investigation.note_finding(text.strip().splitlines()[0][:200])
+        else:
+            body = "No relevant passage was found in the attached documents."
+
+        state.investigation.record(
+            Step(
+                index=state.iterations_used,
+                kind=ActionKind.CONSULT,
+                goal=query,
+                observation=body,
+                ok=bool(passages),
+            )
+        )
+        await emit(
+            emitter,
+            EventType.OBSERVATION,
+            summary=body[: budget.observation_chars],
+            ok=bool(passages),
+            truncated=len(body) > budget.observation_chars,
+            chars=len(body),
+        )
+
+    async def _act_reflect(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        decision: Decision,
+        budget: TierBudget,
+    ):
+        """Rewrites the plan from what execution actually showed."""
+        state.phase = Phase.REFLECTING
+        await emit(emitter, EventType.STATUS, content="Revising the plan", phase=Phase.REFLECTING.value)
+
+        prompt = create_reflection_prompt(
+            state.instruction,
+            state.plan,
+            state.investigation.render(budget.observation_chars),
+        )
+        try:
+            revised = await llm_provider.acomplete(
+                prompt,
+                role=LLMRole.MANAGER,
+                model=session.models.manager,
+                temperature=session.models.temperature,
+                provider=session.models.manager_provider,
+            )
+        except LLMUnavailableError:
+            return
+
+        revised = revised.strip()
+        if not revised:
+            return
+
+        previous, state.plan = state.plan, revised
+        lead = revised.splitlines()[0].strip() if revised.splitlines() else ""
+        if lead:
+            state.investigation.note_finding(lead)
+
+        state.investigation.record(
+            Step(
+                index=state.iterations_used,
+                kind=ActionKind.REFLECT,
+                goal=decision.goal or "Revise the plan",
+                observation=revised,
+                ok=True,
+            )
+        )
+        await emit(emitter, EventType.PLAN_REVISED, plan=revised, why=lead, previous=previous)
+
+    async def _act_code(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        decision: Decision,
+        previous_code: str | None,
+        budget: TierBudget,
+    ):
+        """Writes and runs Python for one subgoal, correcting on failure."""
+        goal = decision.goal or state.instruction
+        state.error = None
+        state.retry_count = 0
+
+        while True:
+            await self._generate(state, session, emitter, previous_code, goal, budget)
+            if state.error and not state.code:
+                state.investigation.record(
+                    Step(
+                        index=state.iterations_used,
+                        kind=ActionKind.CODE,
+                        goal=goal,
+                        observation=state.error,
+                        ok=False,
+                    )
+                )
+                return
+
+            result = await self._execute(state, session, emitter)
+
+            if result.blocked:
+                state.blocked = True
+                state.output = result.output
+                state.answer = result.output
+                return
+
+            if result.ok:
+                # Clearing the error here is what makes caching and trajectory
+                # learning fire after a successful self-heal.
+                state.error = None
+                state.output = result.output
+                state.image = result.image or state.image
+                state.warnings.extend(result.warnings)
+                for note in assumptions_from_code(state.code):
+                    state.investigation.note_assumption(note)
+                    await emit(emitter, EventType.ASSUMPTION, text=note, kind="code")
+
+                state.investigation.record(
+                    Step(
+                        index=state.iterations_used,
+                        kind=ActionKind.CODE,
+                        goal=goal,
+                        observation=result.output,
+                        ok=True,
+                        code=state.code,
+                    )
+                )
                 await emit(
                     emitter,
-                    EventType.STATUS,
-                    content=f"Fixing an execution error (attempt {state.retry_count} of {settings.MAX_CORRECTION_RETRIES})",
-                    phase=Phase.CORRECTING.value,
+                    EventType.OBSERVATION,
+                    summary=result.output[: budget.observation_chars],
+                    ok=True,
+                    truncated=len(result.output) > budget.observation_chars,
+                    chars=len(result.output),
                 )
+                return
 
-            state.step_outputs.append(state.output)
-            state.current_step += 1
+            state.failed_code = state.code
+            state.failed_error = result.output
+            state.error = result.output
+            state.retry_count += 1
+            state.from_cache = False
 
-        if len(state.step_outputs) > 1:
-            state.output = "\n\n".join(
-                f"Step {index}: {text}" for index, text in enumerate(state.step_outputs, start=1)
+            if state.retry_count > settings.MAX_CORRECTION_RETRIES:
+                state.output = result.output
+                logger.warning("Exhausted correction retries", attempts=state.retry_count)
+                state.investigation.record(
+                    Step(
+                        index=state.iterations_used,
+                        kind=ActionKind.CODE,
+                        goal=goal,
+                        observation=result.output,
+                        ok=False,
+                        code=state.code,
+                    )
+                )
+                await emit(
+                    emitter,
+                    EventType.OBSERVATION,
+                    summary=result.output[: budget.observation_chars],
+                    ok=False,
+                    truncated=False,
+                    chars=len(result.output),
+                )
+                # The loop continues: a failed sub-task is information, and the
+                # agent can route around it on the next iteration.
+                return
+
+            state.phase = Phase.CORRECTING
+            await emit(
+                emitter,
+                EventType.STATUS,
+                content=f"Fixing an execution error (attempt {state.retry_count} of {settings.MAX_CORRECTION_RETRIES})",
+                phase=Phase.CORRECTING.value,
             )
 
     async def _generate(
@@ -505,27 +875,29 @@ class AnalysisOrchestrator:
         session: Session,
         emitter: Emitter | None,
         previous_code: str | None,
+        goal: str,
+        budget: TierBudget,
     ):
         if state.from_cache and state.code and not state.error:
             await emit(emitter, EventType.CODE, content=state.code, language="python", cached=True)
             return
 
         state.phase = Phase.GENERATING
-        step_id = f"code-{state.current_step}-{state.retry_count}"
+        step_id = f"code-{state.iterations_used}-{state.retry_count}"
         await emit(emitter, EventType.STEP_START, id=step_id, label="Writing Python", kind="code")
         await emit(emitter, EventType.STATUS, content="Writing Python", phase=Phase.GENERATING.value)
 
-        instruction = state.instruction
-        if state.steps:
-            step_text = state.steps[state.current_step]
-            prior = "\n".join(
-                f"# Step {index} output: {text[:200]}" for index, text in enumerate(state.step_outputs, start=1)
-            )
+        instruction = goal
+        if state.investigation.steps:
+            # Prior results are carried in full rather than as a 200-character
+            # comment, which is what previously made later steps guess at values
+            # earlier steps had already computed.
             instruction = (
-                f"Overall request: {state.instruction}\n\n"
-                f"You are implementing step {state.current_step + 1} of {len(state.steps)}:\n{step_text}\n\n"
-                f"{prior}\n\n"
-                "Write code for THIS step only. Variables from previous steps are still in scope."
+                f"Overall question: {state.instruction}\n\n"
+                f"Work already done:\n{state.investigation.render(budget.observation_chars)}\n\n"
+                f"Your task now: {goal}\n\n"
+                "Variables defined by earlier successful steps are still in scope. "
+                "Write code for THIS task only."
             )
 
         columns = [str(c) for c in session.df.columns]
@@ -571,7 +943,7 @@ class AnalysisOrchestrator:
 
     async def _execute(self, state: RunState, session: Session, emitter: Emitter | None) -> ExecutionResult:
         state.phase = Phase.EXECUTING
-        step_id = f"run-{state.current_step}-{state.retry_count}"
+        step_id = f"run-{state.iterations_used}-{state.retry_count}"
         await emit(emitter, EventType.STEP_START, id=step_id, label="Running code", kind="execute")
         await emit(emitter, EventType.STATUS, content="Running code in the sandbox", phase=Phase.EXECUTING.value)
 
@@ -595,7 +967,9 @@ class AnalysisOrchestrator:
 
         drainer = asyncio.ensure_future(drain())
         try:
-            result = await asyncio.to_thread(session.executor.execute, state.code, session.df, on_stdout)
+            result = await asyncio.to_thread(
+                session.executor.execute, state.code, session.df, on_stdout, session.tables
+            )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, "")
             await drainer
@@ -613,6 +987,63 @@ class AnalysisOrchestrator:
 
         await emit(emitter, EventType.STEP_END, id=step_id, ok=result.ok, duration_ms=state.elapsed_ms)
         return result
+
+    # ------------------------------------------------------------------ #
+    # Verification
+    # ------------------------------------------------------------------ #
+    async def _verify(self, state: RunState, session: Session, emitter: Emitter | None, budget: TierBudget):
+        """Re-derives the headline result by a different route.
+
+        A wrong join grain, a filter in the wrong order or a mean over the wrong
+        denominator all produce confident, plausible, wrong numbers that no
+        self-review catches -- because the model reviewing is the model that made
+        the mistake. An independent recomputation does catch them.
+        """
+        if not settings.AGENT_VERIFY or not budget.allow_verification:
+            return
+        if state.blocked or state.error or not state.code or state.from_cache:
+            return
+
+        state.phase = Phase.VERIFYING
+        await emit(emitter, EventType.STEP_START, id="verify", label="Verifying the result", kind="verify")
+        await emit(emitter, EventType.STATUS, content="Verifying the result", phase=Phase.VERIFYING.value)
+
+        try:
+            raw = await llm_provider.acomplete(
+                create_verification_prompt(state.instruction, state.code, state.output),
+                role=LLMRole.WORKER,
+                model=session.models.worker,
+                temperature=session.models.temperature,
+                provider=session.models.worker_provider,
+            )
+        except LLMUnavailableError:
+            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+            return
+
+        code = self._extract_code(raw)
+        if not code:
+            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+            return
+
+        result = await asyncio.to_thread(session.executor.execute, code, session.df, None, session.tables)
+        output = (result.output or "").strip()
+
+        if not result.ok:
+            # A verification that cannot run says nothing about the analysis.
+            status, detail = "inconclusive", "The verification step could not be executed."
+        elif MISMATCH_MARKER in output:
+            status, detail = "mismatch", output
+            state.warnings.append(
+                "Independent verification disagreed with the analysis. The result below is not trustworthy."
+            )
+        elif VERIFIED_MARKER in output:
+            status, detail = "verified", output
+        else:
+            status, detail = "inconclusive", output
+
+        state.verification = detail
+        await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
+        await emit(emitter, EventType.STEP_END, id="verify", ok=status != "mismatch", duration_ms=state.elapsed_ms)
 
     # ------------------------------------------------------------------ #
     # Review
@@ -672,13 +1103,27 @@ class AnalysisOrchestrator:
 
         Previously the raw stdout was returned and the *frontend* stripped
         tracebacks, numeric rows and code blocks out of it with regexes -- which
-        also deleted legitimate results. Synthesis belongs here, with the output
-        available.
+        also deleted legitimate results. Synthesis belongs here, with the whole
+        investigation available.
         """
         state.phase = Phase.ANSWERING
         await emit(emitter, EventType.STATUS, content="Writing the answer", phase=Phase.ANSWERING.value)
 
-        prompt = create_answer_prompt(state.instruction, state.code, state.output, state.plan)
+        handle = session.active_handle
+        if handle is not None:
+            for note in assumptions_from_profile(handle.profile):
+                state.investigation.note_assumption(note)
+                await emit(emitter, EventType.ASSUMPTION, text=note, kind="dataset")
+
+        prompt = create_answer_prompt(
+            state.instruction,
+            state.code,
+            state.output,
+            state.plan,
+            findings=state.investigation.findings,
+            assumptions=state.investigation.assumptions,
+            verification=state.verification,
+        )
 
         chunks: list[str] = []
 
@@ -703,6 +1148,33 @@ class AnalysisOrchestrator:
 
         if not state.answer:
             state.answer = state.output or "The analysis completed but produced no output."
+
+        await self._check_grounding(state, emitter)
+
+    async def _check_grounding(self, state: RunState, emitter: Emitter | None):
+        """Flags figures in the answer that were never actually computed.
+
+        This reports; it does not edit. Rewriting model output after the fact is
+        the mistake this codebase already made once, when the frontend stripped
+        numeric rows out of responses and removed real results with them.
+        """
+        if not settings.AGENT_GROUNDING_CHECK or state.blocked:
+            return
+
+        state.grounding = check_grounding(
+            state.answer,
+            state.investigation.executed_output or state.output,
+            state.instruction,
+        )
+        warning = state.grounding.warning()
+        if warning:
+            state.warnings.append(warning)
+            await emit(emitter, EventType.WARNING, content=warning)
+            logger.info(
+                "Answer contained ungrounded figures",
+                checked=state.grounding.checked,
+                ungrounded=len(state.grounding.ungrounded),
+            )
 
     # ------------------------------------------------------------------ #
     async def _finalize(self, state: RunState, session: Session, emitter: Emitter | None):
@@ -729,6 +1201,14 @@ class AnalysisOrchestrator:
                 except Exception as exc:
                     logger.error("Could not record trajectory", error=str(exc))
 
+        script = self._write_script(state, session)
+        if script:
+            state.artifacts.append({"kind": "script", "name": script})
+            await emit(emitter, EventType.ARTIFACT, kind="script", name=script)
+
+        for note in state.investigation.assumptions:
+            await emit(emitter, EventType.ASSUMPTION, text=note, kind="summary")
+
         quality = Evaluator.score_execution(state.output, instruction=state.instruction)
         working_memory.add_interaction(
             instruction=state.instruction,
@@ -751,7 +1231,59 @@ class AnalysisOrchestrator:
             warnings=state.warnings,
             downloads=downloads,
             elapsed_ms=state.elapsed_ms,
+            findings=state.investigation.findings,
+            assumptions=state.investigation.assumptions,
+            iterations=state.iterations_used,
+            tier=state.tier,
+            grounding=state.grounding.to_dict(),
+            verification=state.verification,
         )
+
+    @staticmethod
+    def _write_script(state: RunState, session: Session) -> str:
+        """Writes the analysis out as a runnable standalone script.
+
+        An answer is a one-off; a script is an asset that can be re-run next
+        month against fresh data, which is what turns ad-hoc analysis into
+        something reusable rather than a question someone has to ask again.
+        """
+        if not settings.AGENT_EMIT_SCRIPT or state.blocked or not state.code:
+            return ""
+
+        blocks = [step for step in state.investigation.steps if step.kind is ActionKind.CODE and step.ok and step.code]
+        if not blocks:
+            return ""
+
+        header = [
+            '"""Analysis generated by Wizard.',
+            "",
+            f"Question: {state.instruction}",
+            "",
+            "Run against the same dataset to reproduce the result. `df` is loaded",
+            "from the exported CSV; point it at fresh data to re-run the analysis.",
+            '"""',
+            "",
+            "import matplotlib.pyplot as plt",
+            "import numpy as np",
+            "import pandas as pd",
+            "import seaborn as sns",
+            "",
+            'df = pd.read_csv("dataset.csv")',
+            "",
+        ]
+        body: list[str] = []
+        for index, step in enumerate(blocks, start=1):
+            body.append(f"# --- Step {index}: {step.goal or 'analysis'} " + "-" * 20)
+            body.append(step.code)
+            body.append("")
+
+        name = "analysis.py"
+        try:
+            (session.workspace / name).write_text("\n".join(header + body), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not write the analysis script", error=str(exc))
+            return ""
+        return name
 
     @staticmethod
     def _collect_downloads(state: RunState, session: Session) -> list[str]:
@@ -779,6 +1311,13 @@ class AnalysisOrchestrator:
             warnings=state.warnings,
             pending_approval=state.pending_approval,
             elapsed_ms=state.elapsed_ms,
+            findings=state.investigation.findings,
+            assumptions=state.investigation.assumptions,
+            iterations=state.iterations_used,
+            tier=state.tier,
+            mode=state.mode,
+            verification=state.verification,
+            grounding=state.grounding.to_dict(),
         )
 
 
