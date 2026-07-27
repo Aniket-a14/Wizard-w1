@@ -10,3 +10,21 @@ redis>=5.0.0
 # Talk to an OpenAI-compatible gateway instead of a local Ollama daemon
 # (API_PROVIDER=openai or custom_gateway).
 langchain-openai>=0.1.0
+
+# ---------------------------------------------------------------------------
+# Local embeddings
+# ---------------------------------------------------------------------------
+# Only needed if you want embeddings computed in-process rather than by the
+# model server you are already running. Wizard prefers the provider's own
+# endpoint (Ollama `POST /api/embed`, or `/v1/embeddings` on anything
+# OpenAI-compatible) and falls back to a hashing encoder, so this is a
+# preference, not a requirement.
+#
+# INSTALL THE CPU BUILD. On linux/x86_64 the PyPI torch wheel hard-depends on
+# eleven nvidia-*-cu12 packages -- about 2.8 GB of compressed wheels, whether or
+# not the machine has a GPU. The CPU index is roughly a tenth of that:
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install sentence-transformers
+#
+# sentence-transformers==3.0.1

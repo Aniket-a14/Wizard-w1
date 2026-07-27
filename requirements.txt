@@ -1,4 +1,20 @@
 -i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
+#
+# What the API server itself needs. Nothing here exists to serve *generated*
+# code -- that runs in a sandbox container or a local runtime, and its libraries
+# are declared in `requirements-local.txt` and `backend/docker/Dockerfile`.
+#
+# Deliberately absent:
+#   sentence-transformers  pulls torch, which on linux/x86_64 hard-depends on
+#                          eleven nvidia-*-cu12 wheels -- ~2.8 GB of compressed
+#                          wheels, installed with or without a GPU, to run a
+#                          90 MB embedder. Embeddings now come from the model
+#                          server the app already talks to. See
+#                          `requirements-optional.txt` to put it back.
+#   scikit-learn,          used only by generated analysis code, never by the
+#   statsmodels, plotly,   API. Installing them here made the server image carry
+#   seaborn                a second copy of the sandbox's toolkit.
+
 # Web layer
 fastapi==0.111.0
 uvicorn==0.30.1
@@ -7,16 +23,17 @@ pydantic==2.8.2
 pydantic-settings==2.3.4
 structlog==24.2.0
 
-# Data stack
+# HTTP client. Used in production for provider embeddings and by the test client.
+httpx==0.27.0
+
+# Data stack. Ingestion, profiling and Feather transport into the runtime --
+# plus matplotlib and tabulate, which the in-process interpreter and
+# `Session.inspect` respectively require.
 pandas==2.2.2
 numpy==1.26.4
-matplotlib==3.9.1
-seaborn==0.13.2
-scikit-learn==1.5.1
-statsmodels==0.14.2
-scipy==1.14.0
-plotly==5.23.0
 pyarrow==23.0.1
+scipy==1.14.0
+matplotlib==3.9.1
 tabulate==0.9.0
 # Required to ingest .xlsx/.xls uploads.
 openpyxl==3.1.5
@@ -24,7 +41,6 @@ openpyxl==3.1.5
 # Model access
 langchain>=0.2.0,<0.3.0
 langchain-ollama==0.1.1
-sentence-transformers==3.0.1
 
 # Execution sandbox
 docker==7.1.0
@@ -35,4 +51,3 @@ duckduckgo-search>=6.1.7
 # Test tooling
 pytest>=8.0.0,<9.0.0
 pytest-asyncio==0.23.8
-httpx==0.27.0
