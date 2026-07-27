@@ -258,7 +258,15 @@ TOOLKIT: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Machine learning", "scikit-learn, xgboost, lightgbm", ("sklearn",)),
     ("Survival & duration", "lifelines (Kaplan-Meier, Cox proportional hazards)", ("lifelines",)),
     ("Graphs & networks", "networkx (centrality, communities, shortest paths)", ("networkx",)),
-    ("Geospatial", "geopandas, shapely", ("geopandas",)),
+    # Split out of the main install in the Dockerfile because it carries GDAL,
+    # so the image is usable even when that layer fails. The prompt has to say
+    # so: with runtime pip on it installs on first use, and with the sandbox
+    # network disabled it is simply absent.
+    (
+        "Geospatial",
+        "geopandas, shapely — may install on first import, so avoid it unless the question is spatial",
+        ("geopandas",),
+    ),
     ("Charts", "plotly (`px`, `go`), matplotlib (`plt`), seaborn (`sns`)", ("matplotlib",)),
     (
         "File output",
