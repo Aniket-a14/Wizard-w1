@@ -121,6 +121,8 @@ Both real backends run the **same daemon** over the same protocol — see [tools
 
 `ExecutionResult.sandboxed` means **container specifically**; `ExecutionResult.backend` names which of the three actually ran it.
 
+**Any path handed to generated code must come from `runtime.workspace_path(session_id, name)`.** A literal `/workspace` is only real inside a container; on the local backend it names a directory that does not exist, pandas raises `OSError`, and the caller reports a generic failure. That silently disabled semantic cleaning on upload and CSV export of a variable on *every* Docker-less install. It was invisible to the suite because the in-process backend CI uses happens to tolerate the same path, and it was found only by running the app — which is the argument for running it. `plot_output_path` and `prompts._workspace_root` are the same helper wearing different names; keep them delegating rather than re-deriving.
+
 ### Security — [code_guard.py](backend/src/core/security/code_guard.py)
 
 One AST-based analyzer, not regex. It distinguishes:
@@ -208,6 +210,20 @@ Tables: `semantic_cache`, `trajectories` (failure→fix pairs), `feedbacks`, `wo
 
 Empty results are cached too, for a shorter TTL — a refused connect costs seconds, and one page load asks for both the list and a suggestion. `available_providers()` must stay network-free; it renders on every page load.
 
+### Installing models — [llm/downloader.py](backend/src/core/llm/downloader.py)
+
+Getting a model was the one setup step that sent you out of a local-first tool and into a terminal or the LM Studio window — and it is the step a first-time user hits first, with an empty picker and nothing to select. `POST /api/models/download` fixes that; the providers disagree about how, so the disagreement lives in this one module.
+
+- **Ollama** has a real API: `POST /api/pull` streams NDJSON with byte counts, `DELETE /api/delete` removes. Nothing else needed.
+- **LM Studio** has no download API — `/api/v0` is read-only. The only scriptable route is the `lms` CLI that ships with the app, so it is spawned. It reports a percentage rather than bytes and **has no delete verb at all**; both are reported as limits rather than faked, which is what `capability()` is for.
+- **Gateways** host their models. Asking says so instead of offering a button that fails.
+
+The model name reaches an argv, so it is **validated, not escaped** (`is_valid_model_name`). A URL is matched against the Hugging Face pattern *first* — testing the general pattern first looks equivalent and is not, because `:` and `/` are both legal in a bare model name, so `https://evil.example.com/a/b` matches it and the host restriction never gets a say. Requiring an alphanumeric first character is the whole flag-injection story: `--help` cannot get through, so no separate guard is needed.
+
+Downloads run on a thread and are **polled, not streamed** — a pull runs for minutes and survives a reload. `DownloadState.finish()` writes `finished_at` *before* `status`, because the sweep reads a missing timestamp as "finished long ago": the other order lets a failed download become terminal and instantly sweepable, so the row vanishes before the UI shows the error.
+
+`lms_executable()` checks PATH then `~/.lmstudio/bin/` — the installer does not add itself to PATH on Windows. Inside a container it finds nothing even when the LM Studio *server* is reachable over the network, and `capability()` says that rather than letting the button fail.
+
 ### Config — [config.py](backend/src/config.py)
 
 Pydantic-settings singleton reading `backend/.env` (see `backend/.env.example`). Notes:
@@ -271,6 +287,7 @@ Four routes, no landing page — `/` **is** the workspace:
 - `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
 - The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.
 - `/settings` reports the runtime **actually in force**, not just "Docker or not": `local` gets a plain statement of what it does and does not protect, and only `inprocess` gets a warning. It also shows the measured host facts the resource limits were derived from — the answer to "why is it only using four threads" should be one screen, not a support conversation.
+- `/models` can **install** a model, not only choose one — [models/model-install.tsx](frontend/components/models/model-install.tsx). It sits above the installed list because on a fresh machine that list is empty and it is the only control that does anything. Progress is polled; a provider that cannot download shows the reason instead of a button.
 - Chat components: [chat/message.tsx](frontend/components/chat/message.tsx), [chat/reasoning-panel.tsx](frontend/components/chat/reasoning-panel.tsx), [chat/step-timeline.tsx](frontend/components/chat/step-timeline.tsx), [chat/artifacts-panel.tsx](frontend/components/chat/artifacts-panel.tsx) (slide-over), [chat/model-picker.tsx](frontend/components/chat/model-picker.tsx) (quick swap; `/models` is the full surface).
 - The picker browses one provider at a time and always sends the provider alongside the model name — the list on screen may belong to a different backend than the role currently uses, and a bare name would be routed to the wrong daemon.
 

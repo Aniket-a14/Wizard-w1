@@ -32,17 +32,21 @@ Every stage streams to the browser as it happens — the reasoning, each move an
 **Prerequisites:** [Ollama](https://ollama.com/) (or LM Studio). [Docker Desktop](https://www.docker.com/products/docker-desktop/) is recommended but **not required** — see [Running without Docker](#running-without-docker).
 
 ```bash
-# Any two models work. These are small enough for a laptop; a reasoning model
-# and a code model is the useful split. Nothing in the app is tied to them.
-ollama pull qwen2.5-coder:7b     # code
-ollama pull qwen3:8b             # reasoning
-
 git clone https://github.com/Aniket-a14/Wizard-w1.git
 cd Wizard-w1
 docker compose up --build -d
 ```
 
 Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**.
+
+**You do not need to install a model first.** Go to **/models** and use *Install a model* — starter picks are offered per provider, downloads show progress in the page, and nothing sends you to a terminal or the LM Studio window. Ollama models are installed through its own API; LM Studio models through the `lms` CLI that ships with it.
+
+If you would rather use a terminal, any two models work — a reasoning model and a code model is the useful split, and nothing in the app is tied to a particular pair:
+
+```bash
+ollama pull qwen3:8b             # reasoning
+ollama pull qwen2.5-coder:7b     # code
+```
 
 Optionally `ollama pull embeddinggemma` (or `nomic-embed-text`). Wizard embeds through whichever model server you already run, so this is all that semantic retrieval needs — no extra install, and no GPU libraries. Without one, matching falls back to word overlap.
 
@@ -267,7 +271,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](.
 
 **Retrieval says "Word overlap".** No embedding model is installed on your provider. `ollama pull embeddinggemma` and reload. Nothing breaks without one; matching is just less good at paraphrases.
 
-**The model picker is empty.** Nothing is pulled yet, or Ollama is not running. Pull anything — `ollama pull qwen3:8b` — then use the refresh button.
+**The model picker is empty.** Nothing is installed yet, or the model server is not running. Open **/models** and use *Install a model* — there are starter picks per provider, and you do not need a terminal or the LM Studio window. `ollama pull qwen3:8b` still works if you prefer.
 
 **The LM Studio tab is empty but LM Studio is running.** Almost always **Serve on Local Network** being off — with it off LM Studio accepts loopback connections only, and the backend runs in a container. The error under the tab names the exact URL that was tried. Note that `LMSTUDIO_BASE_URL` wants the root (`http://host.docker.internal:1234`), not the `/v1` endpoint the LM Studio UI displays; a trailing `/v1` is stripped for you.
 
