@@ -23,7 +23,6 @@ import json
 import socket
 import struct
 from collections.abc import Callable
-from pathlib import Path
 
 
 DAEMON_PATH = "/tmp/wizard_sandbox_daemon.py"
@@ -74,9 +73,9 @@ import subprocess
 import sys
 import traceback
 
-PID_FILE = "%(pid_file)s"
+PID_FILE = %(pid_file)r
 ALLOW_PIP = %(allow_pip)s
-WORKSPACE = "%(workspace)s"
+WORKSPACE = %(workspace)r
 BIND_HOST = "%(bind_host)s"
 MEM_BYTES = %(mem_bytes)d
 PROBE_MODULES = %(probe_modules)s
@@ -424,14 +423,22 @@ def render_daemon(
     """Renders the daemon source for one runtime.
 
     ``workspace`` is a real host path on the local backend and ``/workspace``
-    inside a container, so it is written as a POSIX-style literal in both cases --
-    a Windows path would otherwise inject backslash escapes into the source.
+    inside a container. Both paths are written with ``%r``, i.e. as a Python
+    ``repr``, so the interpreter's own escaping produces the literal.
+
+    Interpolating them into ``"..."`` and relying on ``Path.as_posix()`` to
+    remove the backslashes did not work, because ``as_posix()`` is only a
+    conversion on Windows: on Linux and macOS a Windows-style path is one
+    opaque filename, the backslashes survive, and ``C:\\Users\\...`` becomes an
+    invalid ``\\U`` escape that makes the whole daemon unparseable. ``repr``
+    is correct on every platform and preserves the native separators, which is
+    what the daemon actually wants -- it runs on the same OS as this process.
     """
     return DAEMON_SCRIPT % {
         "port": port,
-        "pid_file": Path(pid_file).as_posix(),
+        "pid_file": str(pid_file),
         "allow_pip": "True" if allow_pip else "False",
-        "workspace": Path(workspace).as_posix(),
+        "workspace": str(workspace),
         "bind_host": bind_host,
         "mem_bytes": int(mem_bytes),
         "probe_modules": json.dumps(list(PROBE_MODULES)),

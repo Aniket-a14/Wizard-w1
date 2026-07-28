@@ -153,10 +153,17 @@ def test_sandbox_daemon_source_is_valid_python() -> None:
     assert "%(" not in rendered
 
     # A Windows workspace path reaches the daemon as a string literal, so an
-    # unescaped backslash would be a syntax error in the rendered source.
-    windows = render_daemon(workspace="C:\\Users\\a\\workspace\\sessions\\abc")
+    # unescaped backslash would be a syntax error in the rendered source. Checked
+    # by round-trip, not by looking for forward slashes: the earlier fix relied
+    # on `Path.as_posix()`, which only rewrites separators when it runs *on*
+    # Windows, so the daemon was unparseable on Linux and macOS.
+    path = "C:\\Users\\a\\workspace\\sessions\\abc"
+    windows = render_daemon(workspace=path)
     ast.parse(windows)
-    assert "C:/Users/a/workspace/sessions/abc" in windows
+    line = next(ln for ln in windows.splitlines() if ln.startswith("WORKSPACE"))
+    namespace: dict = {}
+    exec(line, namespace)  # noqa: S102 - evaluating source this test just generated
+    assert namespace["WORKSPACE"] == path
 
 
 def test_rate_limiter_evicts_idle_clients() -> None:

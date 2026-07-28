@@ -19,7 +19,11 @@ import numpy as np
 import pytest
 
 from src.config import settings
-from src.core.embeddings import REMOTE_RETRY_SECONDS, EmbeddingService
+from src.core.embeddings import (
+    REMOTE_RETRY_MAX_SECONDS,
+    REMOTE_RETRY_SECONDS,
+    EmbeddingService,
+)
 
 
 class _SlowFirstCall:
@@ -114,7 +118,9 @@ def test_repeated_failures_back_off(service, monkeypatch):
 
     service._get_remote()
     first = service._retry_after
-    service._remote_failed_at = 0.0  # let the retry window lapse
+    # Not 0.0: `time.monotonic()` counts from boot, so on a freshly started CI
+    # runner zero is only seconds ago and the window has not lapsed at all.
+    service._remote_failed_at = time.monotonic() - REMOTE_RETRY_MAX_SECONDS - 1
     service._get_remote()
     second = service._retry_after
 

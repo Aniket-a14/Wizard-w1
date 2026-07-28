@@ -52,22 +52,47 @@ def test_daemon_renders_to_valid_python_for_every_runtime() -> None:
             assert "%(" not in source
 
 
-def test_a_windows_workspace_path_does_not_break_the_daemon_source() -> None:
-    """The local runtime passes a real host path into a string literal.
+def _rendered_workspace(source: str) -> str:
+    """Reads WORKSPACE back out of generated source, the way the daemon will."""
+    line = next(ln for ln in source.splitlines() if ln.startswith("WORKSPACE"))
+    namespace: dict = {}
+    exec(line, namespace)  # noqa: S102 - evaluating source this test just generated
+    return namespace["WORKSPACE"]
 
-    On Windows that path contains backslashes, which would become escape
-    sequences -- `\\t` in a username is a tab -- and at best mis-resolve, at
-    worst fail to parse.
+
+@pytest.mark.parametrize(
+    "workspace",
+    [
+        "C:\\Users\\a b\\workspace\\sessions\\x",
+        "C:\\Users\\a\\workspace\\sessions\\abc",  # \\U and \\a are escape sequences
+        "C:\\Users\\a\\",  # a trailing separator would escape the closing quote
+        "/tmp/session-x",
+        "/tmp/it's here",  # a quote would close the literal early
+    ],
+)
+def test_a_workspace_path_survives_becoming_a_string_literal(workspace: str) -> None:
+    """The local runtime passes a real host path into generated source.
+
+    On Windows that path contains backslashes, which are escape sequences: `\\t`
+    in a username is a tab, and `C:\\Users` is a truncated `\\U` escape that will
+    not parse at all.
+
+    This is asserted as a round-trip rather than by looking for a particular
+    spelling in the text. The previous fix ran the path through
+    `Path.as_posix()` and the test checked for forward slashes -- but
+    `as_posix()` only rewrites separators *on Windows*. On Linux and macOS a
+    Windows path is one opaque filename, the backslashes survived, and the
+    daemon was unparseable on exactly the platforms CI runs.
     """
-    source = render_daemon(workspace="C:\\Users\\a b\\workspace\\sessions\\x")
+    source = render_daemon(workspace=workspace)
     ast.parse(source)
-    assert "C:/Users/a b/workspace/sessions/x" in source
+    assert _rendered_workspace(source) == workspace
 
 
 def test_the_daemon_reads_tables_from_its_own_workspace() -> None:
     """The path was hardcoded to /workspace, which only exists in a container."""
     source = render_daemon(workspace="/tmp/session-x")
-    assert 'WORKSPACE = "/tmp/session-x"' in source
+    assert _rendered_workspace(source) == "/tmp/session-x"
     assert '"/workspace/tables"' not in source
 
 
