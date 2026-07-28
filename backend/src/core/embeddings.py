@@ -46,6 +46,13 @@ HASH_DIM = 384  # matches all-MiniLM-L6-v2 so stored vectors stay interchangeabl
 #: timeout, and encodes happen several times per question.
 REMOTE_RETRY_SECONDS = 120.0
 
+#: Consecutive failures back off from ``REMOTE_RETRY_SECONDS`` up to this. A
+#: fixed window means a machine whose provider genuinely cannot embed pays the
+#: full timeout again every two minutes, forever. Doubling turns that into a
+#: handful of attempts and then near-silence, while still recovering on its own
+#: if the model server is started later.
+REMOTE_RETRY_MAX_SECONDS = 1800.0
+
 
 def cosine_similarity(a: np.ndarray | None, b: np.ndarray | None) -> float:
     """Cosine similarity that is total: unusable inputs score 0.0 rather than raising."""
@@ -129,15 +136,23 @@ class _RemoteEncoder:
             return [row.get("embedding", []) for row in ordered if isinstance(row, dict)]
         return []
 
-    def encode_many(self, texts: list[str]) -> list[np.ndarray] | None:
-        """Vectors for ``texts``, or ``None`` if this encoder could not serve them."""
+    def encode_many(self, texts: list[str], timeout: float | None = None) -> list[np.ndarray] | None:
+        """Vectors for ``texts``, or ``None`` if this encoder could not serve them.
+
+        ``timeout`` overrides the client default for this call alone. The first
+        call to a model server is not the same operation as the rest: it has to
+        load the model off disk first, which on a cold laptop takes longer than
+        any sane steady-state timeout. Judging both by one number rejected an
+        encoder that answers in 50ms once it is resident.
+        """
         url, payload = self._endpoint_and_payload(texts)
         headers = {}
         key = settings.provider_api_key(self.provider)
         if key:
             headers["Authorization"] = f"Bearer {key}"
         try:
-            response = self._http().post(url, json=payload, headers=headers)
+            request_timeout = settings.EMBEDDING_TIMEOUT if timeout is None else timeout
+            response = self._http().post(url, json=payload, headers=headers, timeout=request_timeout)
             response.raise_for_status()
             vectors = self._vectors_from(response.json())
         except Exception as exc:
@@ -169,10 +184,15 @@ class EmbeddingService:
         self._remote: _RemoteEncoder | None = None
         self._remote_checked = False
         self._remote_failed_at = 0.0
+        self._remote_failures = 0
         self._fallback: _HashingEncoder | None = None
         self._lock = threading.Lock()
         self._load_failed = use_fallback
         self._forced_fallback = use_fallback
+        self._warming = False
+        self._warmed = threading.Event()
+        if use_fallback:
+            self._warmed.set()
 
     # ------------------------------------------------------------------ #
     @property
@@ -189,8 +209,61 @@ class EmbeddingService:
             return f"local:{self.model_name}"
         return "lexical"
 
+    @property
+    def ready(self) -> bool:
+        """Whether resolution has finished, so vectors are the ones we will keep using."""
+        return self._warmed.is_set()
+
     # ------------------------------------------------------------------ #
-    def _get_remote(self) -> _RemoteEncoder | None:
+    def warm(self, *, block: bool = False, timeout: float | None = None) -> None:
+        """Resolves the encoder ahead of the first question.
+
+        Cold-starting an encoder is expensive in a way that steady-state use is
+        not -- discovery, then a model load off disk that can take minutes on a
+        laptop. Doing it lazily meant the first question of every boot paid all
+        of it, and paid it *badly*: the load overran the request timeout, the
+        provider was written off as broken, and the install spent the rest of
+        its life on lexical retrieval.
+
+        Runs on a daemon thread, so startup is not delayed either. Until it
+        finishes, ``encode`` answers from the hashing encoder rather than
+        blocking -- see ``encode_many``.
+        """
+        if self._forced_fallback or self._warmed.is_set():
+            return
+        with self._lock:
+            if self._warming:
+                return
+            self._warming = True
+
+        def resolve() -> None:
+            started = time.monotonic()
+            try:
+                self._resolve(cold=True)
+            except Exception as exc:  # noqa: BLE001 -- warming must never take the app down
+                logger.warning("Embedding warm-up failed", error=str(exc))
+            finally:
+                self._warming = False
+                self._warmed.set()
+                logger.info(
+                    "Embeddings ready",
+                    backend=self.backend,
+                    seconds=round(time.monotonic() - started, 1),
+                )
+
+        thread = threading.Thread(target=resolve, name="embedding-warmup", daemon=True)
+        thread.start()
+        if block:
+            self._warmed.wait(timeout)
+
+    def _resolve(self, *, cold: bool) -> None:
+        """Picks an encoder: provider, then local model, then nothing (hashing)."""
+        if self._get_remote(cold=cold) is not None:
+            return
+        self._get_model()
+
+    # ------------------------------------------------------------------ #
+    def _get_remote(self, *, cold: bool = False) -> _RemoteEncoder | None:
         """Resolves an embedding model on the configured provider, once.
 
         A provider that has no embedding model installed is the common case, so
@@ -202,28 +275,46 @@ class EmbeddingService:
             return None
         if self._remote is not None:
             return self._remote
-        if self._remote_checked and (time.monotonic() - self._remote_failed_at) < REMOTE_RETRY_SECONDS:
+        if self._remote_checked and (time.monotonic() - self._remote_failed_at) < self._retry_after:
             return None
 
         with self._lock:
             if self._remote is not None:
                 return self._remote
             self._remote_checked = True
-            self._remote_failed_at = time.monotonic()
 
             provider = settings.resolve_provider(settings.EMBEDDING_PROVIDER or None)
             model = settings.EMBEDDING_REMOTE_MODEL.strip() or self._discover_model(provider)
             if not model:
+                self._note_remote_failure()
                 return None
 
             candidate = _RemoteEncoder(provider, model)
             # Prove it works before adopting it: a name that classifies as an
             # embedding model is not the same as one the server will embed with.
-            if candidate.encode_many(["wizard embedding probe"]) is None:
+            # The probe is also what loads the model, so on the warm-up path it
+            # is allowed to take as long as a cold load actually takes.
+            timeout = settings.EMBEDDING_COLD_TIMEOUT if cold else None
+            if candidate.encode_many(["wizard embedding probe"], timeout=timeout) is None:
+                self._note_remote_failure()
                 return None
             self._remote = candidate
+            self._remote_failures = 0
             logger.info("Embeddings served by provider", provider=provider, model=model)
             return self._remote
+
+    @property
+    def _retry_after(self) -> float:
+        """How long to wait before trying the provider again, doubling per failure."""
+        window = REMOTE_RETRY_SECONDS * (2 ** max(0, self._remote_failures - 1))
+        return min(window, REMOTE_RETRY_MAX_SECONDS)
+
+    def _note_remote_failure(self) -> None:
+        # Stamped *after* the attempt, not before: the probe itself can take a
+        # cold-load's worth of time, and counting that as part of the retry
+        # window shortens it by exactly the amount the failure cost.
+        self._remote_failures += 1
+        self._remote_failed_at = time.monotonic()
 
     @staticmethod
     def _discover_model(provider: str) -> str:
@@ -254,9 +345,7 @@ class EmbeddingService:
                 return self._model
             try:
                 logger.info("Loading SentenceTransformer model", model=self.model_name)
-                from sentence_transformers import SentenceTransformer
-
-                self._model = SentenceTransformer(self.model_name)
+                self._model = self._load_sentence_transformer()
                 logger.info("SentenceTransformer ready", model=self.model_name)
             except Exception as exc:
                 # Not installed (the normal case now), no network for the first
@@ -268,6 +357,34 @@ class EmbeddingService:
                     detail=str(exc),
                 )
         return self._model
+
+    def _load_sentence_transformer(self):
+        """Loads the local model, without fetching it unless that was asked for.
+
+        The default constructor downloads a missing model. That turned a
+        provider timeout into a 90 MB download inside somebody's first question
+        -- and the half-warm model it produced then failed to encode, so the
+        wait bought nothing. Offline is the honest default here; the provider
+        path is better anyway, and a deliberate offline install can set the flag.
+        """
+        from sentence_transformers import SentenceTransformer
+
+        if settings.EMBEDDING_ALLOW_DOWNLOAD:
+            return SentenceTransformer(self.model_name)
+
+        # huggingface_hub reads this at call time, and every version honours it,
+        # which a constructor keyword does not. Restored immediately after.
+        import os
+
+        previous = os.environ.get("HF_HUB_OFFLINE")
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            return SentenceTransformer(self.model_name)
+        finally:
+            if previous is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous
 
     def _get_fallback(self) -> _HashingEncoder:
         if self._fallback is None:
@@ -284,6 +401,14 @@ class EmbeddingService:
         if not texts:
             return []
 
+        # While warm-up is still resolving an encoder, answer from the hashing
+        # one rather than queueing behind a model load. A question must never
+        # wait on retrieval infrastructure: worst case it retrieves less well,
+        # and `rank` re-encodes any vector stored at the wrong width later.
+        if self._warming and self._remote is None and self._model is None:
+            fallback = self._get_fallback()
+            return [fallback.encode(text) for text in texts]
+
         remote = self._get_remote()
         if remote is not None:
             vectors = remote.encode_many(texts)
@@ -292,13 +417,17 @@ class EmbeddingService:
             # A working encoder that just failed is a transient problem, not a
             # reason to keep paying for it on every subsequent call.
             self._remote = None
-            self._remote_failed_at = time.monotonic()
+            self._note_remote_failure()
 
         model = self._get_model()
         if model is not None:
             try:
                 return [np.asarray(vector, dtype=np.float32) for vector in model.encode(texts)]
             except Exception as exc:
+                # Stop calling an encoder that is loaded but cannot encode --
+                # otherwise every question pays for it and still falls through.
+                self._model = None
+                self._load_failed = True
                 logger.warning("Local embedding failed, using fallback", error=str(exc))
 
         fallback = self._get_fallback()

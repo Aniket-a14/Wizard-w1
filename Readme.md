@@ -190,9 +190,19 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything 
 | `CORS_ALLOW_ORIGINS` | `http://localhost:3000` | Comma-separated allowlist |
 | `API_KEY` | `""` | When set, mutating routes require `X-API-Key` |
 | `EMBEDDING_REMOTE_MODEL` | `""` | Pin the embedding model. Empty = discover one from the provider |
+| `MODEL_MEMORY_FRACTION` | `0` | Share of RAM the models may use. `0` uses `0.60` |
 | `REDIS_URL` | `""` | Empty means in-process cache and queue |
 
 Resource limits — `LLM_NUM_THREAD`, `SANDBOX_MEM_LIMIT`, `SESSION_MAX_ACTIVE`, `QUEUE_MAX_WORKERS` — are **left unset on purpose**. They are derived from the machine at boot, and setting one pins it.
+
+### Running models bigger than the machine expects
+
+The manager and worker alternate several times per question, so what matters is whether both fit in RAM **at once**. Wizard measures them and decides:
+
+- **They fit** — both stay resident, so neither is reloaded from disk between steps.
+- **They do not** — each is released after it runs. That costs one reload per step, and avoids two oversized models paging each other to disk, which is one to two orders of magnitude worse and takes the rest of the desktop with it.
+
+Two 7B models want roughly 14 GB; a 16 GB laptop running a browser and a sandbox does not have that. `/settings` shows the estimate, the budget and which way it went. Using the **same model for both roles** removes the reload entirely — one resident copy, nothing to evict.
 
 ## API
 

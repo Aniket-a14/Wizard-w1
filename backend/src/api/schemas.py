@@ -63,6 +63,11 @@ class ServerConfig(BaseModel):
     llm_num_thread: int = 0
     llm_num_ctx: int = 0
     llm_keep_alive: str = ""
+    #: Whether the manager and worker can be in memory at the same time on this
+    #: machine, and what they are estimated to need. This is what decides
+    #: between "both stay loaded" and "each is released after it runs", which is
+    #: the difference between a 7B pair being usable here and thrashing.
+    memory_plan: dict | None = None
     #: Settings that will make this install slow, in plain language. Empty when
     #: there is nothing to say, which is the common case.
     performance_notes: list[str] = Field(default_factory=list)

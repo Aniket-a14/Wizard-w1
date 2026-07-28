@@ -29,6 +29,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.config import settings
+from src.core.llm.resources import ResidentPlan, plan_for_models
 from src.utils.logging import logger
 
 
@@ -57,9 +58,22 @@ class ModelSpec:
     num_ctx: int
     base_url: str = ""
     api_key: str = ""
+    #: How long the server should hold this model after the call. Derived from
+    #: whether the manager and worker can share memory on this machine, so it is
+    #: part of the cache key -- a client built when they fitted must not be
+    #: reused once they do not.
+    keep_alive: str = ""
 
     def cache_key(self) -> tuple:
-        return (self.provider, self.base_url, self.model, self.temperature, self.max_tokens, self.num_ctx)
+        return (
+            self.provider,
+            self.base_url,
+            self.model,
+            self.temperature,
+            self.max_tokens,
+            self.num_ctx,
+            self.keep_alive,
+        )
 
 
 class LLMUnavailableError(RuntimeError):
@@ -71,6 +85,7 @@ class LLMProvider:
 
     def __init__(self):
         self._clients: dict[tuple, Any] = {}
+        self._plans: dict[tuple, ResidentPlan] = {}
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
@@ -119,11 +134,48 @@ class LLMProvider:
             temperature=settings.TEMPERATURE if temperature is None else float(temperature),
             max_tokens=max_tokens or settings.MAX_TOKENS,
             num_ctx=settings.LLM_NUM_CTX,
+            keep_alive=self.keep_alive_for(resolved_provider),
             base_url=settings.provider_openai_base_url(resolved_provider)
             if resolved_provider != "ollama"
             else settings.provider_root_url(resolved_provider),
             api_key=settings.provider_api_key(resolved_provider),
         )
+
+    def resident_plan(self, provider: str | None = None) -> ResidentPlan:
+        """Whether the manager and worker can be resident on this machine at once.
+
+        Planned for the *pair*, not the role being resolved: the cost being
+        avoided is one evicting the other, which is a property of both.
+        """
+        resolved = settings.resolve_provider(provider)
+        manager = self.default_model_for(LLMRole.MANAGER, resolved)
+        worker = self.default_model_for(LLMRole.WORKER, resolved)
+        key = (resolved, manager, worker, settings.LLM_NUM_CTX)
+        cached = self._plans.get(key)
+        if cached is None:
+            cached = plan_for_models([manager, worker], resolved, settings.LLM_NUM_CTX)
+            self._plans[key] = cached
+            if not cached.co_resident:
+                logger.info(
+                    "Models will be swapped rather than co-resident",
+                    reason=cached.reason,
+                    keep_alive=cached.keep_alive,
+                )
+        return cached
+
+    def keep_alive_for(self, provider: str) -> str:
+        """How long this provider should hold a model after a call.
+
+        Only Ollama takes a keep-alive. LM Studio manages residency itself and
+        the gateways host the model elsewhere, so there is nothing to say.
+        """
+        if provider != "ollama":
+            return ""
+        try:
+            return self.resident_plan(provider).keep_alive
+        except Exception as exc:  # pragma: no cover - planning must never block a call
+            logger.warning("Memory planning failed; using the default keep-alive", error=str(exc))
+            return settings.LLM_KEEP_ALIVE
 
     # ------------------------------------------------------------------ #
     # Client construction
@@ -167,7 +219,9 @@ class LLMProvider:
                     # eviction between them costs a full reload from disk each
                     # time. Ollama's own default is five minutes, which one slow
                     # turn can exceed while it is still running.
-                    keep_alive=settings.LLM_KEEP_ALIVE,
+                    # Long when the manager and worker fit in memory together,
+                    # short when they do not -- see `core/llm/resources.py`.
+                    keep_alive=spec.keep_alive or settings.LLM_KEEP_ALIVE,
                     # ChatOllama has no `timeout` field, so this is the only way
                     # to bound a request. Without it a wedged daemon hangs the
                     # turn forever -- the OpenAI-compatible path has had a

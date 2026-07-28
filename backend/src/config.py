@@ -214,6 +214,16 @@ class Settings(BaseSettings):
     # Resolution order is remote -> local sentence-transformers (only if the user
     # installed it) -> the built-in hashing encoder, which always works offline.
     # ------------------------------------------------------------------ #
+    #: Keep-alive for a model that cannot share memory with the other role.
+    #: Short on purpose: it must expire while the *other* model is working, so
+    #: its memory is released before that one needs it. One deliberate reload per
+    #: role change is bounded; two oversized models competing for RAM is not.
+    LLM_KEEP_ALIVE_SWAP: str = "30s"
+    #: Share of system RAM the model server may be planned against. The rest is
+    #: the OS, this backend, the sandbox and the user's desktop. 0 means "use the
+    #: built-in default"; raise it on a machine that does nothing else.
+    MODEL_MEMORY_FRACTION: float = 0.0
+
     EMBEDDINGS_REMOTE_ENABLED: bool = True
     #: Which provider to embed against. Empty follows API_PROVIDER.
     EMBEDDING_PROVIDER: str = ""
@@ -221,9 +231,24 @@ class Settings(BaseSettings):
     #: which is right because the name differs per backend and per install.
     EMBEDDING_REMOTE_MODEL: str = ""
     EMBEDDING_TIMEOUT: float = 20.0
+    #: Timeout for the *first* call only, which is a different operation: the
+    #: server has to read the model off disk before it can embed anything. On a
+    #: laptop with a cold page cache that took over 20s while every subsequent
+    #: encode took 0.05s -- so the steady-state timeout rejected an encoder that
+    #: works, and the install silently fell back to lexical retrieval for good.
+    #: It is affordable precisely because warm-up no longer runs inside a turn.
+    EMBEDDING_COLD_TIMEOUT: float = 180.0
+    #: Resolve the encoder in the background at startup rather than inside the
+    #: first question. Turning this off restores lazy resolution, where the cost
+    #: of a cold model load is paid by whoever asks first.
+    EMBEDDINGS_WARM_ON_STARTUP: bool = True
     #: Local sentence-transformers model, used only when that optional package
     #: is installed. Unchanged so existing .env files keep their meaning.
     EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    #: Download it if it is not already on disk. Off by default: a 90 MB fetch is
+    #: not something a question should trigger, and the provider path is better
+    #: anyway. It stays available for deliberately offline installs.
+    EMBEDDING_ALLOW_DOWNLOAD: bool = False
 
     # LM Studio. Stored as a bare root because two API surfaces hang off it:
     # `/v1` (OpenAI-compatible, used for inference) and `/api/v0` (native, used

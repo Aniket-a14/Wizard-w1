@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from src.api.deps import client_key, rate_limiter
 from src.api.routes import chat, datasets, meta, sandbox, sessions, workspace
 from src.config import settings
+from src.core.embeddings import embedding_service
 from src.core.infra.queue import get_queue
 from src.core.session import session_manager
 from src.core.tools import runtime as runtime_backend
@@ -66,6 +67,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     # Containers left behind by a previous process would otherwise accumulate.
     await asyncio.to_thread(sandbox_pool.prune_orphans)
+
+    # Resolve the embedding encoder now, on a background thread, so no question
+    # pays for a cold model load. Lazily, the first one did -- and the load
+    # overran the request timeout, so a provider that embeds in 50ms once
+    # resident was written off and retrieval silently degraded to lexical.
+    if settings.EMBEDDINGS_WARM_ON_STARTUP:
+        embedding_service.warm()
 
     task = asyncio.ensure_future(_maintenance_loop())
     try:

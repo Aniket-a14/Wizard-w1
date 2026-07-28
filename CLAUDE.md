@@ -208,6 +208,16 @@ Tables: `semantic_cache`, `trajectories` (failure→fix pairs), `feedbacks`, `wo
 
 The Ollama client also sends `keep_alive` (the manager and worker alternate every iteration, so an eviction between them costs a reload from disk) and a request timeout via `client_kwargs` — `ChatOllama` has no `timeout` field, and without this a wedged daemon hung the turn forever while the OpenAI-compatible path had had a timeout all along.
 
+### Fitting the models in memory — [llm/resources.py](backend/src/core/llm/resources.py)
+
+The manager and worker alternate several times per question, so whether they can be **resident at once** decides whether that alternation is free or ruinous — and nothing in the app knew. Two 1.5B models coexist anywhere; two 7B models want ~14 GB, and on a 16 GB laptop also running a browser, this backend and a sandbox subprocess, the OS starts paging a model between tokens. That is not "slower" in the way a small model is slower; it is one to two orders of magnitude worse and it takes the desktop with it.
+
+- `estimate_footprint` is **calibrated against a measurement**, not a datasheet: `qwen2.5:3b` is 1.93 GB on disk and reported **2.91 GB resident** at 8192 context, giving ~40 MB of KV cache and buffers per billion parameters per 1024 tokens. The estimator predicts 2.9 GB for it. It is deliberately biased high — over-estimating costs one reload, under-estimating costs a swap storm.
+- `plan_resident_set` compares the pair against `MODEL_MEMORY_FRACTION` (0.60) of system RAM. Fits → both keep `LLM_KEEP_ALIVE` (30m), since an eviction between alternating roles costs a disk reload every iteration. Does not fit → `LLM_KEEP_ALIVE_SWAP` (30s), short enough to expire *while the other model is working*, so its memory is released before the other needs it. **Swapping on purpose is bounded; thrashing is not.**
+- The only levers that reach the server per request are `num_ctx` and `keep_alive`. `OLLAMA_MAX_LOADED_MODELS` would be the direct control but belongs to the server process.
+- `ModelSpec.keep_alive` is part of the **client cache key** — a client built when the models fitted must not be reused once they do not.
+- Only `LOCAL_PROVIDERS` are planned. A gateway model occupies someone else's RAM, so budgeting this laptop around it answers the wrong question. Same model in both roles collapses to one footprint and never swaps.
+
 ### Reasoning models — [llm/reasoning.py](backend/src/core/llm/reasoning.py)
 
 A model's private thinking is not its answer. `split_reasoning` / `strip_reasoning` remove `<think>`, `<thinking>`, `<thought>`, `<reasoning>` and `<reflection>` blocks; `ReasoningStream` does the same **incrementally** so token streaming survives, holding back only a trailing partial tag rather than the whole buffer.
@@ -272,7 +282,9 @@ Resolution order: **provider endpoint → local sentence-transformers (only if i
 
 - Ollama: `POST /api/embed` → `{"embeddings": [[...]]}`. Everything else: `POST /v1/embeddings` → `{"data": [{"index", "embedding"}]}`, **sorted by index** — order is not promised, and a swap attaches every vector to the wrong text without anything downstream noticing.
 - The model is discovered through `model_registry`'s own classification, then **probed once** before adoption: a name that classifies as an embedding model is not the same as one the server will embed with.
-- A missing or unreachable encoder is remembered for `REMOTE_RETRY_SECONDS`. Encoding happens several times per question, so retrying each call would make an offline machine feel broken.
+- **The encoder is resolved at startup on a background thread** (`embedding_service.warm()`), and `encode` answers from the hashing fallback while that is in flight rather than blocking. Resolving it lazily put a cold model load on the critical path of the first question: measured at **51s** — a 20s timeout, then a 90 MB download, then a failure — with the model server completely idle throughout. `EMBEDDING_COLD_TIMEOUT` (180s) applies to the adoption probe only, because loading a model off disk is not the same operation as using one; `EMBEDDING_TIMEOUT` (20s) still governs steady state, where the same provider answers in **0.05s**. Judging both by one number rejected a working encoder and dropped the install to lexical retrieval permanently.
+- A missing or unreachable encoder is remembered for `REMOTE_RETRY_SECONDS`, **doubling per consecutive failure** up to `REMOTE_RETRY_MAX_SECONDS`. Encoding happens several times per question, so retrying each call would make an offline machine feel broken — and a fixed window made a machine with no encoder pay the full timeout again every two minutes forever. The failure is stamped *after* the attempt: stamping it before shortened the window by exactly the cost of the failure.
+- An encoder that loads but cannot encode is dropped rather than retried. `EMBEDDING_ALLOW_DOWNLOAD` is off, so a missing sentence-transformers model is not fetched inside somebody's question.
 - `rank()` re-encodes a stored vector whose **width** differs from the query's. Changing encoder (384 → 768, or back to hashing) would otherwise score every stored row at exactly 0.0, silently emptying the semantic cache and trajectory memory rather than rebuilding them.
 
 ### Image size

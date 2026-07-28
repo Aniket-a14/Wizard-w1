@@ -278,6 +278,25 @@ export interface SessionInfo {
  */
 export type ExecutionBackend = "docker" | "local" | "inprocess"
 
+/**
+ * The server's plan for fitting the configured models into this machine's RAM.
+ * Two 7B models want ~14 GB; a 16 GB laptop running a browser and a sandbox does
+ * not have that, and the alternative to planning is the OS paging a model
+ * between tokens.
+ */
+export interface MemoryPlan {
+  /** True when both models can stay loaded, so neither reloads between steps. */
+  co_resident: boolean
+  /** What the model server is told, e.g. "30m" when they fit or "30s" when they do not. */
+  keep_alive: string
+  budget_gb: number
+  required_gb: number
+  /** False when even one model alone exceeds the budget — expect disk paging. */
+  fits: boolean
+  reason: string
+  models: { name: string; gb: number }[]
+}
+
 export interface ServerConfig {
   app_name: string
   version: string
@@ -313,6 +332,12 @@ export interface ServerConfig {
   llm_num_thread: number
   llm_num_ctx: number
   llm_keep_alive: string
+  /**
+   * Whether the manager and worker fit in this machine's memory at the same
+   * time. When they do not, each is released after it runs — one reload per
+   * step, instead of two oversized models paging each other to disk.
+   */
+  memory_plan: MemoryPlan | null
   /** Settings that will make this install slow, in plain language. Usually empty. */
   performance_notes: string[]
 

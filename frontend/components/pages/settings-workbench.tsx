@@ -227,7 +227,11 @@ export function SettingsWorkbench() {
             value={config?.llm_num_ctx ? config.llm_num_ctx.toLocaleString() : "—"}
             mono
           />
-          <Fact label="Model kept loaded" value={config?.llm_keep_alive || "—"} mono />
+          <Fact
+            label="Model kept loaded"
+            value={config?.memory_plan?.keep_alive || config?.llm_keep_alive || "—"}
+            mono
+          />
           <Fact
             label="Turn deadline"
             value={
@@ -235,6 +239,24 @@ export function SettingsWorkbench() {
             }
           />
         </dl>
+
+        {config?.memory_plan && config.memory_plan.models.length > 0 ? (
+          <div className="mt-3 rounded-xl border border-border bg-muted/30 px-3.5 py-3">
+            <p className="text-[12.5px] leading-relaxed text-foreground">
+              {config.memory_plan.co_resident
+                ? "Both models stay in memory between steps, so neither is reloaded from disk."
+                : "Each model is released after it runs, so they never compete for memory."}{" "}
+              <span className="text-muted-foreground">{config.memory_plan.reason}.</span>
+            </p>
+            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+              {config.memory_plan.models.map((model) => (
+                <li key={model.name} className="font-mono">
+                  {model.name} · {model.gb} GB
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {config && config.performance_notes.length > 0 ? (
           <ul className="mt-3 space-y-2">
@@ -251,8 +273,7 @@ export function SettingsWorkbench() {
         ) : (
           <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
             Nothing here is working against this machine. The manager and worker models alternate every
-            step, so both are kept resident — the context window is sized so they fit together rather
-            than evicting each other.
+            step, and how they share memory is decided from the sizes above rather than left to chance.
           </p>
         )}
       </Section>

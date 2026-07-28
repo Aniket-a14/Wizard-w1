@@ -30,6 +30,7 @@ from src.core.llm.reasoning import looks_like_reasoning_model
 from src.core.session import Session
 from src.core.tools import runtime as runtime_backend
 from src.utils.hostinfo import host_info
+from src.utils.logging import logger
 
 
 router = APIRouter(tags=["meta"])
@@ -85,7 +86,40 @@ def performance_notes() -> list[str]:
             "reloaded from disk each time. Prompts here stay under 8k. Remove it from backend/.env."
         )
 
+    plan = _resident_plan()
+    if plan is not None and not plan.co_resident:
+        notes.append(
+            f"The manager and worker need about {plan.required_gb:.1f} GB together, more than the "
+            f"{plan.budget_gb:.1f} GB budgeted from this machine's memory. Each model is now released after "
+            "it runs rather than competing for RAM, which costs one reload per step but avoids swapping. "
+            "A smaller model for one of the two roles, or the same model for both, removes the reload."
+        )
+    if plan is not None and not plan.fits:
+        notes.append(
+            f"The largest configured model needs more memory on its own ({plan.required_gb:.1f} GB) than this "
+            f"machine can give it ({plan.budget_gb:.1f} GB). Expect the operating system to page it to disk, "
+            "which is far slower than a smaller model would be. Choose a smaller model or a heavier quantization."
+        )
+
     return notes
+
+
+def _resident_plan():
+    """The memory plan, or ``None`` when it cannot be worked out.
+
+    Never raises: this feeds a diagnostics panel, and a panel that fails is
+    worse than a panel with one fewer line on it.
+    """
+    try:
+        return llm_provider.resident_plan()
+    except Exception as exc:  # pragma: no cover - diagnostics are best effort
+        logger.warning("Could not build the memory plan", error=str(exc))
+        return None
+
+
+def _memory_plan_dict() -> dict | None:
+    plan = _resident_plan()
+    return None if plan is None else plan.to_dict()
 
 
 @router.get("/api/config", response_model=ServerConfig)
@@ -128,6 +162,7 @@ async def server_config() -> ServerConfig:
         llm_num_thread=settings.LLM_NUM_THREAD,
         llm_num_ctx=settings.LLM_NUM_CTX,
         llm_keep_alive=settings.LLM_KEEP_ALIVE,
+        memory_plan=_memory_plan_dict(),
         performance_notes=performance_notes(),
     )
 
