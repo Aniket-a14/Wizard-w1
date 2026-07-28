@@ -44,7 +44,19 @@ export default function RootLayout({
       made it fail whenever Google Fonts was unreachable.
     */
     <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
-      <body className="font-sans antialiased">
+      {/*
+        Extensions edit <body> before React hydrates -- Grammarly adds
+        `data-gr-ext-installed` and `data-new-gr-c-s-check-loaded`, password
+        managers and dark-mode add-ons do the same -- and the server HTML
+        cannot know about them, so hydration reports a mismatch on every load
+        for a difference the app did not cause and cannot prevent.
+
+        `suppressHydrationWarning` applies to *this element only*, one level
+        deep: attribute and text differences on <body> itself are ignored, and
+        a real mismatch anywhere inside it still reports normally. That is what
+        makes this safe rather than a blanket silencer.
+      */}
+      <body className="font-sans antialiased" suppressHydrationWarning>
         {/* Ambient wash. Fixed and inert, behind every route. */}
         <div className="aurora" aria-hidden="true" />
         <AppShell>{children}</AppShell>
