@@ -113,6 +113,43 @@ class ModelListResponse(BaseModel):
     error: str | None = None
 
 
+class ModelDownloadRequest(BaseModel):
+    """A model to install. ``provider`` defaults to the configured one."""
+
+    model: str = Field(min_length=1, max_length=200)
+    provider: ProviderName | None = None
+
+
+class ModelDownloadState(BaseModel):
+    provider: str
+    model: str
+    status: Literal["queued", "downloading", "completed", "failed", "cancelled"]
+    completed_bytes: int = 0
+    total_bytes: int = 0
+    #: None when the provider reports no measurable progress — LM Studio says
+    #: nothing at all while it resolves a repo, and a bar stuck at 0% reads as
+    #: broken where "Resolving" does not.
+    percent: float | None = None
+    detail: str = ""
+    error: str | None = None
+    started_at: float
+    finished_at: float | None = None
+
+
+class ProviderDownloadCapability(BaseModel):
+    """Whether models can be installed from here, and the reason when not."""
+
+    provider: str
+    can_download: bool = False
+    can_delete: bool = False
+    reason: str = ""
+
+
+class ModelDownloadsResponse(BaseModel):
+    downloads: list[ModelDownloadState] = Field(default_factory=list)
+    capability: ProviderDownloadCapability
+
+
 class ModelSelection(BaseModel):
     manager: str | None = Field(default=None, max_length=200)
     worker: str | None = Field(default=None, max_length=200)

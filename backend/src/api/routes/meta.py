@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_session, require_api_key
 from src.api.schemas import (
     HealthResponse,
+    ModelDownloadRequest,
+    ModelDownloadsResponse,
+    ModelDownloadState,
     ModelListResponse,
     ModelSelection,
+    ProviderDownloadCapability,
     ServerConfig,
     SessionResponse,
 )
@@ -21,6 +25,7 @@ from src.core.infra.queue import get_queue
 from src.core.ingest.documents import supported_document_extensions
 from src.core.ingest.loader import DatasetLoader
 from src.core.llm import llm_provider, model_registry
+from src.core.llm.downloader import ProviderNotDownloadable, model_downloader
 from src.core.session import Session
 from src.core.tools import runtime as runtime_backend
 from src.utils.hostinfo import host_info
@@ -119,6 +124,58 @@ async def list_models(
         providers=model_registry.available_providers(),
         error=model_registry.error_for(resolved) if not models else None,
     )
+
+
+@router.get("/api/models/downloads", response_model=ModelDownloadsResponse)
+async def list_downloads(provider: str | None = None) -> ModelDownloadsResponse:
+    """In-flight and just-finished installs, plus whether this provider allows them.
+
+    Polled by the client while a download runs. Every download is listed
+    regardless of ``provider`` — a pull started on one provider must stay
+    visible after the picker is switched to another, or it looks abandoned.
+    """
+    return ModelDownloadsResponse(
+        downloads=[ModelDownloadState(**entry) for entry in model_downloader.list()],
+        capability=ProviderDownloadCapability(**model_downloader.capability(provider)),
+    )
+
+
+@router.post(
+    "/api/models/download",
+    response_model=ModelDownloadState,
+    status_code=202,
+    dependencies=[Depends(require_api_key)],
+)
+async def download_model(request: ModelDownloadRequest) -> ModelDownloadState:
+    """Starts installing a model. Returns immediately; poll ``/api/models/downloads``."""
+    try:
+        state = model_downloader.start(request.provider, request.model)
+    except ProviderNotDownloadable as exc:
+        # Not the caller's mistake — the provider or the machine cannot do this.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ModelDownloadState(**state.to_dict())
+
+
+@router.post("/api/models/download/cancel", dependencies=[Depends(require_api_key)])
+async def cancel_download(request: ModelDownloadRequest) -> dict:
+    cancelled = await asyncio.to_thread(model_downloader.cancel, request.provider, request.model)
+    return {"status": "cancelling" if cancelled else "not_running"}
+
+
+@router.delete("/api/models/installed", dependencies=[Depends(require_api_key)])
+async def delete_model(model: str, provider: str | None = None) -> dict:
+    """Removes an installed model. Ollama only — LM Studio's CLI has no delete."""
+    try:
+        await asyncio.to_thread(model_downloader.remove, provider, model)
+    except ProviderNotDownloadable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surface the provider's own words
+        raise HTTPException(status_code=502, detail=f"Could not delete {model}: {exc}") from exc
+    return {"status": "deleted", "model": model}
 
 
 @router.post("/api/models", response_model=SessionResponse, dependencies=[Depends(require_api_key)])
