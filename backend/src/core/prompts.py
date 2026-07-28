@@ -114,7 +114,11 @@ def _related_tables(query: str, session_id: str | None, active_columns: list[str
         shared = sorted({str(c).lower() for c in schema.get("columns", [])} & {str(c).lower() for c in active_columns})
         if shared:
             lines.append(f"  Possible join keys: {', '.join(shared[:5])}")
-    lines.append("Load these with `pd.read_csv('/workspace/<filename>')` only if the request needs them.")
+    # The root differs per backend, so it is asked for rather than assumed —
+    # a container path handed to a local runtime names nothing.
+    lines.append(
+        f"Load these with `pd.read_csv('{_workspace_root(session_id)}<filename>')` only if the request needs them."
+    )
     lines.append("</other_workspace_tables>\n")
     return "\n".join(lines)
 
@@ -208,6 +212,7 @@ You are a senior data engineer. Produce a short, safe cleaning script for the da
 
 <instructions>
 Return ONLY a Python code block. No prose.
+`df` already exists. Do not call `pd.read_csv` or open any file — there is no file to read.
 </instructions>"""
 
 

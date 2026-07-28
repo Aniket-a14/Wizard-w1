@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 
 import pandas as pd
 
@@ -106,7 +107,7 @@ def test_sandbox_interrupt_targets_the_daemon_not_pid_one() -> None:
 
     session = SandboxSession.__new__(SandboxSession)
     session.container = RecordingContainer()
-    session.session_id = "test"
+    session.id = "test"
 
     assert session.interrupt() is True
 
@@ -433,3 +434,54 @@ def _module_present(name: str) -> bool:
         return find_spec(name) is not None
     except (ImportError, ValueError):
         return False
+
+
+def test_a_write_target_is_never_a_hardcoded_container_path(monkeypatch, session: Session) -> None:
+    """Generated code is handed a path to write to. `/workspace` is only real
+    inside a container: on the local subprocess backend it resolves to a
+    directory that does not exist, pandas raises `OSError`, and the caller
+    reports a generic failure.
+
+    That silently disabled semantic cleaning on upload and CSV export of a
+    variable on every Docker-less install. It was invisible to the suite
+    because the in-process backend used by CI happens to tolerate the very
+    same path, and it was found only by running the app.
+    """
+    from src.core.tools import runtime as runtime_backend
+
+    monkeypatch.setattr(runtime_backend, "active_backend", lambda: "local")
+
+    target = runtime_backend.workspace_path(session.id, "cleaned.csv")
+
+    assert not target.startswith("/workspace/")
+    assert target.endswith("/cleaned.csv")
+    # The parent has to be a directory that exists, or the write fails exactly
+    # as it did before.
+    assert Path(target).parent.is_dir()
+
+
+def test_a_container_still_gets_the_container_path(monkeypatch) -> None:
+    """The fix must not break the Docker backend, where `/workspace` is the
+    bind-mount destination and the session directory does not exist."""
+    from src.core.tools import runtime as runtime_backend
+
+    monkeypatch.setattr(runtime_backend, "active_backend", lambda: "docker")
+
+    assert runtime_backend.workspace_path("any-session", "plot.html") == "/workspace/plot.html"
+
+
+def test_the_prompt_tells_the_model_the_root_its_runtime_actually_has(monkeypatch, session: Session) -> None:
+    """The related-tables block told the model to `pd.read_csv('/workspace/...')`
+    regardless of backend, so following the instruction correctly still failed
+    without Docker."""
+    from src.core.prompts import _related_tables
+    from src.core.tools import runtime as runtime_backend
+
+    monkeypatch.setattr(runtime_backend, "active_backend", lambda: "local")
+    session.add_dataset("orders.csv", pd.DataFrame({"id": [1], "region": ["N"]}))
+    session.add_dataset("regions.csv", pd.DataFrame({"region": ["N"], "manager": ["x"]}))
+
+    block = _related_tables("join orders to regions", session.id, ["region"])
+
+    if block:
+        assert "'/workspace/<filename>'" not in block

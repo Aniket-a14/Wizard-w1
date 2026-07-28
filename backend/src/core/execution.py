@@ -285,9 +285,7 @@ def plot_output_path(session_id: str) -> str:
     runtime, which is started with that directory as its working directory and
     as the daemon's ``WORKSPACE``.
     """
-    if runtime_backend.active_backend() == "docker":
-        return "/workspace/plot.html"
-    return str(runtime_backend.workspace_for(session_id) / "plot.html")
+    return runtime_backend.workspace_path(session_id, "plot.html")
 
 
 def host_plot_path(session_id: str):

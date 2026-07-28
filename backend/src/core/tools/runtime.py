@@ -100,6 +100,24 @@ def workspace_for(session_id: str):
     return sandbox_pool.workspace_for(session_id)
 
 
+def workspace_path(session_id: str | None, filename: str = "") -> str:
+    """A path inside the session workspace **as the running backend sees it**.
+
+    A container is always at ``/workspace``; a local runtime works out of the
+    session's own directory. Any code that builds a path for generated Python to
+    write to has to go through here, because the two are not interchangeable:
+    on the local backend ``/workspace/cleaned.csv`` resolves to a directory that
+    does not exist, and pandas raises rather than writing anywhere useful.
+
+    That is not hypothetical -- it silently disabled semantic cleaning and CSV
+    export on every Docker-less install until it was caught by running one.
+    """
+    root = "/workspace"
+    if active_backend() != "docker" and session_id:
+        root = workspace_for(session_id).as_posix()
+    return f"{root}/{filename}" if filename else f"{root}/"
+
+
 def active_runtime_count() -> int:
     from src.core.tools.local_runtime import local_runtime_pool
     from src.core.tools.sandbox import sandbox_pool
@@ -212,4 +230,5 @@ __all__ = [
     "release_runtime",
     "tier_modules",
     "workspace_for",
+    "workspace_path",
 ]

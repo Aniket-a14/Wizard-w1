@@ -16,6 +16,7 @@ from src.core.agent.orchestrator import RunResult, orchestrator
 from src.core.execution import ExecutionResult
 from src.core.llm import LLMRole, llm_provider
 from src.core.prompts import create_cleaning_prompt
+from src.core.tools import runtime as runtime_backend
 from src.core.tools.catalog import CatalogEngine
 from src.utils.logging import logger, trace_agent
 
@@ -96,11 +97,17 @@ class ScientificAgent:
         session.add_dataset("dataset.csv", df, catalog=catalog, make_active=True)
         session.executor.reload_dataset()
 
-        wrapped = f"{code}\n\ndf.to_csv('/workspace/cleaned.csv', index=False)\nprint('CLEANING_OK', len(df))\n"
+        # Not a literal `/workspace`: a local runtime writes into the session's
+        # own directory, and the container path resolves to nowhere there.
+        write_target = runtime_backend.workspace_path(session.id, "cleaned.csv")
+        wrapped = f"{code}\n\ndf.to_csv({write_target!r}, index=False)\nprint('CLEANING_OK', len(df))\n"
         result: ExecutionResult = session.executor.execute(wrapped, df)
 
         if not result.ok:
-            logger.warning("Cleaning script failed; keeping the raw data", detail=result.output[:300])
+            # The *tail*, not the head: Python prints the exception last, so the
+            # first 300 characters of a traceback are stack frames from inside
+            # pandas and never say what actually went wrong.
+            logger.warning("Cleaning script failed; keeping the raw data", detail=result.output[-600:])
             return df, catalog, "Automatic cleaning was skipped because the generated script failed."
 
         cleaned_path = session.workspace / "cleaned.csv"

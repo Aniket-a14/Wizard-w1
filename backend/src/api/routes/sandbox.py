@@ -49,16 +49,21 @@ async def export_variable(name: str, session: Session = Depends(get_session)) ->
     if name not in variables:
         raise HTTPException(status_code=404, detail=f"No variable named '{name}' in the sandbox.")
 
+    # Where this runtime can actually write. A literal `/workspace` is only
+    # right inside a container; on the local backend it names a directory that
+    # does not exist, and pandas raises instead of exporting anything.
+    target = runtime_backend.workspace_path(session.id, f"{name}.csv")
     export_code = (
         "import pandas as _pd\n"
         f"_value = {name}\n"
+        f"_target = {target!r}\n"
         "if isinstance(_value, _pd.DataFrame):\n"
-        f"    _value.to_csv('/workspace/{name}.csv', index=False)\n"
+        "    _value.to_csv(_target, index=False)\n"
         "elif isinstance(_value, _pd.Series):\n"
-        f"    _value.to_frame().to_csv('/workspace/{name}.csv', index=False)\n"
+        "    _value.to_frame().to_csv(_target, index=False)\n"
         "else:\n"
         "    _rows = list(_value) if isinstance(_value, (list, tuple, set)) else [_value]\n"
-        f"    _pd.DataFrame(_rows).to_csv('/workspace/{name}.csv', index=False)\n"
+        "    _pd.DataFrame(_rows).to_csv(_target, index=False)\n"
         f"print('exported {name}.csv')\n"
     )
 
