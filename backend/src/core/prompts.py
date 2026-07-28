@@ -349,9 +349,17 @@ def create_prompt(
     previous_code: str | None = None,
     session_id: str | None = None,
     negative_example: str | None = None,
+    max_columns: int | None = None,
 ) -> str:
     """Worker prompt: turn an approved plan into executable Python."""
-    context = generate_system_context(df, catalog=catalog, query=instruction, session_id=session_id)
+    # The tier's column budget, not the global one. `TierBudget.max_columns`
+    # existed but only ever reached `inspect`, so a compact model that had been
+    # sized for 25 columns was still handed the schema, statistics, sample rows
+    # and categorical values for 60 -- several thousand tokens it then had to
+    # read before emitting anything, on the machine least able to afford it.
+    context = generate_system_context(
+        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns
+    )
 
     plan_block = f"\n<approved_plan>\n{plan}\n</approved_plan>\n" if plan else ""
 
@@ -427,9 +435,12 @@ def create_planning_prompt(
     previous_code: str | None = None,
     session_id: str | None = None,
     history: str = "",
+    max_columns: int | None = None,
 ) -> str:
     """Manager prompt: produce a plan, not code."""
-    context = generate_system_context(df, catalog=catalog, query=instruction, session_id=session_id)
+    context = generate_system_context(
+        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns
+    )
 
     revision_block = ""
     if previous_code:

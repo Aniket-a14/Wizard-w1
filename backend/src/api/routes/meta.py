@@ -26,6 +26,7 @@ from src.core.ingest.documents import supported_document_extensions
 from src.core.ingest.loader import DatasetLoader
 from src.core.llm import llm_provider, model_registry
 from src.core.llm.downloader import ProviderNotDownloadable, model_downloader
+from src.core.llm.reasoning import looks_like_reasoning_model
 from src.core.session import Session
 from src.core.tools import runtime as runtime_backend
 from src.utils.hostinfo import host_info
@@ -46,6 +47,45 @@ async def health() -> HealthResponse:
         execution_backend=backend,
         model_provider=settings.API_PROVIDER,
     )
+
+
+def performance_notes() -> list[str]:
+    """Configuration that will make this install slow, named in plain language.
+
+    The backend knows why a turn is expensive and the user does not, and the
+    answer to "why did that take twenty minutes" should be one screen rather than
+    a support conversation or a read through `config.py`.
+
+    Each note is checked by its *symptom*, not by whether the setting was pinned:
+    the host-sizing validator assigns to these fields, so `model_fields_set` no
+    longer distinguishes a user's choice from a derived one by the time anybody
+    can ask. Comparing against the measured machine works either way.
+    """
+    host = host_info()
+    notes: list[str] = []
+
+    if looks_like_reasoning_model(settings.MODEL_NAME):
+        notes.append(
+            f"MODEL_NAME ({settings.MODEL_NAME}) looks like a reasoning model. It is called three to five "
+            "times per question, and it thinks at length before each answer. Its thinking is stripped and "
+            "never reaches the answer, but you still wait for it — a plain instruct model is much faster here."
+        )
+
+    if settings.LLM_NUM_THREAD > host.cores:
+        notes.append(
+            f"LLM_NUM_THREAD is {settings.LLM_NUM_THREAD} on {host.cores} physical cores. Local inference is "
+            "memory-bandwidth bound, so extra threads add contention rather than throughput. Remove it from "
+            "backend/.env to have it measured."
+        )
+
+    if host.profile == "laptop" and settings.LLM_NUM_CTX > 8192:
+        notes.append(
+            f"LLM_NUM_CTX is {settings.LLM_NUM_CTX:,} on a laptop-class machine. This reserves KV cache for "
+            "every resident model, and the manager and worker alternate every step — so one gets evicted and "
+            "reloaded from disk each time. Prompts here stay under 8k. Remove it from backend/.env."
+        )
+
+    return notes
 
 
 @router.get("/api/config", response_model=ServerConfig)
@@ -84,6 +124,11 @@ async def server_config() -> ServerConfig:
         agent_grounding_check=settings.AGENT_GROUNDING_CHECK,
         context_docs_enabled=settings.CONTEXT_DOCS_ENABLED,
         supported_document_formats=supported_document_extensions(),
+        agent_turn_timeout=settings.AGENT_TURN_TIMEOUT,
+        llm_num_thread=settings.LLM_NUM_THREAD,
+        llm_num_ctx=settings.LLM_NUM_CTX,
+        llm_keep_alive=settings.LLM_KEEP_ALIVE,
+        performance_notes=performance_notes(),
     )
 
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { Loader2, RotateCcw, ShieldAlert, ShieldCheck, Volume2, VolumeX } from "lucide-react"
+import { AlertTriangle, Loader2, RotateCcw, ShieldAlert, ShieldCheck, Volume2, VolumeX } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader, Section } from "@/components/page-header"
@@ -210,6 +210,51 @@ export function SettingsWorkbench() {
           . Pull an embedding model to get semantic retrieval; without one, matching falls back to
           word overlap and nothing breaks.
         </p>
+      </Section>
+
+      <Section
+        title="Inference"
+        description="What local inference actually runs with. Derived from the machine above unless you pin them in backend/.env — and a pinned value that does not fit the machine is the usual reason a question is slow."
+      >
+        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+          <Fact
+            label="Inference threads"
+            value={config?.llm_num_thread ? String(config.llm_num_thread) : "—"}
+            tone={config && config.llm_num_thread > config.host_cores ? "warn" : undefined}
+          />
+          <Fact
+            label="Context window"
+            value={config?.llm_num_ctx ? config.llm_num_ctx.toLocaleString() : "—"}
+            mono
+          />
+          <Fact label="Model kept loaded" value={config?.llm_keep_alive || "—"} mono />
+          <Fact
+            label="Turn deadline"
+            value={
+              config ? (config.agent_turn_timeout > 0 ? `${Math.round(config.agent_turn_timeout)}s` : "None") : "—"
+            }
+          />
+        </dl>
+
+        {config && config.performance_notes.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {config.performance_notes.map((note) => (
+              <li
+                key={note}
+                className="flex gap-2.5 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-3 text-[12.5px] leading-relaxed text-foreground"
+              >
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
+                <span>{note}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+            Nothing here is working against this machine. The manager and worker models alternate every
+            step, so both are kept resident — the context window is sized so they fit together rather
+            than evicting each other.
+          </p>
+        )}
       </Section>
 
       <Section

@@ -110,3 +110,96 @@ def test_the_agent_tier_is_still_the_models_business_not_the_hosts() -> None:
     """
     assert tier_for_parameter_size("70B") == "full"
     assert Settings(SYSTEM_PROFILE="laptop").budget_for("auto", "70B").tier == "full"
+
+
+# --------------------------------------------------------------------------- #
+# Inference sizing
+#
+# These are not comfort settings. `LLM_NUM_CTX` is a *load-time* parameter: it
+# fixes the KV cache the provider reserves for every resident model, so asking
+# for more than the prompts reach evicts the worker to make room for the manager
+# on every iteration of the loop -- and each eviction costs a reload from disk.
+# --------------------------------------------------------------------------- #
+def test_context_length_is_sized_to_the_machine() -> None:
+    settings = Settings()
+    assert settings.LLM_NUM_CTX in (8192, 16384, 32768)
+    assert settings.LLM_NUM_CTX == {"laptop": 8192, "server": 16384, "hpc": 32768}[host_info().profile]
+
+
+def test_an_explicit_context_length_is_respected() -> None:
+    assert Settings(LLM_NUM_CTX=4096).LLM_NUM_CTX == 4096
+
+
+def test_a_zero_means_derive_it() -> None:
+    """`0` is the shipped default and reads as "unset" rather than "no context".
+
+    A plain absence would work too, but `.env` files are copied between machines
+    and an explicit `0` states the intent to let the host decide.
+    """
+    assert Settings(LLM_NUM_CTX=0).LLM_NUM_CTX >= 8192
+    assert Settings(LLM_NUM_THREAD=0).LLM_NUM_THREAD >= 2
+
+
+def test_the_docker_hostname_is_not_used_outside_a_container() -> None:
+    """`host.docker.internal` is a name Docker Desktop adds to the hosts file.
+
+    It resolves on a dev machine that has Docker and fails outright on one that
+    does not -- which is exactly the Docker-less install the local execution
+    backend exists to serve. The shipped default therefore has to be corrected
+    for where the backend actually is, which is already measured.
+    """
+    settings = Settings()
+    if host_info().containerised:
+        pytest.skip("running inside a container, where the Docker hostname is correct")
+    assert "host.docker.internal" not in settings.OLLAMA_BASE_URL
+    assert "host.docker.internal" not in settings.LMSTUDIO_BASE_URL
+    assert "127.0.0.1" in settings.OLLAMA_BASE_URL
+
+
+def test_an_explicit_url_is_never_rewritten() -> None:
+    """Compose passes the Docker hostname itself, and must keep it."""
+    pinned = Settings(OLLAMA_BASE_URL="http://host.docker.internal:11434")
+    assert pinned.OLLAMA_BASE_URL == "http://host.docker.internal:11434"
+
+
+# --------------------------------------------------------------------------- #
+# Output budgets
+# --------------------------------------------------------------------------- #
+def test_each_kind_of_call_gets_its_own_output_budget() -> None:
+    """One number for every call meant a decision could run to 4096 tokens."""
+    settings = Settings()
+    assert settings.output_budget("decision") < settings.output_budget("code")
+    assert settings.output_budget("review") < settings.output_budget("answer")
+    for purpose in ("plan", "decision", "code", "answer", "review"):
+        assert settings.output_budget(purpose) < settings.MAX_TOKENS
+
+
+def test_an_unknown_purpose_falls_back_to_the_ceiling() -> None:
+    assert Settings().output_budget("something-new") == Settings().MAX_TOKENS
+
+
+# --------------------------------------------------------------------------- #
+# Tier shape
+# --------------------------------------------------------------------------- #
+def test_only_a_compact_model_is_spared_the_decision_round_trip() -> None:
+    """Asking a 1.5B model to choose an action costs a call and buys nothing."""
+    assert not Settings(AGENT_TIER="compact").budget_for("auto").allow_decisions
+    assert Settings(AGENT_TIER="balanced").budget_for("auto").allow_decisions
+    assert Settings(AGENT_TIER="full").budget_for("auto").allow_decisions
+
+
+def test_deep_restores_the_decision_round_trip_even_on_a_compact_model() -> None:
+    """The tier's answer is a default about cost, and `deep` accepts the cost.
+
+    Leaving it off would make the composer's Deep control a no-op on exactly the
+    setup where someone is most likely to reach for it -- a small model that gave
+    a shallow first answer.
+    """
+    deep = Settings(AGENT_TIER="compact").budget_for("deep")
+    assert deep.allow_decisions
+    assert deep.iterations > Settings(AGENT_TIER="compact").budget_for("auto").iterations
+
+
+def test_fast_never_pays_for_a_decision() -> None:
+    """One iteration, so there is no next action to choose."""
+    assert Settings(AGENT_TIER="full").budget_for("fast").iterations == 1

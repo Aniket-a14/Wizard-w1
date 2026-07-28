@@ -13,6 +13,7 @@ import pytest
 
 from src.config import PROVIDERS, settings
 from src.core.llm import LLMRole, llm_provider
+from src.core.llm.provider import LLMProvider
 from src.core.llm.registry import ModelRegistry, classify
 
 
@@ -305,3 +306,64 @@ def test_refresh_bypasses_the_failure_cache(monkeypatch: pytest.MonkeyPatch) -> 
     payloads["http://lms:1234/api/v0/models"] = LMSTUDIO_NATIVE_PAYLOAD
     assert registry.list_models(provider="lmstudio") == []  # still cached
     assert len(registry.list_models(force=True, provider="lmstudio")) == 3
+
+
+# --------------------------------------------------------------------------- #
+# Ollama client construction
+# --------------------------------------------------------------------------- #
+def test_the_ollama_client_keeps_models_resident_and_bounds_its_requests(monkeypatch) -> None:
+    """Two properties the Ollama path lacked while the OpenAI path had both.
+
+    `keep_alive`: the manager and worker alternate every iteration of the loop,
+    so an eviction between them costs a full reload from disk each time. Ollama's
+    own default is five minutes, which one slow turn can exceed while it is still
+    running.
+
+    A request timeout: `ChatOllama` has no `timeout` field, so `client_kwargs` is
+    the only way to bound a call. Without it a wedged daemon hangs the turn
+    forever -- which is the other half of "it also did not complete".
+    """
+    captured: dict = {}
+
+    class _FakeChatOllama:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import langchain_ollama
+
+    monkeypatch.setattr(langchain_ollama, "ChatOllama", _FakeChatOllama)
+
+    provider = LLMProvider()
+    spec = provider.resolve(LLMRole.MANAGER, model="qwen2.5:3b", provider="ollama")
+    assert provider._build_client(spec) is not None
+
+    assert captured["keep_alive"] == settings.LLM_KEEP_ALIVE
+    assert captured["client_kwargs"] == {"timeout": settings.LLM_REQUEST_TIMEOUT}
+    assert captured["num_ctx"] == settings.LLM_NUM_CTX
+    assert captured["num_thread"] == settings.LLM_NUM_THREAD
+
+
+def test_a_per_call_output_budget_reaches_the_client(monkeypatch) -> None:
+    """`num_predict` is the whole point of the per-purpose budgets."""
+    captured: dict = {}
+
+    class _FakeChatOllama:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import langchain_ollama
+
+    monkeypatch.setattr(langchain_ollama, "ChatOllama", _FakeChatOllama)
+
+    provider = LLMProvider()
+    spec = provider.resolve(LLMRole.MANAGER, model="qwen2.5:3b", provider="ollama", max_tokens=512)
+    provider._build_client(spec)
+    assert captured["num_predict"] == 512
+
+
+def test_two_output_budgets_do_not_share_a_client() -> None:
+    """The budget is part of the cache key, or the first one set would stick."""
+    provider = LLMProvider()
+    small = provider.resolve(LLMRole.MANAGER, model="m", provider="ollama", max_tokens=512)
+    large = provider.resolve(LLMRole.MANAGER, model="m", provider="ollama", max_tokens=1536)
+    assert small.cache_key() != large.cache_key()

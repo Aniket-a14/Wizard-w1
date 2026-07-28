@@ -303,6 +303,18 @@ export interface ServerConfig {
   agent_grounding_check: boolean
   context_docs_enabled: boolean
   supported_document_formats: string[]
+  agent_turn_timeout: number
+
+  /**
+   * What local inference was actually configured with. Derived from the machine
+   * unless pinned in the .env, and getting them wrong is the usual reason a
+   * question is slow — so they are shown rather than left in a file.
+   */
+  llm_num_thread: number
+  llm_num_ctx: number
+  llm_keep_alive: string
+  /** Settings that will make this install slow, in plain language. Usually empty. */
+  performance_notes: string[]
 
   /** Where generated code runs, and what the server measured about this host. */
   execution_backend: ExecutionBackend

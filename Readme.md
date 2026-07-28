@@ -73,7 +73,9 @@ It is not a security boundary: the subprocess runs as you, with your files. The 
 
 Any model you have pulled appears in the picker, and the app picks a sensible one per role on its own — no model name is configured anywhere by default.
 
-**A note on model size.** The agent decides its own next step each iteration, which is a lot to ask of a very small model. Under 4B parameters it automatically runs a shorter loop with no self-revision and no verification pass; 7B and up is where the investigation behaviour starts to earn its cost. It still works below that — it just does less.
+**A note on model size.** The agent decides its own next step each iteration, which is a lot to ask of a very small model. Under 4B parameters it does not ask: it runs a shorter, deterministic loop — write the code, correct it if it fails, answer — with no self-revision and no verification pass. That is three model calls for a question instead of nine, which is the difference between a minute and twenty on a laptop. 7B and up is where the investigation behaviour starts to earn its round-trips. Picking **Deep** in the composer restores them at any size.
+
+**Do not put a reasoning model in the manager role.** `MODEL_NAME` is the model that plans, decides and writes the answer — three to five calls per question. A reasoning model (`deepseek-r1`, `qwq`, anything that thinks out loud) spends hundreds to thousands of tokens deliberating before each one, and on a small distill that is minutes per call. Its thinking is stripped correctly and never reaches the answer, but you still pay for it. Use a plain instruct model here — `qwen2.5:3b` and `llama3.2:3b` are both good and small. A reasoning model is fine as the `WORKER_MODEL_NAME`, which is called once per step.
 
 ### Using LM Studio instead of (or alongside) Ollama
 
@@ -263,7 +265,14 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](.
 
 ## Troubleshooting
 
-**The backend cannot reach Ollama.** On Linux, `host.docker.internal` is not automatic; the compose file adds a `host-gateway` alias for it. If you still cannot connect, set `OLLAMA_BASE_URL=http://172.17.0.1:11434`.
+**A question takes many minutes, or never finishes.** Four things to check, in order of how much they usually cost:
+
+1. **Is `MODEL_NAME` a reasoning model?** See the note above — this is by far the most common cause. `deepseek-r1:1.5b` as the manager can spend minutes per call thinking.
+2. **Is `LLM_NUM_THREAD` set in `backend/.env`?** Delete it. Local inference is memory-bandwidth bound, so more threads than *physical* cores is contention, not throughput — 8 threads on a 4-core laptop is slower than 4. Unset, it is measured. Same for `LLM_NUM_CTX`: unset it and the context is sized to the machine, which also stops the provider evicting one model to make room for the other on every step.
+3. **Are both models staying loaded?** `ollama ps` during a run. The manager and worker alternate, so if only one is resident each step is paying a reload from disk. Smaller models, or a smaller `LLM_NUM_CTX`, fix it.
+4. `AGENT_TURN_TIMEOUT` (default 300s) bounds a turn regardless: on reaching it the agent stops exploring and answers from what it has, and says so. Raise it if you would rather wait.
+
+**The backend cannot reach Ollama.** If the backend runs outside Docker, leave `OLLAMA_BASE_URL` unset — the shipped default is rewritten to `127.0.0.1` when the backend is not itself containerised, because `host.docker.internal` only resolves on machines that have Docker Desktop. Inside compose the file passes the right value itself. On Linux the compose file adds a `host-gateway` alias; if you still cannot connect, set `OLLAMA_BASE_URL=http://172.17.0.1:11434`.
 
 **Settings shows "Local subprocess" instead of "Docker container".** Docker is unreachable, so code is running in a subprocess of the backend. That is a supported mode — bounded, interruptible, and it keeps variables between steps — but it is not isolated from your filesystem. Start Docker Desktop and reload to get a container back.
 

@@ -163,6 +163,16 @@ class LLMProvider:
                     num_ctx=spec.num_ctx,
                     num_thread=settings.LLM_NUM_THREAD,
                     repeat_penalty=1.1,
+                    # The manager and worker alternate every iteration, so an
+                    # eviction between them costs a full reload from disk each
+                    # time. Ollama's own default is five minutes, which one slow
+                    # turn can exceed while it is still running.
+                    keep_alive=settings.LLM_KEEP_ALIVE,
+                    # ChatOllama has no `timeout` field, so this is the only way
+                    # to bound a request. Without it a wedged daemon hangs the
+                    # turn forever -- the OpenAI-compatible path has had a
+                    # timeout all along and this one had none.
+                    client_kwargs={"timeout": settings.LLM_REQUEST_TIMEOUT},
                 )
 
             try:
@@ -206,9 +216,10 @@ class LLMProvider:
         model: str | None = None,
         temperature: float | None = None,
         provider: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Blocking completion. Returns "" when the provider is unreachable."""
-        spec = self.resolve(role, model=model, temperature=temperature, provider=provider)
+        spec = self.resolve(role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens)
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
@@ -226,8 +237,9 @@ class LLMProvider:
         model: str | None = None,
         temperature: float | None = None,
         provider: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
-        spec = self.resolve(role, model=model, temperature=temperature, provider=provider)
+        spec = self.resolve(role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens)
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
@@ -245,19 +257,27 @@ class LLMProvider:
         model: str | None = None,
         temperature: float | None = None,
         provider: str | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         """Yields text deltas as the model produces them.
 
         Falls back to a single yield of the full response when the underlying
         client does not implement ``astream``.
         """
-        spec = self.resolve(role, model=model, temperature=temperature, provider=provider)
+        spec = self.resolve(role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens)
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
 
         if not hasattr(client, "astream"):
-            yield await self.acomplete(prompt, role=role, model=model, temperature=temperature, provider=provider)
+            yield await self.acomplete(
+                prompt,
+                role=role,
+                model=model,
+                temperature=temperature,
+                provider=provider,
+                max_tokens=max_tokens,
+            )
             return
 
         try:
@@ -277,6 +297,7 @@ class LLMProvider:
         model: str | None = None,
         temperature: float | None = None,
         provider: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Streams a completion, invoking ``on_delta`` per chunk, and returns the full text.
 
@@ -284,7 +305,14 @@ class LLMProvider:
         straight into a WebSocket without wrapping.
         """
         buffer: list[str] = []
-        async for delta in self.astream(prompt, role=role, model=model, temperature=temperature, provider=provider):
+        async for delta in self.astream(
+            prompt,
+            role=role,
+            model=model,
+            temperature=temperature,
+            provider=provider,
+            max_tokens=max_tokens,
+        ):
             buffer.append(delta)
             if on_delta is not None:
                 result = on_delta(delta)

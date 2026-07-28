@@ -53,18 +53,30 @@ class TierBudget:
     allow_verification: bool
     #: Characters of prior-step output carried into the next decision.
     observation_chars: int
+    #: Whether the *model* chooses the next action, or the loop does.
+    #:
+    #: Asking costs a manager round-trip per iteration, and on a small model it
+    #: buys nothing: it reads a 1500-character transcript and picks from three
+    #: options it does not reliably distinguish. Worse, a reasoning distill
+    #: spends its whole output budget deliberating and returns nothing usable,
+    #: so the round-trip is paid and the default is taken anyway. Below the
+    #: balanced tier the loop is therefore deterministic -- run the code, correct
+    #: it if it fails, answer -- which is the shape a compact model executes well
+    #: and turns a nine-call turn into a three-call one.
+    allow_decisions: bool = True
 
 
 TIER_BUDGETS: dict[str, TierBudget] = {
     "compact": TierBudget(
         tier="compact",
-        iterations=4,
-        deep_iterations=6,
+        iterations=3,
+        deep_iterations=5,
         max_columns=25,
         doc_chunks=2,
         allow_reflection=False,
         allow_verification=False,
         observation_chars=1500,
+        allow_decisions=False,
     ),
     "balanced": TierBudget(
         tier="balanced",
@@ -281,12 +293,43 @@ class Settings(BaseSettings):
     GATEWAY_API_KEY: str = ""
     PLOT_FORMAT: Literal["png", "html"] = "html"
 
-    # Analysis Configuration
+    # ------------------------------------------------------------------ #
+    # Inference
+    #
+    # MAX_TOKENS is a *ceiling*, not a target -- but it used to be the only
+    # number, so every call was allowed 4096 tokens of output regardless of what
+    # it was for. That is free when a model stops on its own and ruinous when it
+    # does not: a reasoning distill asked to pick one word from a three-item menu
+    # will happily spend the entire budget deliberating, which on a CPU-bound
+    # 1.5B model is four minutes for a decision worth sixty tokens. The per-call
+    # budgets below are what each kind of call actually needs.
+    # ------------------------------------------------------------------ #
     MAX_TOKENS: int = 4096
     TEMPERATURE: float = 0.0
-    LLM_NUM_CTX: int = 16384
-    LLM_NUM_THREAD: int = 8
+    #: Context window requested from Ollama. Derived from the host when unset --
+    #: this is a *load-time* parameter, so it fixes the KV cache Ollama allocates
+    #: for every resident model, and two models at 16k on a 16 GB laptop is the
+    #: difference between both staying warm and one being evicted on every
+    #: manager/worker alternation. Not sent to OpenAI-compatible servers, which
+    #: fix context length when the model is loaded.
+    LLM_NUM_CTX: int = 0
+    #: Inference threads. Derived from physical cores when unset.
+    LLM_NUM_THREAD: int = 0
     LLM_REQUEST_TIMEOUT: int = 300
+    #: How long a provider should keep a model resident after answering. The
+    #: manager and worker alternate all turn, so an eviction between them costs a
+    #: full reload from disk on every single iteration. Ollama's own default is
+    #: five minutes, which a slow turn can exceed while it is still running.
+    LLM_KEEP_ALIVE: str = "30m"
+
+    #: Output budget per kind of call. Generous enough that a reasoning model can
+    #: finish a thought, small enough that it cannot spend a turn on one.
+    LLM_MAX_TOKENS_PLAN: int = 1024
+    LLM_MAX_TOKENS_DECISION: int = 512
+    LLM_MAX_TOKENS_CODE: int = 1536
+    LLM_MAX_TOKENS_ANSWER: int = 1024
+    LLM_MAX_TOKENS_REVIEW: int = 256
+
     MAX_CORRECTION_RETRIES: int = 3
 
     # ------------------------------------------------------------------ #
@@ -317,6 +360,13 @@ class Settings(BaseSettings):
     AGENT_GROUNDING_CHECK: bool = True
     # Emit a reproducible standalone script for each completed analysis.
     AGENT_EMIT_SCRIPT: bool = True
+    # Wall-clock ceiling for one turn, in seconds. When it is reached the loop
+    # stops starting new work and answers from what it already has, so a slow
+    # model degrades into a worse answer rather than into no answer at all.
+    # `0` disables it. This is a deadline, not a kill: whatever call is in
+    # flight finishes, because cancelling it would throw away work already paid
+    # for and leave the provider mid-generation.
+    AGENT_TURN_TIMEOUT: float = 300.0
 
     # Council review (each specialist costs an LLM round-trip)
     COUNCIL_ENABLED: bool = True
@@ -421,7 +471,7 @@ class Settings(BaseSettings):
         }
         host = host_info()
 
-        if "LLM_NUM_THREAD" not in explicit:
+        if "LLM_NUM_THREAD" not in explicit or self.LLM_NUM_THREAD <= 0:
             # Physical cores. More threads than cores makes local inference
             # slower, not faster -- the work is memory-bandwidth bound.
             self.LLM_NUM_THREAD = max(2, min(16, host.cores))
@@ -430,6 +480,29 @@ class Settings(BaseSettings):
             self.QUEUE_MAX_WORKERS = max(1, min(4, host.cores // 2))
 
         ram = host.ram_bytes
+
+        if "LLM_NUM_CTX" not in explicit or self.LLM_NUM_CTX <= 0:
+            # Sized to what the prompts actually reach, not to what the model
+            # permits. Everything built here is budgeted -- the dataset context
+            # by column relevance, the transcript by `observation_chars` -- so a
+            # full-tier prompt lands near 6k tokens and a compact one near 2k.
+            # Asking for more than that does not admit a longer prompt; it
+            # reserves KV cache that then has to be found for every resident
+            # model, which is how a laptop ends up evicting the worker to make
+            # room for the manager on every iteration.
+            self.LLM_NUM_CTX = {"laptop": 8192, "server": 16384, "hpc": 32768}.get(host.profile, 8192)
+
+        if "OLLAMA_BASE_URL" not in explicit and not host.containerised:
+            # `host.docker.internal` is how a container reaches its host, and it
+            # is the right default *in* compose. Outside one it is a name Docker
+            # Desktop happens to add to the hosts file, so it resolves on a dev
+            # machine with Docker installed and fails outright on one without --
+            # which is precisely the Docker-less install the local backend exists
+            # to serve. Where we are is already measured, so it is not guessed.
+            self.OLLAMA_BASE_URL = self.OLLAMA_BASE_URL.replace("host.docker.internal", "127.0.0.1")
+
+        if "LMSTUDIO_BASE_URL" not in explicit and not host.containerised:
+            self.LMSTUDIO_BASE_URL = self.LMSTUDIO_BASE_URL.replace("host.docker.internal", "127.0.0.1")
         if "SANDBOX_MEM_LIMIT" not in explicit and ram:
             # An eighth of RAM per sandbox: enough for a real frame, small
             # enough that several sessions plus a local model still fit.
@@ -540,7 +613,30 @@ class Settings(BaseSettings):
             budget,
             iterations=min(iterations, self.AGENT_MAX_ITERATIONS),
             observation_chars=min(budget.observation_chars, self.AGENT_OBSERVATION_CHARS),
+            # `deep` restores the decision round-trip even on a compact model.
+            # The tier's answer to "should this model steer itself" is a default
+            # about what is worth paying for, and someone who reached for `deep`
+            # has said the cost is acceptable. Leaving it off would make the
+            # control a no-op on exactly the setup where the user is most likely
+            # to reach for it -- a small model that gave a shallow first answer.
+            allow_decisions=budget.allow_decisions or mode == "deep",
         )
+
+    def output_budget(self, purpose: str) -> int:
+        """Tokens one kind of call may produce, clamped to ``MAX_TOKENS``.
+
+        Clamped rather than maxed: ``MAX_TOKENS`` is the ceiling someone lowers
+        when their context is small, and a per-purpose budget must not quietly
+        raise it back.
+        """
+        budgets = {
+            "plan": self.LLM_MAX_TOKENS_PLAN,
+            "decision": self.LLM_MAX_TOKENS_DECISION,
+            "code": self.LLM_MAX_TOKENS_CODE,
+            "answer": self.LLM_MAX_TOKENS_ANSWER,
+            "review": self.LLM_MAX_TOKENS_REVIEW,
+        }
+        return max(64, min(self.MAX_TOKENS, budgets.get(purpose, self.MAX_TOKENS)))
 
     @property
     def cors_origins(self) -> list[str]:

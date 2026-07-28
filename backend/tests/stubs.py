@@ -29,23 +29,28 @@ class ScriptedLLM:
         self.prompts.append("")
         return self.responses.pop(0) if self.responses else "No more scripted responses."
 
-    async def acomplete(self, prompt: str, **_: object) -> str:
+    def _take(self, prompt: str) -> str:
+        """Consumes one scripted response. The single place a call is counted."""
         self.prompts.append(prompt)
         return self.responses.pop(0) if self.responses else "Done."
+
+    async def acomplete(self, prompt: str, **_: object) -> str:
+        return self._take(prompt)
 
     def complete(self, prompt: str, **_: object) -> str:
-        self.prompts.append(prompt)
-        return self.responses.pop(0) if self.responses else "Done."
+        return self._take(prompt)
 
     async def astream(self, prompt: str, **_: object) -> AsyncIterator[str]:
-        text = await self.acomplete(prompt)
+        text = self._take(prompt)
         # Emit in small pieces so streaming behaviour is genuinely exercised.
         for index in range(0, len(text), 7):
             yield text[index : index + 7]
 
-    async def stream_to(self, prompt: str, on_delta=None, **_: object) -> str:
+    async def stream_to(self, prompt: str, on_delta=None, **kwargs: object) -> str:
         chunks: list[str] = []
-        async for delta in self.astream(prompt):
+        # Forwarded so a subclass overriding `astream` sees the real call
+        # arguments; without this a streamed call records as a bare one.
+        async for delta in self.astream(prompt, **kwargs):
             chunks.append(delta)
             if on_delta is not None:
                 result = on_delta(delta)
@@ -67,6 +72,9 @@ class RecordingLLM(ScriptedLLM):
                 "role": str(kwargs.get("role", "")),
                 "model": kwargs.get("model"),
                 "provider": kwargs.get("provider"),
+                # Recorded so a test can assert that a call asked for the output
+                # budget its purpose needs, rather than the global ceiling.
+                "max_tokens": kwargs.get("max_tokens"),
             }
         )
 
@@ -78,6 +86,12 @@ class RecordingLLM(ScriptedLLM):
         self._record(kwargs)
         return super().complete(prompt)
 
-    async def stream_to(self, prompt: str, on_delta=None, **kwargs: object) -> str:
+    async def astream(self, prompt: str, **kwargs: object):
         self._record(kwargs)
-        return await super().stream_to(prompt, on_delta)
+        async for delta in super().astream(prompt):
+            yield delta
+
+    async def stream_to(self, prompt: str, on_delta=None, **kwargs: object) -> str:
+        # `super().stream_to` drives `astream`, which records on its own, so
+        # this must not record too -- a streaming call is one call.
+        return await super().stream_to(prompt, on_delta, **kwargs)

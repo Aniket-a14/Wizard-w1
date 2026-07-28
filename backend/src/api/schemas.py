@@ -56,6 +56,16 @@ class ServerConfig(BaseModel):
     agent_grounding_check: bool = True
     context_docs_enabled: bool = True
     supported_document_formats: list[str] = Field(default_factory=list)
+    agent_turn_timeout: float = 300.0
+    # What local inference was actually configured with. These are derived from
+    # the machine unless pinned, and getting them wrong is the usual reason a
+    # question is slow — so they are shown rather than left in a file.
+    llm_num_thread: int = 0
+    llm_num_ctx: int = 0
+    llm_keep_alive: str = ""
+    #: Settings that will make this install slow, in plain language. Empty when
+    #: there is nothing to say, which is the common case.
+    performance_notes: list[str] = Field(default_factory=list)
     # Where generated code runs, and on what machine. `sandbox_available` says
     # only whether Docker answered; these say what is actually in use.
     execution_backend: Literal["docker", "local", "inprocess"] = "inprocess"

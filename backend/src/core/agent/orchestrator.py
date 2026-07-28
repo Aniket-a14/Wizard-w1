@@ -64,6 +64,7 @@ from src.core.execution import ExecutionResult
 from src.core.feedback_store import FeedbackStore
 from src.core.llm import LLMRole, llm_provider, model_registry
 from src.core.llm.provider import LLMUnavailableError
+from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
 from src.core.memory import working_memory
 from src.core.prompts import (
     create_answer_prompt,
@@ -84,9 +85,6 @@ if TYPE_CHECKING:
     from src.core.session import Session
 
 
-THOUGHT_PATTERN = re.compile(r"<thought>(.*?)</thought>", re.DOTALL)
-OPEN_THOUGHT = re.compile(r"<thought>", re.IGNORECASE)
-CLOSE_THOUGHT = re.compile(r"</thought>", re.IGNORECASE)
 SEARCH_PATTERN = re.compile(r'SEARCH:\s*"(.*?)"')
 
 #: Lines the verification step is asked to print, and what they mean.
@@ -372,21 +370,30 @@ class AnalysisOrchestrator:
             state.instruction,
             session.df,
             catalog=session.catalog,
-            mode="fast" if state.mode == "fast" else "standard",
+            # A compact model gets the terse prompt whatever the mode. The
+            # standard one asks for a `<thought>` block, which on a reasoning
+            # distill means it thinks twice -- once natively and once to order --
+            # for a plan that the loop is about to revise from real output anyway.
+            mode="fast" if state.mode == "fast" or budget.tier == "compact" else "standard",
             memory_context=working_memory.get_context_string(state.instruction, session_id=session.id),
             previous_code=previous_code if self.is_visual_revision(state.instruction, previous_code) else None,
             session_id=session.id,
             history=session.history_prompt(),
+            max_columns=budget.max_columns,
         )
 
         raw = await self._stream_plan(prompt, session, emitter)
 
-        thought_match = THOUGHT_PATTERN.search(raw)
-        if thought_match:
-            state.thought = thought_match.group(1).strip()
-            state.plan = THOUGHT_PATTERN.sub("", raw).strip()
-        else:
-            state.plan = raw.strip()
+        # Reasoning is separated here, not just rendered separately. `state.plan`
+        # is embedded in every later decision prompt and in the answer prompt, so
+        # a chain of thought left in it is re-read by the model on every
+        # subsequent call -- which is how one unrecognised tag pair turned into
+        # most of a turn.
+        state.thought, state.plan = split_reasoning(raw)
+        if not state.plan:
+            # The model spent its whole budget thinking. Its reasoning is the
+            # only thing it produced, and it is better than an empty plan.
+            state.plan = state.thought[:1000] or f"Answer the question directly: {state.instruction}"
 
         await emit(emitter, EventType.STEP_END, id="plan", ok=True, duration_ms=state.elapsed_ms)
 
@@ -422,57 +429,38 @@ class AnalysisOrchestrator:
     async def _stream_plan(self, prompt: str, session: Session, emitter: Emitter | None) -> str:
         """Streams the manager response, splitting reasoning from plan as it arrives.
 
-        The model emits ``<thought>…</thought>`` then the plan. Rather than waiting
-        for the whole response and regex-splitting it afterwards, the tag boundary
-        is tracked incrementally so the UI can render a live "thinking" panel that
+        The model emits a reasoning block then the plan. Rather than waiting for
+        the whole response and regex-splitting it afterwards, the tag boundary is
+        tracked incrementally so the UI can render a live "thinking" panel that
         switches to the plan at the right moment.
+
+        The tags come from :mod:`src.core.llm.reasoning` rather than being
+        spelled out here, because the set that matters is not the one this
+        prompt asks for -- a reasoning model emits ``<think>`` whatever it was
+        asked for, and that block was previously streamed to the UI as the plan.
         """
         buffer: list[str] = []
-        inside_thought = False
-        seen_thought = False
-        pending = ""
+        splitter = ReasoningStream()
+
+        async def emit_chunks(chunks: list[tuple[bool, str]]):
+            for is_reasoning, text in chunks:
+                if not text:
+                    continue
+                # Text outside a reasoning block is the plan, whether or not a
+                # block was ever seen. It previously became a `reasoning_delta`
+                # until the first tag arrived, so a plan produced without one --
+                # which is every `fast` plan, since that prompt asks for no
+                # reasoning block at all -- streamed entirely into the thinking
+                # panel and left the plan panel empty.
+                await emit(
+                    emitter,
+                    EventType.REASONING_DELTA if is_reasoning else EventType.PLAN_DELTA,
+                    content=text,
+                )
 
         async def on_delta(delta: str):
-            nonlocal inside_thought, seen_thought, pending
             buffer.append(delta)
-            pending += delta
-
-            while pending:
-                if not inside_thought:
-                    open_match = OPEN_THOUGHT.search(pending)
-                    if open_match:
-                        before = pending[: open_match.start()]
-                        if before.strip():
-                            await emit(emitter, EventType.PLAN_DELTA, content=before)
-                        pending = pending[open_match.end() :]
-                        inside_thought = True
-                        seen_thought = True
-                        continue
-                    # Hold back a partial "<thought" prefix rather than leaking it.
-                    if "<" in pending and len(pending) < 16:
-                        return
-                    if pending:
-                        await emit(
-                            emitter,
-                            EventType.REASONING_DELTA if not seen_thought else EventType.PLAN_DELTA,
-                            content=pending,
-                        )
-                        pending = ""
-                    return
-
-                close_match = CLOSE_THOUGHT.search(pending)
-                if close_match:
-                    inner = pending[: close_match.start()]
-                    if inner:
-                        await emit(emitter, EventType.REASONING_DELTA, content=inner)
-                    pending = pending[close_match.end() :]
-                    inside_thought = False
-                    continue
-                if "<" in pending and len(pending) < 16:
-                    return
-                await emit(emitter, EventType.REASONING_DELTA, content=pending)
-                pending = ""
-                return
+            await emit_chunks(splitter.feed(delta))
 
         await llm_provider.stream_to(
             prompt,
@@ -481,9 +469,9 @@ class AnalysisOrchestrator:
             model=session.models.manager,
             temperature=session.models.temperature,
             provider=session.models.manager_provider,
+            max_tokens=settings.output_budget("plan"),
         )
-        if pending:
-            await emit(emitter, EventType.PLAN_DELTA, content=pending)
+        await emit_chunks(splitter.flush())
         return "".join(buffer)
 
     # ------------------------------------------------------------------ #
@@ -522,6 +510,21 @@ class AnalysisOrchestrator:
         allowed = self._allowed_actions(session, budget)
 
         for iteration in range(1, budget.iterations + 1):
+            # Checked before the iteration is claimed, never during it: a call
+            # in flight is already paid for, and cancelling it would leave the
+            # provider mid-generation with nothing to show for the tokens. It
+            # also must not increment `iterations_used` first -- the turn would
+            # then report an iteration it abandoned before doing any work.
+            if iteration > 1 and self._out_of_time(state):
+                note = (
+                    f"Stopped exploring after {state.elapsed_ms // 1000}s and answered from what was "
+                    f"already established. Raise AGENT_TURN_TIMEOUT, or use a smaller model, for a longer run."
+                )
+                state.warnings.append(note)
+                await emit(emitter, EventType.WARNING, content=note)
+                logger.info("Turn deadline reached", elapsed_ms=state.elapsed_ms, iteration=iteration)
+                break
+
             state.iterations_used = iteration
             remaining = budget.iterations - iteration
 
@@ -600,6 +603,12 @@ class AnalysisOrchestrator:
         if state.from_cache and not state.error:
             return Decision(kind=ActionKind.ANSWER, goal="Report the cached result.")
 
+        # Below the balanced tier the loop decides for itself. See
+        # `TierBudget.allow_decisions`: the round-trip is real and the choice is
+        # not, so it is made from what actually happened instead.
+        if not budget.allow_decisions:
+            return self._decide_deterministically(state)
+
         state.phase = Phase.DECIDING
         await emit(emitter, EventType.STATUS, content="Deciding what to do next", phase=Phase.DECIDING.value)
 
@@ -620,19 +629,55 @@ class AnalysisOrchestrator:
                 model=session.models.manager,
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
+                max_tokens=settings.output_budget("decision"),
             )
         except LLMUnavailableError:
             # Losing the manager mid-run should not lose the work already done.
             logger.warning("Manager unavailable mid-loop; answering with what is known")
             return Decision(kind=ActionKind.ANSWER, goal="Report what has been established.", inferred=True)
 
+        # Parsed from the visible text only. A chain of thought names every
+        # option while it weighs them, so parsing the raw response makes the
+        # choice a race between whichever keyword the model happened to mention
+        # first while deliberating.
+        visible = strip_reasoning(raw)
+
         # On the last iteration the only useful choice is to answer, so it is
         # made here rather than trusted to a model watching its own budget.
-        default = ActionKind.ANSWER if remaining <= 0 else ActionKind.CODE
-        decision = parse_decision(raw, allowed=allowed, default=default)
+        default = self._decide_deterministically(state).kind if remaining > 0 else ActionKind.ANSWER
+        decision = parse_decision(visible, allowed=allowed, default=default)
         if remaining <= 0:
             decision.kind = ActionKind.ANSWER
         return decision
+
+    @staticmethod
+    def _decide_deterministically(state: RunState) -> Decision:
+        """What to do next, read off what has already happened.
+
+        Used as the whole decision on the compact tier, and as the *default* on
+        every tier when the model's answer is unparseable. The old default was
+        ``code`` unconditionally, which spent another generate-and-execute cycle
+        every time a small model returned prose -- so the failure mode of asking
+        a weak model to choose was to keep working rather than to stop.
+
+        Succeeding is the signal to stop. An analysis that ran and printed
+        something has produced the material an answer is written from; carrying
+        on is how a one-step question turns into a four-iteration turn.
+        """
+        last = state.investigation.steps[-1] if state.investigation.steps else None
+        if last is not None and last.ok and (last.observation or "").strip():
+            return Decision(
+                kind=ActionKind.ANSWER,
+                goal="Report the result that has already been computed.",
+                inferred=True,
+            )
+        return Decision(kind=ActionKind.CODE, goal=state.instruction, inferred=True)
+
+    @staticmethod
+    def _out_of_time(state: RunState) -> bool:
+        """Whether this turn has spent its wall-clock budget."""
+        limit = settings.AGENT_TURN_TIMEOUT
+        return limit > 0 and state.elapsed_ms >= limit * 1000
 
     # ------------------------------------------------------------------ #
     # Actions
@@ -739,11 +784,14 @@ class AnalysisOrchestrator:
                 model=session.models.manager,
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
+                max_tokens=settings.output_budget("plan"),
             )
         except LLMUnavailableError:
             return
 
-        revised = revised.strip()
+        # The revised plan replaces `state.plan`, which every later prompt
+        # embeds, so a chain of thought left in here is paid for repeatedly.
+        revised = strip_reasoning(revised)
         if not revised:
             return
 
@@ -913,6 +961,7 @@ class AnalysisOrchestrator:
             previous_code=previous_code if self.is_visual_revision(state.instruction, previous_code) else None,
             session_id=session.id,
             negative_example=negative.text if negative else None,
+            max_columns=budget.max_columns,
         )
 
         raw = await llm_provider.acomplete(
@@ -921,6 +970,7 @@ class AnalysisOrchestrator:
             model=session.models.worker,
             temperature=session.models.temperature,
             provider=session.models.worker_provider,
+            max_tokens=settings.output_budget("code"),
         )
         state.code = self._extract_code(raw)
 
@@ -932,7 +982,15 @@ class AnalysisOrchestrator:
 
     @staticmethod
     def _extract_code(response: str) -> str:
-        """Pulls the python block out of a model response."""
+        """Pulls the python block out of a model response.
+
+        Reasoning is removed *first*, and that ordering is the whole point: a
+        model thinking out loud drafts code inside ``<think>``, discards it, and
+        writes the real answer afterwards -- while this takes the **first**
+        fenced block it finds. Searching the raw response therefore runs the
+        draft the model already rejected.
+        """
+        response = strip_reasoning(response)
         fenced = re.search(r"```(?:python|py)?\s*\n(.*?)```", response, re.DOTALL)
         if fenced:
             return fenced.group(1).strip()
@@ -1003,6 +1061,12 @@ class AnalysisOrchestrator:
             return
         if state.blocked or state.error or not state.code or state.from_cache:
             return
+        if self._out_of_time(state):
+            # A second code generation *and* a second execution. It is the most
+            # expensive thing left in the turn, so it is the first thing a
+            # deadline gives up.
+            logger.info("Skipping verification, turn deadline reached", elapsed_ms=state.elapsed_ms)
+            return
 
         state.phase = Phase.VERIFYING
         await emit(emitter, EventType.STEP_START, id="verify", label="Verifying the result", kind="verify")
@@ -1015,6 +1079,7 @@ class AnalysisOrchestrator:
                 model=session.models.worker,
                 temperature=session.models.temperature,
                 provider=session.models.worker_provider,
+                max_tokens=settings.output_budget("code"),
             )
         except LLMUnavailableError:
             await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
@@ -1126,10 +1191,24 @@ class AnalysisOrchestrator:
         )
 
         chunks: list[str] = []
+        splitter = ReasoningStream()
+
+        async def emit_chunks(pieces: list[tuple[bool, str]]):
+            for is_reasoning, text in pieces:
+                if not text:
+                    continue
+                if is_reasoning:
+                    # Shown in the thinking panel, never as the answer. A
+                    # reasoning manager streamed its whole chain of thought into
+                    # the message body, so the user watched it deliberate and
+                    # then read the deliberation as the result.
+                    await emit(emitter, EventType.REASONING_DELTA, content=text)
+                    continue
+                chunks.append(text)
+                await emit(emitter, EventType.CONTENT_DELTA, content=text)
 
         async def on_delta(delta: str):
-            chunks.append(delta)
-            await emit(emitter, EventType.CONTENT_DELTA, content=delta)
+            await emit_chunks(splitter.feed(delta))
 
         try:
             await llm_provider.stream_to(
@@ -1139,7 +1218,9 @@ class AnalysisOrchestrator:
                 model=session.models.manager,
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
+                max_tokens=settings.output_budget("answer"),
             )
+            await emit_chunks(splitter.flush())
             state.answer = "".join(chunks).strip()
         except LLMUnavailableError:
             # Falling back to raw output is strictly better than failing the turn.

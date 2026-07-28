@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config import settings
 from src.core.agent.events import EventCollector
 from src.core.agent.orchestrator import RunResult, orchestrator
 from src.core.execution import ExecutionResult
@@ -36,6 +37,50 @@ def _run_sync(coro):
     except RuntimeError:
         return asyncio.run(coro)
     raise RuntimeError("_run_sync called from inside a running event loop; await the coroutine instead.")
+
+
+#: Object columns sampled when deciding whether a frame needs cleaning. The
+#: check has to be cheap enough to be worth doing -- it exists to *avoid* work.
+_CLEAN_CHECK_ROWS = 200
+_CLEAN_CHECK_COLUMNS = 40
+
+
+def _needs_cleaning(df: pd.DataFrame) -> bool:
+    """Whether anything the cleaning prompt asks for actually applies here.
+
+    Mirrors the three concrete rules in :func:`create_cleaning_prompt`: missing
+    values, text that is really a number or a date, and untrimmed whitespace.
+    Anything else the model might do is out of scope by that prompt's own rules,
+    so finding none of these means the call would return ``pass``.
+
+    Deliberately conservative: an unreadable column counts as "might need
+    cleaning" and the model is asked. Skipping a needed clean is a data bug;
+    running an unneeded one only costs time.
+    """
+    if df.empty:
+        return False
+    if df.isna().to_numpy().any():
+        return True
+
+    for column in list(df.columns)[:_CLEAN_CHECK_COLUMNS]:
+        series = df[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        sample = series.dropna().head(_CLEAN_CHECK_ROWS)
+        if sample.empty:
+            continue
+        text = sample.astype(str)
+        if (text != text.str.strip()).any():
+            return True
+        try:
+            if pd.to_numeric(text, errors="coerce").notna().all():
+                return True
+            if pd.to_datetime(text, errors="coerce", format="mixed").notna().all():
+                return True
+        except (ValueError, TypeError):
+            return True
+
+    return False
 
 
 class ScientificAgent:
@@ -78,12 +123,21 @@ class ScientificAgent:
         logger.info("Starting semantic cleaning")
         catalog = CatalogEngine.analyze(df)
 
+        # Asked before the model is: every upload used to buy a worker
+        # round-trip and a sandbox execution to be told the data was already
+        # fine, which on a local model is the slowest thing that happens between
+        # choosing a file and seeing it appear. The prompt's own rules name
+        # exactly three problems, so all three can simply be looked for.
+        if not _needs_cleaning(df):
+            return df, catalog, "No cleaning was necessary."
+
         try:
             response = llm_provider.complete(
                 create_cleaning_prompt(df, catalog),
                 role=LLMRole.WORKER,
                 model=session.models.worker,
                 provider=session.models.worker_provider,
+                max_tokens=settings.output_budget("code"),
             )
         except Exception as exc:
             logger.warning("Cleaning skipped, model unavailable", error=str(exc))

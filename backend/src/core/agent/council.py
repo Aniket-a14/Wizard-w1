@@ -17,7 +17,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from src.config import settings
-from src.core.llm import LLMRole, llm_provider
+from src.core.llm import LLMRole, llm_provider, strip_reasoning
 from src.utils.logging import logger, trace_agent
 
 
@@ -45,6 +45,9 @@ class SpecialistAgent:
                     temperature=0.2,
                     model=models.model_for(role_name) if models else None,
                     provider=models.provider_for(role_name) if models else None,
+                    # One sentence is what is asked for and one sentence is what
+                    # is used; the caveat is appended to a warning list.
+                    max_tokens=settings.output_budget("review"),
                 )
             ).strip()
         except Exception as exc:
@@ -104,6 +107,7 @@ class StatisticianAgent(SpecialistAgent):
                 role=LLMRole.MANAGER,
                 models=models,
             )
+            tip = strip_reasoning(tip)
             if tip and "sound" not in tip.lower():
                 feedback.append(tip)
 
