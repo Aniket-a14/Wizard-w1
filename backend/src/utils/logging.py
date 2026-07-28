@@ -24,7 +24,13 @@ def configure_logger():
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
-            structlog.processors.ConsoleRenderer() if sys.stdout.isatty() else structlog.processors.JSONRenderer(),
+            # ConsoleRenderer lives in `structlog.dev`, not `structlog.processors`.
+            # This only ever ran interactively -- a ternary evaluates just the
+            # branch it takes, and every automated run (CI, anything redirected
+            # to a file) is not a tty and took the JSON branch. So the crash was
+            # invisible to the test suite and hit the first person to start the
+            # server in a real terminal.
+            structlog.dev.ConsoleRenderer() if sys.stdout.isatty() else structlog.processors.JSONRenderer(),
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),

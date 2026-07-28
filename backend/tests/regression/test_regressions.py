@@ -492,3 +492,32 @@ def test_the_prompt_tells_the_model_the_root_its_runtime_actually_has(monkeypatc
 
     if block:
         assert "'/workspace/<filename>'" not in block
+
+
+def test_the_logger_configures_on_an_interactive_terminal(monkeypatch) -> None:
+    """Starting the server in a real terminal raised AttributeError on boot.
+
+    `ConsoleRenderer` lives in `structlog.dev`, and the config asked for
+    `structlog.processors.ConsoleRenderer`. A ternary only evaluates the branch
+    it takes, and that branch is chosen by `sys.stdout.isatty()` — so every
+    automated run (CI, and anything redirecting output to a file) took the JSON
+    branch and never touched the broken name. The first person to run
+    `uvicorn` in a terminal got a crash the whole suite was blind to.
+    """
+    import io
+    import sys
+
+    from src.utils.logging import configure_logger, logger
+
+    class _Tty(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(sys, "stdout", _Tty())
+    try:
+        configure_logger()
+        logger.info("hello from a terminal", answer=42)
+    finally:
+        # Restore the non-tty configuration for the rest of the suite.
+        monkeypatch.undo()
+        configure_logger()
