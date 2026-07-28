@@ -141,7 +141,7 @@ def _registry_returning(payloads: dict[str, Any]) -> ModelRegistry:
     registry = ModelRegistry()
     calls: list[str] = []
 
-    def fake_get(provider: str, url: str, headers: dict[str, str] | None = None):
+    def fake_get(provider: str, url: str, headers: dict[str, str] | None = None, *, quiet: bool = False):
         calls.append(url)
         payload = payloads.get(url)
         if payload is None:
@@ -367,3 +367,54 @@ def test_two_output_budgets_do_not_share_a_client() -> None:
     small = provider.resolve(LLMRole.MANAGER, model="m", provider="ollama", max_tokens=512)
     large = provider.resolve(LLMRole.MANAGER, model="m", provider="ollama", max_tokens=1536)
     assert small.cache_key() != large.cache_key()
+
+
+# --------------------------------------------------------------------------- #
+# What an unreachable provider tells the user
+# --------------------------------------------------------------------------- #
+def test_a_refused_connection_says_what_to_do_not_what_happened() -> None:
+    """The OS message names the mechanism and nothing actionable.
+
+    "[WinError 10061] No connection could be made because the target machine
+    actively refused it" is true and useless. A refused connection to a local
+    provider has exactly one meaning -- it is not running -- and the app knows
+    which provider it asked.
+    """
+    import errno
+
+    from src.core.llm.registry import unreachable_message
+
+    refused = OSError()
+    refused.errno = errno.ECONNREFUSED
+    refused.winerror = 10061  # Windows does not raise ConnectionRefusedError here
+
+    message = unreachable_message("lmstudio", "http://127.0.0.1:1234/api/v0/models", refused)
+
+    assert "10061" not in message
+    assert "Developer" in message, "it should say where the server switch actually is"
+    assert "Serve on Local Network" in message, "the usual cause of an empty picker from Docker"
+
+
+def test_a_refused_connection_is_recognised_on_posix_too() -> None:
+    """Linux and macOS raise the errno subclass rather than a bare OSError."""
+    from src.core.llm.registry import unreachable_message
+
+    message = unreachable_message("ollama", "http://127.0.0.1:11434/api/tags", ConnectionRefusedError(61, "refused"))
+    assert "ollama serve" in message
+
+
+def test_a_timeout_is_not_reported_as_nothing_listening() -> None:
+    """A slow provider and an absent one need different advice."""
+    from src.core.llm.registry import unreachable_message
+
+    message = unreachable_message("lmstudio", "http://host:1234/api", TimeoutError("timed out"))
+    assert "Nothing is listening" not in message
+    assert "starting up" in message
+
+
+def test_an_unrecognised_failure_keeps_the_original_reason() -> None:
+    """Guessing at a cause we have not identified would be worse than quoting it."""
+    from src.core.llm.registry import unreachable_message
+
+    message = unreachable_message("lmstudio", "http://host/api", "certificate verify failed")
+    assert "certificate verify failed" in message

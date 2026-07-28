@@ -298,6 +298,10 @@ def test_unknown_provider_is_rejected_at_the_boundary(client: TestClient, bogus:
 def test_listing_an_unreachable_provider_reports_where_it_tried(client: TestClient) -> None:
     """Nothing is listening on the LM Studio port in a test run. The response
     has to name the endpoint -- 'no models' alone gives the user nothing to fix.
+
+    Asserted on the URL rather than the provider id: the message is written for
+    a person, so it says "LM Studio" and tells them to start its server. What
+    must survive is that it points at the address that was actually tried.
     """
     response = client.get("/api/models?provider=lmstudio")
 
@@ -305,7 +309,8 @@ def test_listing_an_unreachable_provider_reports_where_it_tried(client: TestClie
     body = response.json()
     assert body["provider"] == "lmstudio"
     assert body["models"] == []
-    assert body["error"] and "lmstudio" in body["error"]
+    assert body["error"]
+    assert settings.LMSTUDIO_BASE_URL in body["error"], "the error must name where it tried"
 
 
 def test_provider_switch_does_not_carry_the_previous_backends_model(client: TestClient) -> None:

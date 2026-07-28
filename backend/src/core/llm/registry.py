@@ -22,6 +22,7 @@ and its worker on another must not have one list evict the other.
 
 from __future__ import annotations
 
+import errno
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -91,6 +92,43 @@ def classify(name: str) -> list[str]:
     if "chat" not in caps:
         caps.append("chat")
     return caps
+
+
+#: What to actually do about an unreachable local provider. The operating
+#: system's own words for a refused connection -- "[WinError 10061] No
+#: connection could be made because the target machine actively refused it" --
+#: are accurate and useless: they name the mechanism and not one thing the
+#: reader can go and fix.
+UNREACHABLE_ADVICE = {
+    "ollama": "Ollama does not appear to be running. Start it, or run `ollama serve`.",
+    "lmstudio": (
+        "LM Studio does not appear to be serving. Open it, go to the Developer tab and start the "
+        "local server. If this backend runs in Docker, also enable 'Serve on Local Network' -- "
+        "LM Studio binds to loopback only until you do."
+    ),
+}
+
+
+def _is_refused(reason: object) -> bool:
+    """Whether a URLError reason means "nothing is listening there"."""
+    if isinstance(reason, ConnectionRefusedError):
+        return True
+    # Windows raises OSError with winerror 10061 rather than the errno subclass.
+    if isinstance(reason, OSError):
+        return reason.errno == errno.ECONNREFUSED or getattr(reason, "winerror", None) == 10061
+    return False
+
+
+def unreachable_message(provider: str, url: str, reason: object) -> str:
+    """A discovery failure phrased as something the reader can act on."""
+    if _is_refused(reason):
+        advice = UNREACHABLE_ADVICE.get(provider)
+        if advice:
+            return f"Nothing is listening at {url}. {advice}"
+        return f"Nothing is listening at {url}. Check that {provider} is running and the URL is right."
+    if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+        return f"{provider} did not answer at {url} within 5s. It may be starting up, or the host may be wrong."
+    return f"Could not reach {provider} at {url}: {reason}"
 
 
 class ModelRegistry:
@@ -182,7 +220,9 @@ class ModelRegistry:
 
     def _list_lmstudio(self, provider: str) -> list[ModelInfo]:
         root = settings.provider_root_url(provider)
-        payload = self._get_json(provider, f"{root}/api/v0/models")
+        # Quiet: if this fails we still try the OpenAI-compatible route below,
+        # so it is not yet a failure worth telling anyone about.
+        payload = self._get_json(provider, f"{root}/api/v0/models", quiet=True)
         if payload is None:
             # Either LM Studio is down or something else is serving that port.
             # The OpenAI-compatible route is the wider bet, so try it before
@@ -250,8 +290,21 @@ class ModelRegistry:
         models.sort(key=lambda m: m.name)
         return models
 
-    def _get_json(self, provider: str, url: str, headers: dict[str, str] | None = None) -> dict[str, Any] | None:
-        """Small dependency-free GET. Returns None and records the error on failure."""
+    def _get_json(
+        self,
+        provider: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        *,
+        quiet: bool = False,
+    ) -> dict[str, Any] | None:
+        """Small dependency-free GET. Returns None and records the error on failure.
+
+        ``quiet`` suppresses the log line for a probe whose failure is not yet
+        the outcome -- LM Studio is tried on its native route and then on the
+        OpenAI-compatible one, and logging both made a single offline provider
+        look like two separate faults.
+        """
         import json
         import urllib.error
         import urllib.request
@@ -262,10 +315,11 @@ class ModelRegistry:
                 self._errors[provider] = None
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.URLError as exc:
-            self._errors[provider] = f"Could not reach {provider} at {url}: {exc.reason}"
+            self._errors[provider] = unreachable_message(provider, url, exc.reason)
         except Exception as exc:
             self._errors[provider] = f"Unexpected error listing {provider} models: {exc}"
-        logger.warning("Model discovery failed", provider=provider, url=url, error=self._errors[provider])
+        if not quiet:
+            logger.warning("Model discovery failed", provider=provider, url=url, error=self._errors[provider])
         return None
 
     # ------------------------------------------------------------------ #
