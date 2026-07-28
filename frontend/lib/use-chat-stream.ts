@@ -34,6 +34,30 @@ function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 }
 
+/**
+ * Closes a socket the hook no longer owns.
+ *
+ * `close()` on a socket that is still CONNECTING aborts the handshake and the
+ * browser logs "WebSocket is closed before the connection is established" at
+ * error level. React StrictMode remounts every effect in development, so the
+ * mount/cleanup/mount cycle hit that on every single page load. Letting the
+ * handshake finish and closing on open is the same outcome without the noise,
+ * and — more importantly — it closes deterministically rather than leaving the
+ * server holding a connection whose client has already walked away.
+ */
+function retireSocket(socket: WebSocket | null): void {
+  if (!socket) return
+  socket.onmessage = null
+  socket.onerror = null
+  socket.onclose = null
+  if (socket.readyState === WebSocket.CONNECTING) {
+    socket.onopen = () => socket.close()
+    return
+  }
+  socket.onopen = null
+  socket.close()
+}
+
 function blankAssistant(): ChatMessage {
   return {
     id: newId(),
@@ -380,7 +404,10 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
 
   const connect = useCallback(() => {
     if (typeof window === "undefined") return
-    if (socketRef.current?.readyState === WebSocket.OPEN) return
+    // CONNECTING counts as connected. Testing only for OPEN meant a `send`
+    // during the handshake opened a second socket to the same session.
+    const existing = socketRef.current?.readyState
+    if (existing === WebSocket.OPEN || existing === WebSocket.CONNECTING) return
 
     // State is deliberately not set here. `connect` is called from an effect on
     // mount, and a synchronous setState in an effect body triggers a cascading
@@ -397,7 +424,20 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     }
     socketRef.current = socket
 
+    // Every handler below checks it is still the socket the hook holds. Without
+    // that, a socket discarded by a remount or a reconnect keeps acting as the
+    // live one: its `onclose` nulls `socketRef` out from under its replacement
+    // and schedules yet another connect, so the replacement is orphaned while
+    // still open. The server counts that orphan against
+    // `WS_MAX_CONCURRENT_PER_IP` (4), which is why one tab was costing two
+    // connections and two tabs exhausted the limit.
+    const isCurrent = () => socketRef.current === socket
+
     socket.onopen = () => {
+      if (!isCurrent()) {
+        socket.close()
+        return
+      }
       attemptsRef.current = 0
       setConnection("open")
       heartbeatRef.current = setInterval(() => {
@@ -408,6 +448,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     }
 
     socket.onmessage = (raw) => {
+      if (!isCurrent()) return
       try {
         handleEvent(JSON.parse(raw.data) as ServerEvent)
       } catch {
@@ -415,9 +456,12 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       }
     }
 
-    socket.onerror = () => setConnection("error")
+    socket.onerror = () => {
+      if (isCurrent()) setConnection("error")
+    }
 
     socket.onclose = () => {
+      if (!isCurrent()) return
       if (heartbeatRef.current) clearInterval(heartbeatRef.current)
       heartbeatRef.current = null
       socketRef.current = null
@@ -460,8 +504,12 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       shouldReconnectRef.current = false
       if (reconnectRef.current) clearTimeout(reconnectRef.current)
       if (heartbeatRef.current) clearInterval(heartbeatRef.current)
-      socketRef.current?.close()
+      heartbeatRef.current = null
+      const outgoing = socketRef.current
+      // Cleared first: the handlers are keyed on identity, so the outgoing
+      // socket must stop being "current" before it is retired.
       socketRef.current = null
+      retireSocket(outgoing)
     }
   }, [connect])
 
