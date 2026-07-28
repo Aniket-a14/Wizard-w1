@@ -1,11 +1,17 @@
 "use client"
 
-import { Check, Cpu, Loader2, RefreshCw, TriangleAlert, Zap } from "lucide-react"
+import { Check, Cpu, Loader2, RefreshCw, Trash2, TriangleAlert, Zap } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
+import { ModelInstall } from "@/components/models/model-install"
 import { PageHeader } from "@/components/page-header"
 import { api } from "@/lib/api"
-import type { ModelInfo, ModelListResponse, ProviderId } from "@/lib/types"
+import type {
+  ModelInfo,
+  ModelListResponse,
+  ProviderDownloadCapability,
+  ProviderId,
+} from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
 
@@ -63,6 +69,8 @@ export function ModelsWorkbench() {
   const [provider, setProvider] = useState<ProviderId | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
+  const [removing, setRemoving] = useState<string | null>(null)
+  const [canDelete, setCanDelete] = useState(false)
   const { playSound } = useSound()
 
   const load = useCallback(async (target?: ProviderId, refresh = false) => {
@@ -95,6 +103,34 @@ export function ModelsWorkbench() {
       }
     },
     [load, playSound, provider],
+  )
+
+  const remove = useCallback(
+    async (model: string) => {
+      if (!provider) return
+      if (!window.confirm(`Delete ${model}? It will have to be downloaded again to use it.`)) return
+      setRemoving(model)
+      try {
+        await api.deleteModel(model, provider)
+        await load(provider, true)
+      } finally {
+        setRemoving(null)
+      }
+    },
+    [load, provider],
+  )
+
+  /**
+   * A finished download has to re-list models, and `refresh` is needed because
+   * the registry TTL would otherwise hand back the same list without it.
+   */
+  const onInstalled = useCallback(() => {
+    void load(provider ?? undefined, true)
+  }, [load, provider])
+
+  const onCapability = useCallback(
+    (capability: ProviderDownloadCapability) => setCanDelete(capability.can_delete),
+    [],
   )
 
   const setTemperature = useCallback(
@@ -182,9 +218,9 @@ export function ModelsWorkbench() {
         </div>
       </div>
 
-      {/* Provider browser --------------------------------------------------- */}
-      <div className="px-6 py-6 md:px-9">
-        <div className="mb-4 flex flex-wrap items-center gap-1.5">
+      {/* Provider selection ------------------------------------------------- */}
+      <div className="px-6 pt-6 md:px-9">
+        <div className="mb-5 flex flex-wrap items-center gap-1.5">
           {providers.map((entry) => (
             <button
               key={entry.id}
@@ -208,7 +244,19 @@ export function ModelsWorkbench() {
             </span>
           )}
         </div>
+      </div>
 
+      {/* Installing, before browsing: on a fresh machine the list below is
+          empty and this is the only control that does anything. */}
+      <ModelInstall
+        provider={provider}
+        installed={models.map((model) => model.name)}
+        onInstalled={onInstalled}
+        onCapability={onCapability}
+      />
+
+      {/* Installed models --------------------------------------------------- */}
+      <div className="px-6 py-6 md:px-9">
         {data?.error && (
           <div className="flex items-start gap-2.5 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[13px] leading-relaxed text-warning">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
@@ -221,6 +269,7 @@ export function ModelsWorkbench() {
             {EMPTY_HINTS[provider]}
           </p>
         )}
+
 
         {loading && models.length === 0 && (
           <div className="flex justify-center py-12">
@@ -239,6 +288,8 @@ export function ModelsWorkbench() {
               ).map((role) => role.label)}
               saving={saving}
               onAssign={assign}
+              onRemove={canDelete ? remove : undefined}
+              removing={removing === model.name}
             />
           ))}
         </div>
@@ -252,11 +303,16 @@ function ModelCard({
   assignedTo,
   saving,
   onAssign,
+  onRemove,
+  removing,
 }: {
   model: ModelInfo
   assignedTo: string[]
   saving: string | null
   onAssign: (role: "manager" | "worker", model: string) => void
+  /** Undefined when the provider cannot delete — LM Studio's CLI has no verb for it. */
+  onRemove?: (model: string) => void
+  removing: boolean
 }) {
   const facts = [
     model.parameter_size,
@@ -330,6 +386,23 @@ function ModelCard({
               </button>
             )
           })
+        )}
+
+        {onRemove && (
+          <button
+            type="button"
+            onClick={() => onRemove(model.name)}
+            disabled={removing}
+            aria-label={`Delete ${model.name}`}
+            title={`Delete ${model.name} from disk`}
+            className="ml-auto rounded-md p-1 text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-warning/10 hover:text-warning disabled:opacity-40"
+          >
+            {removing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+          </button>
         )}
       </div>
     </article>

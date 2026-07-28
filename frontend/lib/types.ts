@@ -182,6 +182,44 @@ export interface ProviderInfo {
   is_default: boolean
 }
 
+export type DownloadStatus =
+  | "queued"
+  | "downloading"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export interface ModelDownloadState {
+  provider: string
+  model: string
+  status: DownloadStatus
+  completed_bytes: number
+  total_bytes: number
+  /**
+   * Null while nothing measurable has been reported. LM Studio says nothing at
+   * all while it resolves a repo, and a bar pinned at 0% reads as broken where
+   * "Resolving" reads as working.
+   */
+  percent: number | null
+  detail: string
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
+export interface ProviderDownloadCapability {
+  provider: string
+  can_download: boolean
+  can_delete: boolean
+  /** Why not, when either is false. Shown instead of a button that would fail. */
+  reason: string
+}
+
+export interface ModelDownloadsResponse {
+  downloads: ModelDownloadState[]
+  capability: ProviderDownloadCapability
+}
+
 export interface ModelListResponse {
   provider: string
   models: ModelInfo[]

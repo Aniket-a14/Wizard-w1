@@ -8,6 +8,8 @@
 
 import type {
   DocumentSummary,
+  ModelDownloadState,
+  ModelDownloadsResponse,
   ModelListResponse,
   ServerConfig,
   SessionInfo,
@@ -109,6 +111,39 @@ export const api = {
       method: "POST",
       body: JSON.stringify(selection),
     }),
+
+  /**
+   * Installing a model without leaving the app.
+   *
+   * Downloads are polled rather than streamed: a pull runs for minutes and
+   * survives a reload, so a socket held open for the duration would be the
+   * fragile choice.
+   */
+  modelDownloads: (provider?: string) =>
+    request<ModelDownloadsResponse>(
+      `/api/models/downloads${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`,
+    ),
+
+  downloadModel: (model: string, provider?: string) =>
+    request<ModelDownloadState>("/api/models/download", {
+      method: "POST",
+      body: JSON.stringify({ model, provider: provider ?? null }),
+    }),
+
+  cancelModelDownload: (model: string, provider?: string) =>
+    request<{ status: string }>("/api/models/download/cancel", {
+      method: "POST",
+      body: JSON.stringify({ model, provider: provider ?? null }),
+    }),
+
+  deleteModel: (model: string, provider?: string) => {
+    const query = new URLSearchParams({ model })
+    if (provider) query.set("provider", provider)
+    return request<{ status: string; model: string }>(
+      `/api/models/installed?${query.toString()}`,
+      { method: "DELETE" },
+    )
+  },
 
   upload: (file: File, clean = true) => {
     const form = new FormData()
