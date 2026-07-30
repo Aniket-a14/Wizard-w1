@@ -94,6 +94,52 @@ def test_message_without_a_dataset_is_rejected(client: TestClient) -> None:
         assert "dataset" in frame["content"].lower()
 
 
+def test_a_reaped_session_is_re_announced_rather_than_stranding_the_socket(
+    client: TestClient, session_with_data: str
+) -> None:
+    """The socket resolved its ``Session`` once, at connect, and held that object.
+
+    Eviction (``SESSION_MAX_ACTIVE``, derived to 7 on a 16 GB laptop) and TTL
+    reaping both call ``dispose()``, which clears ``datasets`` -- so the socket
+    went on holding an emptied session and answered "No dataset is loaded" for
+    a file the user had just uploaded, against a runtime already released.
+    """
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        assert websocket.receive_json()["session_id"] == session_with_data
+
+        session_manager.drop(session_with_data)  # what eviction and reaping do
+
+        websocket.send_json({"type": "ping"})
+
+        # Exactly one read to decide it. The re-announcement is sent before the
+        # pong, so a fixed two-frame read would *hang* rather than fail when the
+        # fix is absent -- only the pong ever arrives in that case.
+        frame = websocket.receive_json()
+        assert frame["type"] == "session", "the socket kept using the disposed session silently"
+        assert frame["session_id"] != session_with_data
+        assert websocket.receive_json()["type"] == "pong", "the socket stopped answering"
+
+
+def test_the_heartbeat_counts_as_activity(client: TestClient, session_with_data: str) -> None:
+    """``ping`` returned before the session was touched.
+
+    A tab sitting connected with a dataset loaded therefore aged to the top of
+    the least-recently-seen eviction order while its heartbeat, every 25s, was
+    saying the opposite.
+    """
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+
+        session = session_manager.get(session_with_data)
+        assert session is not None
+        session.last_seen = 0.0  # set after connect, so only the ping can move it
+
+        websocket.send_json({"type": "ping"})
+        assert websocket.receive_json()["type"] == "pong"
+
+        assert session.last_seen > 0.0
+
+
 def test_blank_message_is_ignored(client: TestClient) -> None:
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.receive_json()

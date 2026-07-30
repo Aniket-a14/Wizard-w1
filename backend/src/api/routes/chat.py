@@ -128,10 +128,39 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
     await websocket.send_json({"type": EventType.SESSION.value, "session_id": session.id})
 
+    async def resolve_session() -> Session:
+        """Re-resolves the socket's session, and counts the frame as activity.
+
+        Binding the object once at connect meant an eviction or a TTL reap left
+        the socket holding a *disposed* ``Session``. ``dispose()`` clears
+        ``datasets``, so the next question answered "No dataset is loaded" for
+        data the user had just uploaded, against a runtime already released.
+        Sessions are capped (``SESSION_MAX_ACTIVE``, which host sizing derives
+        to 7 on a 16 GB laptop) and evicted least-recently-seen, so a few tabs
+        or a backend restart reach this.
+        """
+        nonlocal session
+        live = session_manager.get(session.id)  # get() touches on a hit
+        if live is not None:
+            return live
+        session = session_manager.create()
+        # The id changed underneath the client. Without telling it, its stored
+        # id keeps naming the dead session and every later REST call -- upload
+        # included -- lands somewhere this socket cannot see.
+        await websocket.send_json({"type": EventType.SESSION.value, "session_id": session.id})
+        return session
+
     try:
         while True:
             payload: dict[str, Any] = await websocket.receive_json()
             kind = payload.get("type", "message")
+
+            # Every frame, before anything branches on it. A heartbeat is proof
+            # the client is still there, so it has to count against eviction:
+            # `ping` used to return before the session was touched, which left
+            # a connected tab holding a dataset ageing to the top of the
+            # least-recently-seen order while it sat idle.
+            session = await resolve_session()
 
             if kind == "ping":
                 await websocket.send_json({"type": "pong"})
@@ -149,8 +178,6 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     {"type": EventType.ERROR.value, "content": "A run is already in progress on this session."}
                 )
                 continue
-
-            session.touch()
 
             # An empty frame is a no-op in every case, so it is discarded before
             # any state check: a blank message should not raise "no dataset".
