@@ -5,7 +5,15 @@ import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader, Section } from "@/components/page-header"
 import { api, clearStoredSessionId, getStoredSessionId } from "@/lib/api"
-import type { DataModeInfo, ServerConfig, SessionInfo, UsageTotals } from "@/lib/types"
+import type {
+  DataModeInfo,
+  PermissionProfile,
+  PermissionRuling,
+  PermissionsInfo,
+  ServerConfig,
+  SessionInfo,
+  UsageTotals,
+} from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
 
@@ -23,25 +31,38 @@ export function SettingsWorkbench() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [dataMode, setDataMode] = useState<DataModeInfo | null>(null)
+  const [permissions, setPermissions] = useState<PermissionsInfo | null>(null)
   const [usage, setUsage] = useState<UsageTotals | null>(null)
   const { soundOn, toggleSound } = useSound()
 
   const refresh = useCallback(async () => {
-    const [nextConfig, nextSession, nextMode, nextUsage] = await Promise.allSettled([
+    const [nextConfig, nextSession, nextMode, nextPermissions, nextUsage] = await Promise.allSettled([
       api.config(),
       api.session(),
       api.dataMode(),
+      api.permissions(),
       api.usage(),
     ])
     if (nextConfig.status === "fulfilled") setConfig(nextConfig.value)
     if (nextSession.status === "fulfilled") setSession(nextSession.value)
     if (nextMode.status === "fulfilled") setDataMode(nextMode.value)
+    if (nextPermissions.status === "fulfilled") setPermissions(nextPermissions.value)
     if (nextUsage.status === "fulfilled") setUsage(nextUsage.value)
     setSessionId(getStoredSessionId())
   }, [])
 
   const setSchemaOnly = useCallback(async (schemaOnly: boolean) => {
     setDataMode(await api.setDataMode({ schema_only: schemaOnly }))
+  }, [])
+
+  const setProfile = useCallback(async (profile: PermissionProfile) => {
+    setPermissions(await api.setPermissions({ profile }))
+  }, [])
+
+  const setRuling = useCallback(async (key: string, ruling: PermissionRuling) => {
+    // Sent one row at a time. The server owns the matrix, so echoing the whole
+    // thing back would let a stale local copy overwrite a row it never touched.
+    setPermissions(await api.setPermissions({ categories: { [key]: ruling } }))
   }, [])
 
   useEffect(() => {
@@ -241,6 +262,17 @@ export function SettingsWorkbench() {
       </Section>
 
       <Section
+        title="Permissions"
+        description="What the agent may do without asking. Separate from the data mode above: that decides what is possible at all, this decides what you are asked about."
+      >
+        <PermissionsPanel
+          permissions={permissions}
+          onProfileChange={setProfile}
+          onRulingChange={setRuling}
+        />
+      </Section>
+
+      <Section
         title="Execution"
         description="Where generated code runs. Docker is not required — set EXECUTION_BACKEND in backend/.env."
       >
@@ -394,8 +426,12 @@ export function SettingsWorkbench() {
           />
           <Fact label="Iteration ceiling" value={config ? String(config.agent_max_iterations) : "—"} />
           <Fact
-            label="Approval gate"
+            label="Plan approval gate"
             value={config ? (config.agent_require_approval ? "Required" : "Off") : "—"}
+          />
+          <Fact
+            label="Consent timeout"
+            value={config ? `${Math.round(config.agent_consent_timeout)}s` : "—"}
           />
           <Fact
             label="Verification"
@@ -415,8 +451,9 @@ export function SettingsWorkbench() {
           On <span className="font-medium text-foreground">auto</span>, depth is inferred from the
           reasoning model&apos;s parameter count: under 4B runs a short loop with no reflection or
           verification, 4–30B the default, 30B and above the longest. Hosted models report no size and
-          are treated as the middle tier. Web search always asks before it runs, whatever the approval
-          gate is set to.
+          are treated as the middle tier. The approval gate here is about the{" "}
+          <span className="font-medium text-foreground">plan</span>; what the agent may do while
+          carrying one out is the Permissions section above.
         </p>
       </Section>
 
@@ -578,6 +615,166 @@ function Fact({
   )
 }
 
+
+const PERMISSION_PROFILE_LABELS: Record<PermissionProfile, string> = {
+  "auto-approve": "Auto approve",
+  "ask-always": "Ask always",
+  custom: "Custom",
+}
+
+const RULINGS: PermissionRuling[] = ["allow", "ask", "deny"]
+
+/**
+ * The profile, and under `custom` the per-category matrix behind it.
+ *
+ * Write-back gets its own treatment rather than being one row among equals: it
+ * is the only category no blanket profile may cover, and rendering it as an
+ * ordinary toggle that silently refuses "allow" would be worse than saying so.
+ *
+ * The connector categories are shown while nothing reaches them yet, labelled as
+ * such. Hiding them would mean a profile set today quietly acquired new meaning
+ * when connectors ship; claiming they were live would advertise something that
+ * does not exist.
+ */
+function PermissionsPanel({
+  permissions,
+  onProfileChange,
+  onRulingChange,
+}: {
+  permissions: PermissionsInfo | null
+  onProfileChange: (profile: PermissionProfile) => Promise<void>
+  onRulingChange: (key: string, ruling: PermissionRuling) => Promise<void>
+}) {
+  if (!permissions) {
+    return <p className="text-[13px] text-muted-foreground">Loading…</p>
+  }
+
+  const custom = permissions.profile === "custom"
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+        <div
+          className="flex flex-wrap items-center gap-0.5 rounded-lg bg-muted p-0.5"
+          role="radiogroup"
+          aria-label="Permission profile"
+        >
+          {(Object.keys(PERMISSION_PROFILE_LABELS) as PermissionProfile[]).map((profile) => (
+            <button
+              key={profile}
+              type="button"
+              role="radio"
+              aria-checked={permissions.profile === profile}
+              onClick={() => void onProfileChange(profile)}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-[12.5px] font-medium",
+                "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)]",
+                permissions.profile === profile
+                  ? "bg-card text-foreground shadow-xs"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {PERMISSION_PROFILE_LABELS[profile]}
+            </button>
+          ))}
+        </div>
+        <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+          {permissions.description}
+        </p>
+        <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground/80">
+          This is not the plan-approval gate. That one asks before the agent starts; these ask before
+          it takes a specific action part-way through.
+        </p>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xs">
+        {permissions.categories.map((category) => (
+          <div
+            key={category.key}
+            className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3.5 last:border-b-0"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="flex flex-wrap items-center gap-2 text-[13.5px] font-medium">
+                {category.label}
+                {category.always_ask && (
+                  <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+                    Never auto-approved
+                  </span>
+                )}
+                {!category.live && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    Not reachable yet
+                  </span>
+                )}
+              </p>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                {category.description}
+                {category.always_ask &&
+                  " Enabled per connection, once, deliberately — never by a profile."}
+              </p>
+            </div>
+
+            <div
+              className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted p-0.5"
+              role="radiogroup"
+              aria-label={`${category.label} permission`}
+            >
+              {RULINGS.map((ruling) => {
+                // Disabled rather than hidden: the choice exists and is refused
+                // for a reason, and a missing button explains nothing.
+                const forbidden = category.always_ask && ruling === "allow"
+                return (
+                  <button
+                    key={ruling}
+                    type="button"
+                    role="radio"
+                    aria-checked={category.ruling === ruling}
+                    disabled={!custom || forbidden}
+                    title={forbidden ? "Write-back is enabled per connection, not by a profile." : undefined}
+                    onClick={() => void onRulingChange(category.key, ruling)}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-[11.5px] font-medium capitalize",
+                      "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)]",
+                      "disabled:cursor-not-allowed disabled:opacity-45",
+                      category.ruling === ruling
+                        ? "bg-card text-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {ruling}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {!custom && (
+        <p className="text-[12px] text-muted-foreground">
+          Switch to Custom to set these individually.
+        </p>
+      )}
+
+      {permissions.grants.length > 0 && (
+        <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+          <p className="text-[13.5px] font-medium">Already approved this session</p>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+            The agent will not ask again for these until the session ends. Tightening the profile
+            clears them.
+          </p>
+          <ul className="mt-2.5 space-y-1 border-t border-border pt-2.5">
+            {permissions.grants.map((grant) => (
+              <li key={grant} className="font-mono text-[11.5px] text-muted-foreground">
+                {grant}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /**
  * What this session has spent.

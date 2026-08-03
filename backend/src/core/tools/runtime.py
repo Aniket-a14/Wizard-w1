@@ -21,6 +21,7 @@ to stay true rather than reflect what was true at boot.
 
 from __future__ import annotations
 
+import sys
 from functools import lru_cache
 
 from src.config import settings
@@ -184,6 +185,39 @@ def capabilities(session_id: str | None = None) -> frozenset[str]:
 
 def forget_capabilities(session_id: str) -> None:
     _capability_cache.pop(session_id, None)
+
+
+def missing_modules(names: frozenset[str], session_id: str | None = None) -> frozenset[str]:
+    """Which of ``names`` this runtime would have to install to run the code.
+
+    Answered here because only the runtime knows what it is: a container reports
+    its own module set through the daemon, while a local subprocess shares this
+    process's interpreter, so asking ``find_spec`` here is the accurate test for
+    one and the wrong test for the other.
+
+    ``capabilities()`` probes a fixed list of analysis libraries, so it can say
+    "no" about a module that is in fact installed. Off Docker the ``find_spec``
+    pass corrects that; on Docker it is deliberately not consulted, because this
+    process's modules say nothing about the container's.
+    """
+    candidates = {name for name in names if name and name not in sys.stdlib_module_names}
+    if not candidates:
+        return frozenset()
+
+    candidates -= capabilities(session_id)
+    if not candidates or active_backend() == "docker":
+        return frozenset(candidates)
+
+    from importlib.util import find_spec
+
+    resolved = set()
+    for name in candidates:
+        try:
+            if find_spec(name) is not None:
+                resolved.add(name)
+        except (ImportError, ValueError, AttributeError):
+            continue
+    return frozenset(candidates - resolved)
 
 
 #: What each sandbox image tier installs. Mirrors `backend/docker/Dockerfile`,

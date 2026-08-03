@@ -36,6 +36,7 @@ from src.core.execution import CodeExecutor
 from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
 from src.core.llm.usage import usage_ledger
+from src.core.permissions import PermissionState
 from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
@@ -126,6 +127,10 @@ class Session:
         # prompt may carry — see `core/data_mode.py`.
         self.data_mode: str = settings.data_mode
         self.data_policy = DataPolicy(schema_only=settings.DATA_SCHEMA_ONLY)
+        # How much this session asks before acting — see `core/permissions.py`.
+        # A separate axis from the mode above: that one decides what is possible,
+        # this one decides what is asked about among what already is.
+        self.permissions = PermissionState(profile=settings.AGENT_PERMISSION_PROFILE)
         self.executor = CodeExecutor(session_id)
         self._lock = threading.Lock()
 
@@ -391,6 +396,7 @@ class Session:
             "models": self.models.to_dict(),
             "data_mode": self.data_mode,
             "data_policy": self.data_policy.to_dict(),
+            "permissions": self.permissions.to_dict(),
             "usage": usage_ledger.totals(self.id),
             "sandboxed": runtime_backend.active_backend() == "docker",
             "execution_backend": runtime_backend.active_backend(),

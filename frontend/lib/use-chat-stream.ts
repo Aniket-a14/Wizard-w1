@@ -331,10 +331,14 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
 
         case "approval_required": {
           const approval: ApprovalRequest = {
-            tool: (event.tool as ApprovalRequest["tool"]) ?? "execute_plan",
+            tool: (event.tool as string) ?? "execute_plan",
             prompt: String(event.prompt ?? "Confirm to continue."),
             plan: event.plan as string | undefined,
             query: event.query as string | undefined,
+            id: event.id as string | undefined,
+            category: event.category as string | undefined,
+            subject: event.subject as string | undefined,
+            detail: event.detail as string | undefined,
           }
           patchActive((message) => ({
             ...message,
@@ -344,8 +348,14 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
             phase: "awaiting_approval",
           }))
           setPhase("awaiting_approval")
-          setIsRunning(false)
-          activeIdRef.current = null
+          // An `id` means the turn is *paused*, not finished: it is still on the
+          // server holding its investigation state, waiting for this answer. The
+          // plan gate has no id because it really did end its turn, and a new one
+          // has to be started to resume it.
+          if (!approval.id) {
+            setIsRunning(false)
+            activeIdRef.current = null
+          }
           break
         }
 
@@ -572,6 +582,17 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       setMessages((previous) =>
         previous.map((item) => (item.id === message.id ? { ...item, approval: null } : item)),
       )
+
+      // A permission gate is answered in place: the run never stopped, so this
+      // frame is a reply, not the start of anything. Rebuilding the turn here
+      // would throw away the investigation the paused run is still holding.
+      // The run resumes either way — a decline is something it routes around,
+      // not something that ends it — so the phase moves on regardless.
+      if (approval.id) {
+        send({ type: "approval", approved, id: approval.id })
+        setPhase("generating")
+        return
+      }
 
       if (!approved) {
         setMessages((previous) =>

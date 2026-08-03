@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Response, WebSocket, WebSocketDisconnect
 from src.api.deps import SESSION_HEADER, require_api_key, require_dataset, ws_gate
 from src.api.schemas import ChatRequest, ChatResponse
 from src.config import settings
+from src.core.agent.consent import consent_broker
 from src.core.agent.events import Event, EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
 from src.core.session import Session, session_manager
@@ -100,10 +101,20 @@ async def websocket_chat(websocket: WebSocket) -> None:
     Client frames
     -------------
     ``{"type": "message", "content": str, "mode": "auto"|"fast"|"deep"|"planning"}``
-    ``{"type": "approval", "approved": bool, "tool": str, "content": str, "plan"?: str, "query"?: str}``
+    ``{"type": "approval", "approved": bool, "id"?: str, "tool": str, "content": str, "plan"?: str, "query"?: str}``
     ``{"type": "cancel"}``  ``{"type": "ping"}``
 
     Server frames are the orchestrator's event types plus ``session`` and ``pong``.
+
+    An ``approval`` frame carrying ``id`` answers a *running* turn that paused on
+    a permission gate; it is routed to the consent broker and starts nothing. One
+    without ``id`` is the plan gate, which ends its turn and is resumed by
+    starting a new one.
+
+    The receive loop deliberately does not await the run. It used to, which meant
+    no frame sent during a turn was read until the turn finished -- so ``cancel``
+    could not interrupt anything, and a mid-run consent question could never be
+    answered by the only client able to answer it.
     """
     client_host = websocket.client.host if websocket.client else "unknown"
     if not ws_gate.acquire(client_host):
@@ -167,10 +178,20 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 continue
 
             if kind == "cancel":
+                # Any turn paused on a consent question is released first, so
+                # cancelling does not leave a future nobody will ever resolve.
+                consent_broker.abandon(session.id)
                 if current_run and not current_run.done():
                     current_run.cancel()
                 await asyncio.to_thread(session.executor.interrupt)
                 await websocket.send_json({"type": EventType.STATUS.value, "content": "Cancelled", "phase": "idle"})
+                continue
+
+            # A consent answer belongs to the turn already running. It is handled
+            # before the busy check below, which exists to reject a *new* turn.
+            if kind == "approval" and payload.get("id"):
+                if not consent_broker.resolve(session.id, str(payload["id"]), bool(payload.get("approved"))):
+                    logger.debug("Consent answer had nothing waiting", session=session.id)
                 continue
 
             if current_run and not current_run.done():
@@ -218,34 +239,50 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 session.append_message("user", instruction)
 
             async def run_turn(
+                run_session: Session = session,
                 instruction: str = instruction,
                 mode: str = mode,
                 approved_plan: str | None = approved_plan,
                 approved_search: str | None = approved_search,
             ):
+                """Runs one turn and reports its own outcome.
+
+                The error handling lives in here rather than around an ``await``
+                on the task, because the receive loop must stay free to deliver
+                the frames a paused turn is waiting for.
+                """
                 nonlocal last_code
-                result = await orchestrator.run(
-                    session=session,
-                    instruction=instruction,
-                    mode=mode,
-                    emitter=emitter,
-                    approved_plan=approved_plan,
-                    approved_search=approved_search,
-                    previous_code=last_code,
-                )
-                if result.code:
-                    last_code = result.code
+                try:
+                    result = await orchestrator.run(
+                        session=run_session,
+                        instruction=instruction,
+                        mode=mode,
+                        emitter=emitter,
+                        approved_plan=approved_plan,
+                        approved_search=approved_search,
+                        previous_code=last_code,
+                        # This socket can carry a consent question to a human and
+                        # bring the answer back, so gated actions may pause here
+                        # instead of resolving to a denial.
+                        can_prompt=True,
+                    )
+                    if result.code:
+                        last_code = result.code
+                except asyncio.CancelledError:
+                    await emitter(
+                        Event(
+                            type=EventType.STATUS,
+                            data={"content": "Run cancelled", "phase": "idle"},
+                        )
+                    )
+                    raise
+                except Exception as exc:
+                    logger.error("Chat run failed", error=str(exc), session=run_session.id)
+                    await emitter(Event(type=EventType.ERROR, data={"content": str(exc)}))
+                finally:
+                    consent_broker.abandon(run_session.id)
 
             current_run = asyncio.ensure_future(run_turn())
-            try:
-                await current_run
-            except asyncio.CancelledError:
-                await websocket.send_json({"type": EventType.STATUS.value, "content": "Run cancelled", "phase": "idle"})
-            except Exception as exc:
-                logger.error("Chat run failed", error=str(exc), session=session.id)
-                await websocket.send_json({"type": EventType.ERROR.value, "content": str(exc)})
-            finally:
-                current_run = None
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session=session.id)
@@ -256,6 +293,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
         except Exception:
             pass
     finally:
+        # Release before cancelling: a turn parked on a consent question would
+        # otherwise sit until the timeout expired before noticing it was dead.
+        consent_broker.abandon(session.id)
         if current_run and not current_run.done():
             current_run.cancel()
         emitter.closed = True

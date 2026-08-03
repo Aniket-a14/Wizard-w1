@@ -45,6 +45,10 @@ class ExecutionResult:
     ok: bool = True
     blocked: bool = False
     blocked_reason: str = ""
+    #: Populated only when *every* violation was a path outside the writable
+    #: roots. That is the one kind of block a user can legitimately lift, so the
+    #: paths travel structurally rather than being read back out of the sentence.
+    blocked_paths: list[str] = field(default_factory=list)
     retryable_error: bool = False
     #: True only for a container. A local subprocess is isolated from the API
     #: process but is not a security boundary, so it does not claim to be one.
@@ -77,19 +81,28 @@ class CodeExecutor:
         self.session_id = session_id
 
     # ------------------------------------------------------------------ #
-    def guard(self, code: str) -> tuple[GuardVerdict, str]:
+    def guard(self, code: str, allowed_roots: tuple[str, ...] = ()) -> tuple[GuardVerdict, str]:
         """Repairs then scans. Returns the verdict and the (possibly repaired) code.
 
         On a non-container backend the writable root is the session's own
         workspace directory rather than ``/workspace``, so it is passed in --
         otherwise the guard would reject the very chart path the prompt handed
         the model.
+
+        ``allowed_roots`` carries directories the user has explicitly consented
+        to. The guard is not weakened by this; it is the mechanism by which it
+        can be told yes, which it previously had no way to be.
+
+        The session's own workspace is always passed **first**, because the guard
+        resolves a *relative* path against the first root. Appending a consented
+        directory ahead of it would quietly redefine what `to_csv("out.csv")`
+        means -- consent to write to one directory is not a request to move the
+        working directory there.
         """
         _, repaired = CodeGuard.repair(code)
-        extra_roots: tuple[str, ...] = ()
-        if runtime_backend.active_backend() != "docker":
-            extra_roots = (runtime_backend.workspace_for(self.session_id).as_posix(),)
-        return CodeGuard.scan(repaired, extra_roots=extra_roots), repaired
+        backend = runtime_backend.active_backend()
+        workspace = "/workspace" if backend == "docker" else runtime_backend.workspace_for(self.session_id).as_posix()
+        return CodeGuard.scan(repaired, extra_roots=(workspace, *allowed_roots)), repaired
 
     def execute(
         self,
@@ -97,6 +110,7 @@ class CodeExecutor:
         df: pd.DataFrame | None = None,
         on_stdout: Callable[[str], None] | None = None,
         tables: dict[str, pd.DataFrame] | None = None,
+        allowed_roots: tuple[str, ...] = (),
     ) -> ExecutionResult:
         """Runs ``code``, preferring the container and falling back to in-process.
 
@@ -104,7 +118,7 @@ class CodeExecutor:
         session table off its bind mount at startup, so passing them again would
         pay a full serialisation per call for something already there.
         """
-        verdict, prepared = self.guard(code)
+        verdict, prepared = self.guard(code, allowed_roots)
         backend = runtime_backend.active_backend()
 
         if not verdict.ok:
@@ -126,6 +140,7 @@ class CodeExecutor:
                 ok=False,
                 blocked=True,
                 blocked_reason=verdict.reason,
+                blocked_paths=list(verdict.paths) if verdict.only_paths else [],
                 sandboxed=backend == "docker",
                 backend=backend,
             )

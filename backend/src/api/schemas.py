@@ -30,6 +30,8 @@ def _known_provider(value: str) -> str:
 ProviderName = Annotated[str, AfterValidator(_known_provider)]
 
 DataModeName = Literal["local-only", "cloud-only", "hybrid"]
+PermissionProfileName = Literal["auto-approve", "ask-always", "custom"]
+PermissionRulingName = Literal["allow", "ask", "deny"]
 
 
 class ErrorDetail(BaseModel):
@@ -70,6 +72,8 @@ class ServerConfig(BaseModel):
     agent_tier: str = "auto"
     agent_max_iterations: int = 24
     agent_require_approval: bool = False
+    agent_permission_profile: PermissionProfileName = "ask-always"
+    agent_consent_timeout: float = 120.0
     agent_verify: bool = True
     agent_grounding_check: bool = True
     context_docs_enabled: bool = True
@@ -115,6 +119,7 @@ class SessionResponse(BaseModel):
     models: dict[str, Any] = Field(default_factory=dict)
     data_mode: str = "local-only"
     data_policy: dict[str, Any] = Field(default_factory=dict)
+    permissions: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
     #: True only for a container. A local runtime is isolated from the API
     #: process but is not a security boundary, so it does not claim to be one.
@@ -188,6 +193,36 @@ class DataModeResponse(BaseModel):
     #: Tools this mode switches off entirely, so the UI can present them as
     #: unavailable rather than letting the user discover it mid-run.
     disabled_tools: list[str] = Field(default_factory=list)
+
+
+class PermissionsRequest(BaseModel):
+    profile: PermissionProfileName | None = None
+    #: Per-category rulings, applied only under `custom`. Sent sparsely: a client
+    #: flipping one row need not echo the whole matrix back.
+    categories: dict[str, PermissionRulingName] | None = None
+
+
+class PermissionCategoryResponse(BaseModel):
+    key: str
+    label: str
+    description: str
+    ruling: PermissionRulingName
+    #: Never resolves to allow from the profile alone. The UI renders these as a
+    #: higher-friction control rather than one row among equals.
+    always_ask: bool = False
+    #: Whether anything in the running system reaches this gate yet. False means
+    #: the setting is real but inert, and the UI says so instead of implying a
+    #: capability that has not shipped.
+    live: bool = True
+
+
+class PermissionsResponse(BaseModel):
+    profile: PermissionProfileName
+    description: str
+    categories: list[PermissionCategoryResponse] = Field(default_factory=list)
+    #: Approvals already given this session, so the UI can show what it is no
+    #: longer being asked about.
+    grants: list[str] = Field(default_factory=list)
 
 
 class UsageRecordResponse(BaseModel):

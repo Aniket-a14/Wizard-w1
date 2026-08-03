@@ -114,10 +114,18 @@ export interface Artifact {
 }
 
 export interface ApprovalRequest {
-  tool: "execute_plan" | "web_search"
+  /** Open rather than a union: a permission category is a row in the backend's
+   *  table, and closing this here would mean editing the type to add one. */
+  tool: string
   prompt: string
   plan?: string
   query?: string
+  /** Present only for a mid-run permission gate. Its presence is the signal that
+   *  the run is still alive and waiting, rather than ended pending a new turn. */
+  id?: string
+  category?: string
+  subject?: string
+  detail?: string
 }
 
 export interface ChatMessage {
@@ -223,6 +231,28 @@ export interface DataModeInfo {
   withheld: string[]
   /** Tools this mode switches off entirely, named so the UI can say so up front. */
   disabled_tools: string[]
+}
+
+export type PermissionProfile = "auto-approve" | "ask-always" | "custom"
+export type PermissionRuling = "allow" | "ask" | "deny"
+
+export interface PermissionCategoryInfo {
+  key: string
+  label: string
+  description: string
+  ruling: PermissionRuling
+  /** Never resolves to allow from the profile alone — write-back is enabled per
+   *  connection, deliberately, not by picking a profile. */
+  always_ask: boolean
+  /** False while nothing in the running system reaches this gate yet. */
+  live: boolean
+}
+
+export interface PermissionsInfo {
+  profile: PermissionProfile
+  description: string
+  categories: PermissionCategoryInfo[]
+  grants: string[]
 }
 
 export interface UsageRecord {
@@ -393,6 +423,8 @@ export interface ServerConfig {
   agent_tier: string
   agent_max_iterations: number
   agent_require_approval: boolean
+  agent_permission_profile: PermissionProfile
+  agent_consent_timeout: number
   agent_verify: boolean
   agent_grounding_check: boolean
   context_docs_enabled: boolean

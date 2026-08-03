@@ -3,6 +3,7 @@
 import { ArrowUp, Loader2, Paperclip, Square, UploadCloud } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { PermissionControl } from "@/components/chat/permission-control"
 import type { AnalysisMode } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -209,35 +210,39 @@ export function Composer({
             </button>
           </div>
 
-          {/*
-            A segmented control rather than a toggle button. The old version
-            showed only the *current* mode, so the others — and the fact that
-            a choice existed at all — were invisible until you clicked it.
-          */}
-          <div
-            className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5"
-            role="radiogroup"
-            aria-label="Analysis depth"
-          >
-            {MODES.map((option) => (
-              <button
-                key={option.key}
-                type="button"
-                role="radio"
-                aria-checked={mode === option.key}
-                onClick={() => onModeChange(option.key)}
-                title={option.title}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-[11.5px] font-medium",
-                  "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)]",
-                  mode === option.key
-                    ? "bg-card text-foreground shadow-xs"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
+          {/* Two independent dials: how deep, and how much it asks first. */}
+          <div className="flex items-center gap-1.5">
+            <PermissionControl />
+            {/*
+              A segmented control rather than a toggle button. The old version
+              showed only the *current* mode, so the others — and the fact that
+              a choice existed at all — were invisible until you clicked it.
+            */}
+            <div
+              className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5"
+              role="radiogroup"
+              aria-label="Analysis depth"
+            >
+              {MODES.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === option.key}
+                  onClick={() => onModeChange(option.key)}
+                  title={option.title}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-[11.5px] font-medium",
+                    "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)]",
+                    mode === option.key
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

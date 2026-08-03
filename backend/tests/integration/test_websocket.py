@@ -264,3 +264,119 @@ def test_socket_reuses_an_existing_session(client: TestClient, session_with_data
     with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
         frame = websocket.receive_json()
         assert frame["session_id"] == session_with_data
+
+
+# --------------------------------------------------------------------------- #
+# Mid-run consent
+#
+# The plan gate ends its turn and is resumed by starting a new one. These gates
+# suspend instead, so the frames below arrive while the run is still alive — the
+# receive loop must not be blocked on it.
+# --------------------------------------------------------------------------- #
+INSTALL_SCRIPT = [
+    "<thought>Reasoning.</thought>\nStep 1: fit a model",
+    "```python\nimport lifelines\nprint('fitted')\n```",
+    "The answer.",
+]
+
+
+def test_a_gated_action_asks_without_ending_the_run(client: TestClient, session_with_data: str, monkeypatch) -> None:
+    """The request arrives, is answered, and the same turn carries on to its answer.
+
+    Under the old turn-terminating protocol this would have needed a whole second
+    turn, discarding everything the first one had already computed.
+    """
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "fit a survival model", "mode": "fast"})
+
+        frames = collect_until(websocket, {"approval_required", "final", "error"})
+        request = frames[-1]
+        assert request["type"] == "approval_required"
+        assert request["category"] == "library_install"
+        assert "lifelines" in request["subject"]
+
+        websocket.send_json({"type": "approval", "approved": True, "id": request["id"]})
+        rest = collect_until(websocket, {"final", "error"})
+
+    assert rest[-1]["type"] == "final"
+
+
+def test_declining_a_gated_action_still_finishes_the_turn(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """A refused step is information the loop routes around, not a failed turn."""
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "fit a survival model", "mode": "fast"})
+
+        frames = collect_until(websocket, {"approval_required", "final", "error"})
+        request = frames[-1]
+        websocket.send_json({"type": "approval", "approved": False, "id": request["id"]})
+        rest = collect_until(websocket, {"final", "error"})
+
+    assert rest[-1]["type"] == "final"
+    assert any(frame["type"] == "warning" and "declined" in frame["content"] for frame in rest)
+
+
+def test_a_consent_answer_does_not_start_a_second_turn(client: TestClient, session_with_data: str, monkeypatch) -> None:
+    """It answers the turn already running.
+
+    An `approval` frame carrying an id is routed to the broker before the
+    "a run is already in progress" check, which exists to reject a *new* turn.
+    Getting that order wrong would make every consent answer an error frame.
+    """
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "fit a survival model", "mode": "fast"})
+
+        frames = collect_until(websocket, {"approval_required", "final", "error"})
+        websocket.send_json({"type": "approval", "approved": True, "id": frames[-1]["id"]})
+        rest = collect_until(websocket, {"final", "error"})
+
+    assert not [frame for frame in rest if frame["type"] == "error"]
+
+
+def test_cancel_reaches_a_run_that_is_waiting_for_consent(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """The receive loop stays live while a turn runs.
+
+    It used to await the run, so no frame sent during a turn was read until the
+    turn finished — which meant `cancel` could not interrupt anything.
+    """
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "fit a survival model", "mode": "fast"})
+
+        collect_until(websocket, {"approval_required", "final", "error"})
+        websocket.send_json({"type": "cancel"})
+
+        # Not `collect_until`: releasing the paused run lets it finish, so its
+        # own frames and the acknowledgement race, and either order is correct.
+        acknowledged = False
+        for _ in range(200):
+            frame = websocket.receive_json()
+            if frame["type"] == "status" and frame["content"] == "Cancelled":
+                acknowledged = True
+                break
+
+    assert acknowledged
+
+
+def test_an_answer_for_a_request_that_is_gone_is_ignored(client: TestClient, session_with_data: str) -> None:
+    """A late or duplicated click must not crash the socket."""
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "approval", "approved": True, "id": "no-such-request"})
+        websocket.send_json({"type": "ping"})
+
+        assert websocket.receive_json()["type"] == "pong"

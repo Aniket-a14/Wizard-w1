@@ -17,6 +17,9 @@ from src.api.schemas import (
     ModelDownloadState,
     ModelListResponse,
     ModelSelection,
+    PermissionCategoryResponse,
+    PermissionsRequest,
+    PermissionsResponse,
     ProviderCredentialRequest,
     ProviderDownloadCapability,
     ProviderInfo,
@@ -36,6 +39,7 @@ from src.core.ingest.loader import DatasetLoader
 from src.core.llm import llm_provider, model_registry, usage_ledger
 from src.core.llm.downloader import ProviderNotDownloadable, model_downloader
 from src.core.llm.reasoning import looks_like_reasoning_model
+from src.core.permissions import CATEGORIES, describe_profile, normalize as normalize_profile
 from src.core.session import Session
 from src.core.tools import runtime as runtime_backend
 from src.providers import exists as provider_exists
@@ -164,6 +168,8 @@ async def server_config() -> ServerConfig:
         agent_tier=settings.AGENT_TIER,
         agent_max_iterations=settings.AGENT_MAX_ITERATIONS,
         agent_require_approval=settings.AGENT_REQUIRE_APPROVAL,
+        agent_permission_profile=settings.AGENT_PERMISSION_PROFILE,
+        agent_consent_timeout=settings.AGENT_CONSENT_TIMEOUT,
         agent_verify=settings.AGENT_VERIFY,
         agent_grounding_check=settings.AGENT_GROUNDING_CHECK,
         context_docs_enabled=settings.CONTEXT_DOCS_ENABLED,
@@ -254,6 +260,60 @@ async def clear_dataset_policy(name: str, session: Session = Depends(get_session
     """Drops the override so this source follows the session default again."""
     session.data_policy.clear_for(name)
     return _data_mode_response(session)
+
+
+def _permissions_response(session: Session) -> PermissionsResponse:
+    state = session.permissions
+    return PermissionsResponse(
+        profile=normalize_profile(state.profile),  # type: ignore[arg-type]
+        description=describe_profile(state.profile),
+        categories=[
+            PermissionCategoryResponse(
+                key=category.key,
+                label=category.label,
+                description=category.description,
+                ruling=state.ruling_for(category.key),  # type: ignore[arg-type]
+                always_ask=category.always_ask,
+                live=category.live,
+            )
+            for category in CATEGORIES
+        ],
+        grants=sorted(f"{key}:{subject}" if subject else key for key, subject in state.grants),
+    )
+
+
+@router.get("/api/permissions", response_model=PermissionsResponse)
+async def get_permissions(session: Session = Depends(get_session)) -> PermissionsResponse:
+    """What this session asks about before acting."""
+    return _permissions_response(session)
+
+
+@router.post("/api/permissions", response_model=PermissionsResponse, dependencies=[Depends(require_api_key)])
+async def set_permissions(request: PermissionsRequest, session: Session = Depends(get_session)) -> PermissionsResponse:
+    """Sets the profile and any per-category rulings.
+
+    Tightening the profile clears grants already given. A grant is consent for a
+    specific thing under the rules in force when it was given; leaving them in
+    place would mean choosing a stricter profile changed nothing about what the
+    agent was still free to do.
+    """
+    state = session.permissions
+    previous = normalize_profile(state.profile)
+
+    if request.categories:
+        for key, ruling in request.categories.items():
+            try:
+                state.set_ruling(key, ruling)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if request.profile is not None:
+        state.profile = normalize_profile(request.profile)
+        if state.profile != previous and previous == "auto-approve":
+            state.grants.clear()
+            state.extra_roots = ()
+
+    return _permissions_response(session)
 
 
 @router.get("/api/providers", response_model=ProvidersResponse)

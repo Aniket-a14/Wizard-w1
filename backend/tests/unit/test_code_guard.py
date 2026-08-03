@@ -13,6 +13,7 @@ from src.core.security.code_guard import (
     ALLOWED_PATH_ROOTS,
     CodeGuard,
     _is_path_allowed,
+    imported_modules,
     is_safe_identifier,
 )
 
@@ -237,3 +238,81 @@ def test_accepts_plain_identifiers(name: str) -> None:
 )
 def test_rejects_unsafe_identifiers(name: str) -> None:
     assert not is_safe_identifier(name)
+
+
+# --------------------------------------------------------------------------- #
+# Import discovery (what the permission layer gates an install on)
+# --------------------------------------------------------------------------- #
+def test_reports_top_level_names_from_both_import_forms() -> None:
+    code = "import pandas as pd\nimport matplotlib.pyplot as plt\nfrom sklearn.metrics import r2_score\n"
+    assert imported_modules(code) == {"pandas", "matplotlib", "sklearn"}
+
+
+def test_a_relative_import_names_nothing_to_install() -> None:
+    """`from . import helpers` has no distribution behind it."""
+    assert imported_modules("from . import helpers\nfrom .. import other\n") == frozenset()
+
+
+def test_unparseable_code_yields_no_imports_rather_than_raising() -> None:
+    """The guard reports the syntax error itself; this must not turn it into a crash."""
+    assert imported_modules("import pandas as\n") == frozenset()
+
+
+def test_imports_inside_a_function_still_count() -> None:
+    """A lazy import installs exactly the same package when it runs."""
+    assert imported_modules("def go():\n    import lifelines\n    return lifelines\n") == {"lifelines"}
+
+
+# --------------------------------------------------------------------------- #
+# Offending paths travel structurally, not inside the error sentence
+# --------------------------------------------------------------------------- #
+def test_a_path_violation_reports_the_path_it_objected_to() -> None:
+    """The permission layer has to know *which* path to ask about.
+
+    Reading it back out of the message would make the message's wording
+    load-bearing for a security decision.
+    """
+    verdict = CodeGuard.scan("df.to_csv('/etc/passwd')")
+    assert not verdict.ok
+    assert verdict.paths == ["/etc/passwd"]
+    assert verdict.only_paths
+
+
+def test_a_banned_import_is_never_offered_as_a_path_to_approve() -> None:
+    """Only a path is negotiable. An import escape is not up for consent."""
+    verdict = CodeGuard.scan("import os\ndf.to_csv('/etc/passwd')")
+    assert not verdict.ok
+    assert not verdict.only_paths
+
+
+def test_a_syntax_error_is_not_a_path_question() -> None:
+    verdict = CodeGuard.scan("df.to_csv(")
+    assert verdict.syntax_error
+    assert not verdict.only_paths
+
+
+def test_an_approved_root_makes_the_same_write_pass() -> None:
+    """How the guard is told yes, rather than how it is bypassed."""
+    assert not CodeGuard.scan("df.to_csv('/data/reports/out.csv')").ok
+    assert CodeGuard.scan("df.to_csv('/data/reports/out.csv')", extra_roots=("/data/reports",)).ok
+
+
+def test_an_approved_root_does_not_widen_anything_else() -> None:
+    """Consent for one directory is consent for that directory only."""
+    verdict = CodeGuard.scan("df.to_csv('/etc/passwd')", extra_roots=("/data/reports",))
+    assert not verdict.ok
+
+
+def test_an_approved_root_does_not_move_where_a_relative_path_lands() -> None:
+    """A relative path resolves against the *first* root, so order is load-bearing.
+
+    `CodeExecutor.guard` passes the session workspace first for this reason. If a
+    consented directory were prepended instead, `to_csv("out.csv")` would quietly
+    start meaning a file in that directory — consent to write somewhere is not a
+    request to move the working directory there.
+    """
+    workspace_first = CodeGuard.scan("df.to_csv('../reports/out.csv')", extra_roots=("/workspace", "/data/reports"))
+    assert not workspace_first.ok, "a relative escape resolved against the granted root, not the workspace"
+
+    # The same grant still admits the path when it is written out in full.
+    assert CodeGuard.scan("df.to_csv('/data/reports/out.csv')", extra_roots=("/workspace", "/data/reports")).ok

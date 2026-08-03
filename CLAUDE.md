@@ -70,7 +70,7 @@ npm run lint && npx tsc --noEmit && npm run build   # the three CI gates
 
 The orchestrator knows nothing about WebSockets; it emits typed events to an `Emitter`. `EventCollector` buffers them for the REST path and for tests; `WebSocketEmitter` serialises them onto a socket.
 
-Frames: `session`, `status`, `step_start`/`step_end`, `reasoning_delta`, `plan_delta`, `content_delta`, `code`, `stdout`, `artifact`, `approval_required`, `warning`, `error`, `final`.
+Frames: `session`, `status`, `step_start`/`step_end`, `reasoning_delta`, `plan_delta`, `content_delta`, `code`, `stdout`, `artifact`, `approval_required`, `warning`, `error`, `final`. `approval_required` carries an `id` **only** for a mid-run permission gate — its presence tells the client the turn is paused rather than ended, and is what distinguishes a reply from a new turn.
 
 Investigation frames, added with the agentic loop: `iteration_start`, `action`, `observation`, `finding`, `plan_revised`, `assumption`, `verification`. `usage` carries what the turn cost, and is emitted **only when a cloud model ran** — under `local-only` there is nothing to meter and silence is the honest surface. The frames above are all still emitted, so a client that ignores these degrades rather than breaking. `observation` closes the most recent `action` that has none — the backend never correlates them by id.
 
@@ -81,12 +81,14 @@ Investigation frames, added with the agentic loop: `iteration_start`, `action`, 
 **This is a loop, not a pipeline.** Each iteration the manager sees what has actually run and chooses the next move; the run ends when it says it can answer, or the budget is spent.
 
 ```
-orient (plan) → [approval gate] → loop → verify → answer
-                                    ↑ ↓
-                     inspect / code+execute / consult / reflect
-                                      ↓
-                                  correct   (bounded by MAX_CORRECTION_RETRIES)
+orient (plan) → [plan gate] → loop → verify → answer
+                                ↑ ↓
+                 inspect / code+execute / consult / reflect
+                          ↓         ↓
+              [permission gate]  correct   (bounded by MAX_CORRECTION_RETRIES)
 ```
+
+The two gates are deliberately distinct: the plan gate ends its turn and is resumed by starting a new one, while a permission gate **suspends** and resumes in place. See the permission-profile section.
 
 - The old shape fixed a plan before touching the data and fed 200 characters of each step's output into the next. It could not recover when the data contradicted the plan. [DABstep](https://arxiv.org/abs/2506.23719) measures the gap: hard tasks need 6+ dependent steps, the best model scores 14.55% on them vs 76.39% on single-step ones, and planning is the largest error category.
 - Actions live in [actions.py](backend/src/core/agent/actions.py). `parse_decision` **never raises** — malformed model output resolves to a default (`code` mid-run, forced `answer` on the last iteration). The loop is worthless if a small model saying `**Action:** Code.` derails it.
@@ -270,6 +272,34 @@ Switching mode **clears any role assignment the new mode forbids**. Leaving it w
 
 Embeddings are a role like any other — text sent to be embedded is data — but a forbidden encoder **degrades to the hashing fallback** instead of raising. Retrieval getting worse is survivable; a failed question is not.
 
+### Permission profile — [core/permissions.py](backend/src/core/permissions.py) + [agent/consent.py](backend/src/core/agent/consent.py)
+
+**Two independent dials.** Depth (`fast`/`auto`/`deep`) is how hard the agent works on a question; the profile (`auto-approve`/`ask-always`/`custom`) is how often it stops to ask along the way. The same analysis run `deep`+`auto-approve` and `fast`+`ask-always` reaches the same quality of answer and differs only in consent prompts.
+
+**Data mode outranks the profile, always.** The mode decides what is possible at all; the profile decides what is asked about among what already is. `local-only` still refuses web search outright — no profile can consent past it, and `_orient` checks `tool_allowed` *before* it consults the profile.
+
+Consent used to be three unrelated special cases (a process-wide plan gate, a hardcoded search prompt, a path check that could only say no) plus one thing that asked nothing at all: **library installation was invisible**, happening inside the daemon on `ModuleNotFoundError` *after* the program had started. `CATEGORIES` replaces all of that with one vocabulary, so a new gated action is a row plus a call site.
+
+| category | live | trigger |
+|---|---|---|
+| `library_install` | yes | `imported_modules(code) - runtime.missing_modules(...)`, checked **before** execution |
+| `network` | yes | the plan's `SEARCH:` directive |
+| `workspace_write` | yes | a literal path the guard rejected, defaulting to `deny` — exactly what the guard already did |
+| `db_connect` / `db_write` / `tool_use` | **no** | declared for Milestone 4; the UI says nothing reaches them yet |
+
+- `db_write` carries `always_ask=True`: it never resolves to `allow` from a profile, and `set_ruling` **raises** rather than silently clamping, so the API can 400 with the reason. Write-back is enabled per connection, once, deliberately.
+- **Default is `ask-always`, not `auto-approve`.** Under it every category is at least as consultative as it was before the profile existed. Defaulting to `auto-approve` would have made an upgrade silently stop asking about web search — a trust regression shipped by a milestone about trust.
+- **The guard is not weakened.** A `workspace_write` grant records the directory in `PermissionState.extra_roots`, which `CodeExecutor.guard` unions into the guard's roots; the code is then re-scanned normally. `GuardVerdict.only_paths` is what makes this safe — a program mixing a path violation with a banned import is never offered for consent, or one prompt would wave through the other.
+- Grants are session-scoped and **not persisted**: consent for this analysis is not consent forever, and a grant outliving its session is a permission the user can no longer see to revoke. Tightening the profile clears them.
+
+**`AGENT_REQUIRE_APPROVAL` is untouched and stays separate.** That gate is about the *plan*, fires in `_orient`, and is turn-terminating: the run returns `awaiting_approval` and the client re-sends a new turn carrying the approved plan. That shape is right there — nothing has been spent yet.
+
+It is wrong for an action chosen at iteration four, which is why `consent.py` exists. `ConsentBroker.ask` parks the turn on a future keyed by session id (like `usage_ledger`, so `core/agent` holds no transport state) and the run keeps its investigation. **Anything that can suspend can hang**, so a timeout, a cancel, a disconnect and `abandon()` all resolve identically — *denied, with a reason*. `orchestrator.run(can_prompt=...)` is how a transport declares it has a reply channel; REST and the CLI pass `False`, and there an `ask` becomes a stated denial rather than a request nobody will see.
+
+A denial does **not** end the turn. `_act_code` records a failed `Step` and returns, so the loop routes around it exactly as it does any other failed sub-task — declining once must not cost the whole question.
+
+**`chat.py`'s receive loop no longer awaits the run.** It used to (`ensure_future` then immediately `await`), so no frame sent during a turn was read until the turn finished — which is also why `cancel` could not interrupt anything. Error handling moved inside `run_turn` for this. An `approval` frame with an `id` is routed to the broker *before* the "a run is already in progress" check, since that check exists to reject a new turn, not an answer to the running one.
+
 ### Redaction — `should_redact` + [prompts.py](backend/src/core/prompts.py)
 
 `generate_system_context(..., redact=True)` keeps shape, column names, dtypes, null rates and semantic types, and drops every real value: the `example` column, the `head(3)` glimpse, the `describe()` summary, and categorical distinct values (replaced by a count). It adds a line telling the model values were withheld and must be computed — without it, an empty glimpse reads as an empty table.
@@ -377,12 +407,13 @@ Four routes, no landing page — `/` **is** the workspace:
 
 - [use-chat-stream.ts](frontend/lib/use-chat-stream.ts) owns one persistent WebSocket with heartbeat and exponential-backoff reconnect, and appends each `*_delta` frame to the live message. This is genuine token streaming; do not reintroduce the timer-based word reveal.
 - **Every socket handler first checks it is still the socket the hook holds** (`socketRef.current === socket`). A discarded socket otherwise keeps acting as the live one: its `onclose` nulls `socketRef` out from under the replacement and schedules another connect, so the replacement stays open with nothing pointing at it. StrictMode remounts every effect in dev, so this fired on **every page load** — the backend log showed two `[accepted]` per load and one disconnect. The orphan is not free: `ws_gate` caps connections at `WS_MAX_CONCURRENT_PER_IP` (4) per client, so one tab cost two slots and two tabs exhausted the limit. Retiring a socket also means detaching its handlers, and for one still CONNECTING, closing on open rather than immediately — `close()` mid-handshake is what logs "WebSocket is closed before the connection is established".
-- The composer's segmented control is **Auto / Fast / Deep** — analysis *depth*, not workflow. The pair it replaced ("Plan first" / "Direct") described whether you would be asked to approve a plan, which is a permissions question and now lives on `/settings`.
+- The composer holds **two independent dials**: the Auto / Fast / Deep segmented control (analysis *depth*) and [chat/permission-control.tsx](frontend/components/chat/permission-control.tsx) (how much it asks first). A popover rather than a third segmented group — three of those across one row does not fit, and unlike depth this is changed rarely. The full per-category matrix is on `/settings`; this is the profile switch.
+- **A permission prompt does not end the turn.** `use-chat-stream.ts` keeps `isRunning` true and keeps `activeIdRef` when the frame carries an `id`, and `respondToApproval` replies in place instead of rebuilding the turn — the paused run on the server is still holding its investigation.
 - [chat/investigation-trail.tsx](frontend/components/chat/investigation-trail.tsx) renders what the agent chose to do, move by move; [chat/answer-trust.tsx](frontend/components/chat/answer-trust.tsx) renders how far the answer can be trusted. Both are collapsed by default — the answer is the headline.
 - Grounding and verification arrive **twice**: as a warning string (for REST clients with no richer surface) and as structured fields. `message.tsx` filters the two known prefixes out of the plain warning list so nothing is said twice. Those prefixes are coupled to `GroundingReport.warning()` and `orchestrator._verify`.
 - `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
 - The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.
-- **[data-mode-control.tsx](frontend/components/data-mode-control.tsx) is in the nav rail, not in Settings.** Whether anything leaves the machine is not a preference to be found three screens deep; the rail already mounts once from the root layout, so it costs no remount and never disturbs the chat socket. The cost line sits with it because spending is a consequence of that choice, not a separate topic.
+- **[data-mode-control.tsx](frontend/components/data-mode-control.tsx) is in the nav rail, not in Settings.** Whether anything leaves the machine is not a preference to be found three screens deep; the rail already mounts once from the root layout, so it costs no remount and never disturbs the chat socket. The cost line sits with it because spending is a consequence of that choice, not a separate topic. The permission profile deliberately does **not** join it: the two are separate axes, and the one that belongs in the composer is the one you might change per question.
 - The cost readout is **live**: the backend's `usage` frame carries session totals, [use-chat-stream.ts](frontend/lib/use-chat-stream.ts) pushes them into [usage-store.ts](frontend/lib/usage-store.ts), and the rail subscribes through `useSyncExternalStore` — the same pattern as `use-sound`, and for the same reason (`set-state-in-effect` is an error here). The frame replaces rather than accumulates: the backend ledger is the source of truth, and adding on the client would double-count a reconnect.
 - Provider **labels and hints come from the backend**, not from the frontend. There used to be two hardcoded `Record<ProviderId, string>` maps — one in the picker, one on `/models` — and adding a backend meant editing both plus the union type. `ProviderId` is now just `string`.
 - The per-source cloud-data control lives on `/data` beside each table, since that is where you already are when you decide a table is sensitive. It offers three states, not two: "Default" tracks the session setting rather than copying it.

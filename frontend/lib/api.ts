@@ -13,6 +13,9 @@ import type {
   ModelDownloadState,
   ModelDownloadsResponse,
   ModelListResponse,
+  PermissionProfile,
+  PermissionRuling,
+  PermissionsInfo,
   ProvidersResponse,
   ServerConfig,
   SessionInfo,
@@ -139,6 +142,17 @@ export const api = {
     request<DataModeInfo>(`/api/data-mode/dataset/${encodeURIComponent(dataset)}`, {
       method: "DELETE",
     }),
+
+  /**
+   * How much this session asks before acting.
+   *
+   * A separate axis from the data mode: that one decides what is possible at
+   * all, this one decides what is asked about among what already is.
+   */
+  permissions: () => request<PermissionsInfo>("/api/permissions"),
+
+  setPermissions: (body: { profile?: PermissionProfile; categories?: Record<string, PermissionRuling> }) =>
+    request<PermissionsInfo>("/api/permissions", { method: "POST", body: JSON.stringify(body) }),
 
   providers: () => request<ProvidersResponse>("/api/providers"),
 

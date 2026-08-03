@@ -45,6 +45,7 @@ Fixes carried in from the earlier audit, still load-bearing
 from __future__ import annotations
 
 import asyncio
+import posixpath
 import re
 import time
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.config import TierBudget, settings
 from src.core.agent.actions import ActionKind, Decision, Investigation, Step, parse_decision
+from src.core.agent.consent import ConsentRequest, consent_broker
 from src.core.agent.council import TheCouncil
 from src.core.agent.events import Emitter, EventType, Phase, emit
 from src.core.agent.grounding import (
@@ -68,6 +70,7 @@ from src.core.llm.provider import DataModeViolation, LLMUnavailableError
 from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
 from src.core.llm.usage import usage_ledger
 from src.core.memory import working_memory
+from src.core.permissions import denial_reason, unattended_reason
 from src.core.prompts import (
     create_answer_prompt,
     create_decision_prompt,
@@ -78,7 +81,9 @@ from src.core.prompts import (
     create_verification_prompt,
 )
 from src.core.rag.retriever import context_retriever
+from src.core.security.code_guard import imported_modules
 from src.core.semantic_cache import semantic_cache
+from src.core.tools import runtime as runtime_backend
 from src.core.tools.evaluator import Evaluator
 from src.utils.logging import logger
 
@@ -161,6 +166,10 @@ class RunState:
     from_cache: bool = False
     warnings: list[str] = field(default_factory=list)
     pending_approval: dict[str, Any] | None = None
+    #: Whether the caller can carry a consent question back to a human. False for
+    #: REST and the CLI, where an `ask` has nobody to ask and must resolve to a
+    #: stated denial rather than parking the request.
+    can_prompt: bool = False
     verification: str = ""
     grounding: GroundingReport = field(default_factory=GroundingReport)
     usage: dict[str, Any] = field(default_factory=dict)
@@ -284,6 +293,128 @@ class AnalysisOrchestrator:
         return settings.budget_for(mode, parameter_size)
 
     # ------------------------------------------------------------------ #
+    # Consent for actions within a run
+    # ------------------------------------------------------------------ #
+    async def _permit(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        category: str,
+        subject: str,
+        prompt: str,
+        detail: str = "",
+    ) -> bool:
+        """Whether one gated action may proceed, asking the user if the profile says to.
+
+        The single place the permission profile is consulted. Every gated action
+        goes through here so that adding one is a call site rather than another
+        bespoke pause somewhere in the loop -- which is what the plan gate and the
+        old web-search prompt had each grown into separately.
+
+        A denial is recorded as a warning rather than raising: the turn continues
+        and the loop can route around the step, which is the same way it already
+        treats a sub-task that failed.
+        """
+        permissions = session.permissions
+        if permissions.granted(category, subject):
+            return True
+
+        ruling = permissions.ruling_for(category)
+        if ruling == "allow":
+            return True
+
+        if ruling == "deny":
+            await self._refuse(state, emitter, denial_reason(category, subject, asked=False))
+            return False
+
+        if not state.can_prompt:
+            await self._refuse(state, emitter, unattended_reason(category, subject))
+            return False
+
+        resume_phase = state.phase
+        state.phase = Phase.AWAITING_APPROVAL
+        decision = await consent_broker.ask(
+            session.id,
+            ConsentRequest(category=category, subject=subject, prompt=prompt, detail=detail),
+            emitter,
+            timeout=settings.AGENT_CONSENT_TIMEOUT,
+        )
+        # Back to whatever the turn was doing, not to a fixed phase: this gate is
+        # reached from planning and from execution alike.
+        state.phase = resume_phase
+
+        if not decision.approved:
+            reason = decision.reason or denial_reason(category, subject, asked=True)
+            await self._refuse(state, emitter, reason)
+            return False
+
+        # Remembered for the rest of the session, so an investigation that needs
+        # the same library at iterations 4, 5 and 6 asks once rather than thrice.
+        permissions.grant(category, subject)
+        return True
+
+    async def _refuse(self, state: RunState, emitter: Emitter | None, reason: str) -> None:
+        state.warnings.append(reason)
+        await emit(emitter, EventType.WARNING, content=reason)
+
+    async def _permit_install(self, state: RunState, session: Session, emitter: Emitter | None, code: str) -> bool:
+        """Gates an install the generated code would otherwise trigger.
+
+        Checked statically, before execution. The runtime installs reactively on
+        ``ModuleNotFoundError``, which happens *after* the program has started
+        running -- so a gate waiting for that signal would be asking permission
+        for something that had already happened.
+        """
+        missing = runtime_backend.missing_modules(imported_modules(code), session.id)
+        if not missing:
+            return True
+
+        subject = ", ".join(sorted(missing))
+        return await self._permit(
+            state,
+            session,
+            emitter,
+            "library_install",
+            subject,
+            f"The analysis needs {subject}, which is not installed. Install it?",
+            detail="Installs into the analysis runtime, not into your system Python.",
+        )
+
+    async def _permit_paths(self, state: RunState, session: Session, emitter: Emitter | None, paths: list[str]) -> bool:
+        """Gates a read or write the guard rejected for being outside the workspace."""
+        subject = ", ".join(sorted(set(paths)))
+        allowed = await self._permit(
+            state,
+            session,
+            emitter,
+            "workspace_write",
+            subject,
+            f"The analysis wants to use a file outside its workspace: {subject}. Allow it?",
+            detail="Grants access for the rest of this session.",
+        )
+        if not allowed:
+            return False
+
+        # The grant widens the guard's roots rather than bypassing the guard, so
+        # everything else it checks still applies to the re-scan.
+        for path in set(paths):
+            session.permissions.allow_root(posixpath.dirname(path.replace("\\", "/")) or path)
+        return True
+
+    @staticmethod
+    def _drop_search(state: RunState, reason: str) -> None:
+        """Strips the SEARCH directive so the run continues without it.
+
+        The plan is still worth carrying out; it just has to be carried out from
+        the data at hand. Leaving the directive in would send the model's own
+        unmet request into every later prompt as if it had been satisfied.
+        """
+        state.plan = SEARCH_PATTERN.sub("", state.plan).strip() or state.instruction
+        if reason:
+            state.warnings.append(reason)
+
+    # ------------------------------------------------------------------ #
     # Main entry point
     # ------------------------------------------------------------------ #
     async def run(
@@ -295,10 +426,17 @@ class AnalysisOrchestrator:
         approved_plan: str | None = None,
         approved_search: str | None = None,
         previous_code: str | None = None,
+        can_prompt: bool = False,
     ) -> RunResult:
-        """Executes one turn. Returns when the run completes or pauses for approval."""
+        """Executes one turn. Returns when the run completes or pauses for approval.
+
+        ``can_prompt`` says whether this transport can deliver a mid-run consent
+        question and carry an answer back. Only the WebSocket can; a REST turn
+        has no reply channel, so there an `ask` becomes a denial with a reason
+        rather than a request nobody will ever see.
+        """
         mode = self.normalise_mode(mode)
-        state = RunState(instruction=instruction, mode=mode)
+        state = RunState(instruction=instruction, mode=mode, can_prompt=can_prompt)
 
         if session.df is None:
             await emit(emitter, EventType.ERROR, content="No dataset is loaded for this session.")
@@ -427,27 +565,45 @@ class AnalysisOrchestrator:
 
         await emit(emitter, EventType.STEP_END, id="plan", ok=True, duration_ms=state.elapsed_ms)
 
-        # A plan may request a web search; that leaves the machine, so it always
-        # requires explicit consent regardless of the approval setting.
+        # A plan may request a web search, which leaves the machine. Two layers
+        # decide, in this order and never the other way round: the data mode says
+        # whether it is possible at all, and only then the permission profile
+        # says whether to ask. No profile can consent past the mode.
         search_match = SEARCH_PATTERN.search(state.plan)
         if search_match and not tool_allowed(session.data_mode, "web_search"):
             # Not an approval prompt: under local-only there is no consent that
             # would make this allowed, so asking would be theatre.
-            refusal = tool_refusal("web_search")
-            state.warnings.append(refusal)
-            state.plan = SEARCH_PATTERN.sub("", state.plan).strip() or state.instruction
-            await emit(emitter, EventType.WARNING, content=refusal)
+            self._drop_search(state, tool_refusal("web_search"))
+            await emit(emitter, EventType.WARNING, content=state.warnings[-1])
         elif search_match:
             query = search_match.group(1)
-            state.pending_approval = {
-                "tool": "web_search",
-                "query": query,
-                "prompt": f"Wizard wants to search the web for: “{query}”. Allow?",
-                "plan": state.plan,
-            }
-            state.phase = Phase.AWAITING_APPROVAL
-            await emit(emitter, EventType.APPROVAL_REQUIRED, **state.pending_approval)
-            return False
+            prompt = f"Wizard wants to search the web for: “{query}”. Allow?"
+            if state.can_prompt:
+                # Suspend rather than end the turn: the plan is already made, and
+                # the old two-turn dance re-planned from scratch on resume.
+                allowed = await self._permit(state, session, emitter, "network", query, prompt, detail="Web search")
+                if not allowed:
+                    self._drop_search(state, "")
+                else:
+                    await self._run_search(state, session, query, emitter)
+            elif session.permissions.ruling_for("network") == "allow":
+                await self._run_search(state, session, query, emitter)
+            elif session.permissions.ruling_for("network") == "deny":
+                self._drop_search(state, denial_reason("network", query, asked=False))
+                await emit(emitter, EventType.WARNING, content=state.warnings[-1])
+            else:
+                # No reply channel, but the search is genuinely worth asking
+                # about, so this is the one place the old turn-terminating gate
+                # is still the right shape: REST returns and the caller re-asks.
+                state.pending_approval = {
+                    "tool": "web_search",
+                    "query": query,
+                    "prompt": prompt,
+                    "plan": state.plan,
+                }
+                state.phase = Phase.AWAITING_APPROVAL
+                await emit(emitter, EventType.APPROVAL_REQUIRED, **state.pending_approval)
+                return False
 
         # Plan approval is opt-in. `planning` mode is the legacy way of asking
         # for it per-request; AGENT_REQUIRE_APPROVAL is the deployment-wide way.
@@ -889,7 +1045,27 @@ class AnalysisOrchestrator:
                 )
                 return
 
+            if not await self._permit_install(state, session, emitter, state.code):
+                state.investigation.record(
+                    Step(
+                        index=state.iterations_used,
+                        kind=ActionKind.CODE,
+                        goal=goal,
+                        observation=state.warnings[-1] if state.warnings else "Permission declined.",
+                        ok=False,
+                        code=state.code,
+                    )
+                )
+                # Not `state.blocked`: the turn continues and the loop can try a
+                # route that does not need the library, the same way it routes
+                # around a step that failed for any other reason.
+                return
+
             result = await self._execute(state, session, emitter)
+
+            if result.blocked and result.blocked_paths:
+                if await self._permit_paths(state, session, emitter, result.blocked_paths):
+                    result = await self._execute(state, session, emitter)
 
             if result.blocked:
                 state.blocked = True
@@ -1077,7 +1253,12 @@ class AnalysisOrchestrator:
         drainer = asyncio.ensure_future(drain())
         try:
             result = await asyncio.to_thread(
-                session.executor.execute, state.code, session.df, on_stdout, session.tables
+                session.executor.execute,
+                state.code,
+                session.df,
+                on_stdout,
+                session.tables,
+                session.permissions.extra_roots,
             )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, "")
@@ -1143,7 +1324,16 @@ class AnalysisOrchestrator:
             await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
             return
 
-        result = await asyncio.to_thread(session.executor.execute, code, session.df, None, session.tables)
+        # Verification is independently generated code, so it can want a library
+        # the analysis itself did not. Gating it here is what stops the check
+        # being a way round the gate on the thing it is checking.
+        if not await self._permit_install(state, session, emitter, code):
+            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+            return
+
+        result = await asyncio.to_thread(
+            session.executor.execute, code, session.df, None, session.tables, session.permissions.extra_roots
+        )
         output = (result.output or "").strip()
 
         if not result.ok:

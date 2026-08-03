@@ -402,9 +402,17 @@ class Settings(BaseSettings):
     # away every intermediate result a later step depended on.
     AGENT_OBSERVATION_CHARS: int = 4000
     # Halt for plan approval before anything runs. Off by default: an agent that
-    # asks permission for every question is not autonomous. Web search always
-    # asks regardless, because that leaves the machine.
+    # asks permission for every question is not autonomous. This gates the
+    # *plan*; AGENT_PERMISSION_PROFILE gates actions within an approved one.
     AGENT_REQUIRE_APPROVAL: bool = False
+    # How much the agent asks before acting, orthogonal to depth. Defaults to
+    # ask-always because every category is then at least as consultative as it
+    # was before the profile existed -- auto-approve would silently stop asking
+    # about web search, which is a trust regression to ship by default.
+    AGENT_PERMISSION_PROFILE: Literal["auto-approve", "ask-always", "custom"] = "ask-always"
+    # How long a mid-run consent prompt waits before it counts as declined.
+    # A suspended turn nobody answers must end, not park.
+    AGENT_CONSENT_TIMEOUT: float = 120.0
     # Re-derive the headline result a second way before answering.
     AGENT_VERIFY: bool = True
     # Refuse to present numbers that never appeared in real execution output.

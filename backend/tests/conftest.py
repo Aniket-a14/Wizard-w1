@@ -55,6 +55,15 @@ os.environ.update(
         # test state the mode it means to test.
         "DATA_MODE": "hybrid",
         "DATA_SCHEMA_ONLY": "false",
+        # Pinned rather than inherited so each test states the profile it means
+        # to exercise. `ask-always` is also the shipped default, so the suite
+        # runs against the behaviour a fresh install actually gets.
+        "AGENT_PERMISSION_PROFILE": "ask-always",
+        # Short, because a test that reaches this has already gone wrong: nothing
+        # in the suite has a client to answer a consent prompt, so the only way
+        # a run should ever wait here is a bug. Two seconds fails it visibly
+        # instead of stalling the run for two minutes.
+        "AGENT_CONSENT_TIMEOUT": "2",
         "WIZARD_CONFIG_DIR": str(TEST_CONFIG_DIR),
         "COUNCIL_ENABLED": "false",
         "VISION_ENABLED": "false",
@@ -76,6 +85,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
+from src.core.agent.consent import consent_broker  # noqa: E402
 from src.core.credentials import credential_store  # noqa: E402
 from src.core.llm.usage import usage_ledger  # noqa: E402
 from src.core.semantic_cache import semantic_cache  # noqa: E402
@@ -164,11 +174,16 @@ def _clean_database():
 
     The usage ledger is cleared for the same reason: it accumulates per session
     id, and a test asserting on a turn's cost must not inherit another's tokens.
+
+    Outstanding consent requests are released last. A test that ends while a run
+    is parked on one would otherwise leave a future nobody resolves, and the next
+    test to touch that session id would inherit it.
     """
     yield
     semantic_cache.clear()
     usage_ledger.clear()
     credential_store.reload()
+    consent_broker._pending.clear()
 
 
 @pytest.fixture

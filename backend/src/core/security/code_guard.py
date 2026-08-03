@@ -154,10 +154,26 @@ class GuardVerdict:
     reason: str = ""
     syntax_error: bool = False
     violations: list[str] = field(default_factory=list)
+    #: Literal paths the code wanted that lie outside the allowed roots, carried
+    #: structurally rather than only inside a sentence. The permission layer has
+    #: to know *which* paths to ask about, and reading them back out of an error
+    #: message would make the message's wording load-bearing.
+    paths: list[str] = field(default_factory=list)
 
     @property
     def retryable(self) -> bool:
         return self.syntax_error
+
+    @property
+    def only_paths(self) -> bool:
+        """True when every violation is a path the user could legitimately allow.
+
+        A banned import or a reflection escape is never up for negotiation; a
+        write to a directory the user owns is. Only the second kind is worth
+        asking about, and mixing them would let one consent prompt wave through
+        an unrelated violation that happened to be in the same program.
+        """
+        return not self.ok and not self.syntax_error and bool(self.paths) and len(self.violations) == len(self.paths)
 
 
 def _is_path_allowed(raw_path: str, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> bool:
@@ -208,47 +224,52 @@ class CodeGuard:
 
         roots = tuple(dict.fromkeys((*extra_roots, *ALLOWED_PATH_ROOTS)))
         violations: list[str] = []
+        paths: list[str] = []
         for node in ast.walk(tree):
-            violations.extend(cls._inspect_node(node, roots))
+            found, offending = cls._inspect_node(node, roots)
+            violations.extend(found)
+            paths.extend(offending)
 
         if violations:
-            return GuardVerdict(ok=False, reason=violations[0], violations=violations)
+            return GuardVerdict(ok=False, reason=violations[0], violations=violations, paths=paths)
         return GuardVerdict(ok=True, reason="Safe")
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def _inspect_node(cls, node: ast.AST, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> list[str]:
+    def _inspect_node(cls, node: ast.AST, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> tuple[list[str], list[str]]:
+        """Returns (violations, offending literal paths) for one node."""
         if isinstance(node, ast.Import):
             return [
                 f"Import of restricted module '{alias.name}' is not permitted."
                 for alias in node.names
                 if alias.name.split(".")[0] in BANNED_MODULES
-            ]
+            ], []
 
         if isinstance(node, ast.ImportFrom):
             root = (node.module or "").split(".")[0]
             if root in BANNED_MODULES:
-                return [f"Import from restricted module '{node.module}' is not permitted."]
-            return []
+                return [f"Import from restricted module '{node.module}' is not permitted."], []
+            return [], []
 
         if isinstance(node, ast.Attribute):
             if node.attr in BANNED_ATTRIBUTES:
-                return [f"Access to restricted attribute '{node.attr}' is not permitted."]
-            return []
+                return [f"Access to restricted attribute '{node.attr}' is not permitted."], []
+            return [], []
 
         if isinstance(node, ast.Name):
             if node.id in BANNED_NAMES:
-                return [f"Reference to '{node.id}' is not permitted."]
-            return []
+                return [f"Reference to '{node.id}' is not permitted."], []
+            return [], []
 
         if isinstance(node, ast.Call):
             return cls._inspect_call(node, roots)
 
-        return []
+        return [], []
 
     @classmethod
-    def _inspect_call(cls, node: ast.Call, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> list[str]:
+    def _inspect_call(cls, node: ast.Call, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> tuple[list[str], list[str]]:
         violations: list[str] = []
+        paths: list[str] = []
 
         func = node.func
         name = ""
@@ -287,8 +308,9 @@ class CodeGuard:
             path_literal = cls._first_string_arg(node)
             if path_literal is not None and not _is_path_allowed(path_literal, roots):
                 violations.append(f"File access outside the workspace is not permitted (path: '{path_literal}').")
+                paths.append(path_literal)
 
-        return violations
+        return violations, paths
 
     @staticmethod
     def _first_string_arg(node: ast.Call) -> str | None:
@@ -362,6 +384,34 @@ class CodeGuard:
             # in the generated code itself. Hand back the un-prefixed source so
             # the error the model sees points at its own line numbers.
             return False, cleaned
+
+
+def imported_modules(code: str) -> frozenset[str]:
+    """Top-level module names ``code`` imports.
+
+    Used to decide, *before* the code runs, whether executing it would make the
+    runtime install something. The daemon installs reactively on
+    ``ModuleNotFoundError`` — after execution has already begun — so a consent
+    gate that waited for that signal would be asking permission for something
+    that had already happened.
+
+    Unparseable code yields nothing rather than raising: the guard reports the
+    syntax error on its own, and this must not turn one into a crash.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return frozenset()
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            # A relative import has no module of its own to install.
+            if node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
+    return frozenset(name for name in names if name)
 
 
 def is_safe_identifier(name: str) -> bool:

@@ -24,6 +24,18 @@ interface MessageProps {
 const GROUNDING_WARNING_PREFIX = "These figures in the answer"
 const VERIFICATION_WARNING_PREFIX = "Independent verification disagreed"
 
+/**
+ * The affirmative button says what it will actually do.
+ *
+ * Keyed off the backend's own tool name rather than a union, so a category added
+ * there falls back to a sentence that is still true instead of failing to build.
+ */
+function approvalLabel(tool: string): string {
+  if (tool === "web_search") return "Allow search"
+  if (tool === "execute_plan") return "Run it"
+  return "Allow"
+}
+
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false)
   return (
@@ -203,21 +215,28 @@ export function Message({ message, onApprove, onOpenArtifact }: MessageProps) {
               <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-brand">
                 Waiting on you
               </p>
-              <p className="mb-3.5 text-[14px] leading-relaxed">{message.approval.prompt}</p>
+              <p className="mb-1.5 text-[14px] leading-relaxed">{message.approval.prompt}</p>
+              {message.approval.detail && (
+                <p className="mb-3.5 text-[12px] leading-snug text-muted-foreground">
+                  {message.approval.detail}
+                </p>
+              )}
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => onApprove(message, true)}
                   className="rounded-lg bg-[linear-gradient(120deg,var(--brand),var(--brand-2))] px-3.5 py-2 text-[12.5px] font-medium text-brand-foreground shadow-brand transition-all duration-[var(--duration-fast)] hover:brightness-105 active:scale-[0.985]"
                 >
-                  {message.approval.tool === "web_search" ? "Allow search" : "Run it"}
+                  {approvalLabel(message.approval.tool)}
                 </button>
                 <button
                   type="button"
                   onClick={() => onApprove(message, false)}
                   className="rounded-lg border border-border px-3.5 py-2 text-[12.5px] font-medium transition-colors duration-[var(--duration-fast)] hover:bg-muted"
                 >
-                  Cancel
+                  {/* A permission gate does not end the run, so declining is not
+                      cancelling anything — the agent carries on without it. */}
+                  {message.approval.id ? "Don’t allow" : "Cancel"}
                 </button>
               </div>
             </div>

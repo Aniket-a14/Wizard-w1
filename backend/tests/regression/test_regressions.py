@@ -667,3 +667,103 @@ def test_a_policy_cannot_be_set_for_a_dataset_that_is_not_loaded(client) -> None
 
     response = client.put("/api/data-mode/dataset/ghost.csv", json={"schema_only": True}, headers=headers)
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Permission profile (Milestone 2)
+# --------------------------------------------------------------------------- #
+def test_the_data_mode_outranks_the_permission_profile(client) -> None:
+    """`auto-approve` must not be able to consent past `local-only`.
+
+    The two dials answer adjacent questions and rank in one order only: the mode
+    decides what is possible at all, the profile decides what is asked about
+    among what already is. Letting a profile reach past the mode would turn the
+    one hard boundary in the product into a preference.
+    """
+    from src.core.data_mode import tool_allowed
+    from src.core.permissions import PermissionState
+
+    assert PermissionState(profile="auto-approve").ruling_for("network") == "allow"
+    assert tool_allowed("local-only", "web_search") is False
+
+
+def test_auto_approve_never_covers_write_back(client) -> None:
+    """The one category no blanket profile may include.
+
+    Write-back changes data outside this machine. The spec is explicit that it is
+    enabled per connection, once, deliberately — never implied by "connect" and
+    never by choosing a convenient profile.
+    """
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    body = client.post("/api/permissions", json={"profile": "auto-approve"}, headers=headers).json()
+    rulings = {row["key"]: row["ruling"] for row in body["categories"]}
+
+    assert rulings["library_install"] == "allow"
+    assert rulings["db_write"] == "ask", "a blanket profile reached the write-back category"
+
+
+def test_write_back_cannot_be_allowed_through_the_api(client) -> None:
+    """Rejected at the edge, not silently clamped, so the UI can explain why."""
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    response = client.post(
+        "/api/permissions",
+        json={"profile": "custom", "categories": {"db_write": "allow"}},
+        headers=headers,
+    )
+    assert response.status_code == 400
+    assert "per connection" in response.json()["detail"]
+
+
+def test_loosening_then_tightening_the_profile_drops_earlier_grants(client) -> None:
+    """A grant is consent under the rules in force when it was given.
+
+    Carrying grants across a tightening would mean choosing a stricter profile
+    changed nothing about what the agent was still free to do — the setting the
+    user picked to be safer would be decorative.
+    """
+    from src.core.session import session_manager
+
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+    client.post("/api/permissions", json={"profile": "auto-approve"}, headers=headers)
+
+    session = session_manager.get(session_id)
+    assert session is not None
+    session.permissions.grant("library_install", "lifelines")
+    session.permissions.allow_root("/data/reports")
+
+    client.post("/api/permissions", json={"profile": "ask-always"}, headers=headers)
+
+    assert not session.permissions.granted("library_install", "lifelines")
+    assert session.permissions.extra_roots == ()
+
+
+def test_the_permission_profile_is_reported_on_the_session(client) -> None:
+    """The UI reads it from one place, so it has to be in `describe()`."""
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    body = client.get("/api/session", headers=headers).json()
+    assert body["permissions"]["profile"] == "ask-always"
+
+
+def test_the_connector_categories_are_reported_as_not_yet_reachable(client) -> None:
+    """They are declared so a profile set today still holds when connectors land.
+
+    Reporting them as live would imply a capability that has not shipped, which
+    is the same class of mistake as a toolkit entry advertising a library the
+    runtime does not have.
+    """
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    body = client.get("/api/permissions", headers=headers).json()
+    live = {row["key"]: row["live"] for row in body["categories"]}
+
+    assert live["library_install"] is True
+    assert live["db_connect"] is False
+    assert live["db_write"] is False
