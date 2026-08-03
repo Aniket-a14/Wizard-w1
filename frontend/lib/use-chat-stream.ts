@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { storeSessionId, websocketUrl } from "./api"
+import { recordUsageFrame } from "./usage-store"
 import type {
   ActionKind,
   AnalysisMode,
@@ -230,6 +231,13 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
             ...message,
             warnings: [...message.warnings, String(event.content ?? "")],
           }))
+          break
+
+        // Session totals, not a delta. Pushed into the shared store so the cost
+        // readout in the rail moves when a turn ends rather than on next load.
+        // Only sent when a cloud model ran, so a local-only session never sees it.
+        case "usage":
+          recordUsageFrame(event as Record<string, unknown>)
           break
 
         case "iteration_start":

@@ -4,13 +4,16 @@ import { Check, Cpu, Loader2, RefreshCw, Trash2, TriangleAlert, Zap } from "luci
 import { useCallback, useEffect, useState } from "react"
 
 import { ModelInstall } from "@/components/models/model-install"
+import { ProviderKey } from "@/components/models/provider-key"
 import { PageHeader } from "@/components/page-header"
 import { api } from "@/lib/api"
 import type {
+  DataModeInfo,
   ModelInfo,
   ModelListResponse,
   ProviderDownloadCapability,
   ProviderId,
+  ProviderInfo,
 } from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
@@ -30,19 +33,31 @@ const ROLES = [
   },
 ]
 
-const PROVIDER_LABELS: Record<ProviderId, string> = {
-  ollama: "Ollama",
-  lmstudio: "LM Studio",
-  openai: "OpenAI",
-  custom_gateway: "Gateway",
+/**
+ * Labels and hints come from the backend's provider table, not from a map here.
+ * There were two copies of that map — this page and the header picker — and both
+ * had to be edited by hand whenever a backend was added.
+ */
+function labelOf(providers: ProviderInfo[], id: string | null): string {
+  if (!id) return "—"
+  return providers.find((entry) => entry.id === id)?.label ?? id
 }
 
-const EMPTY_HINTS: Record<ProviderId, string> = {
-  ollama: "Nothing pulled yet, or the daemon is not running. Any model works — try `ollama pull qwen3:8b`.",
-  lmstudio:
-    "Start the server from LM Studio's Developer tab, and enable “Serve on Local Network” so the backend can reach it from its container.",
-  openai: "Set GATEWAY_API_URL and GATEWAY_API_KEY in backend/.env.",
-  custom_gateway: "Set GATEWAY_API_URL and GATEWAY_API_KEY in backend/.env.",
+function emptyHint(entry: ProviderInfo | undefined): string {
+  if (!entry) return "Pick a provider above."
+  if (entry.requires_key && !entry.has_key) {
+    return `${entry.label} needs an API key before it can list anything. Add one above.`
+  }
+  if (!entry.base_url) {
+    return `No endpoint is configured for ${entry.label}. Set its base URL in backend/.env.`
+  }
+  if (entry.id === "ollama") {
+    return "Nothing pulled yet, or the daemon is not running. Any model works — try `ollama pull qwen3:8b`."
+  }
+  if (entry.id === "lmstudio") {
+    return "Start the server from LM Studio's Developer tab, and enable “Serve on Local Network” so the backend can reach it from its container."
+  }
+  return `${entry.label} returned no models. Check the endpoint and the key.`
 }
 
 function formatSize(bytes: number): string {
@@ -69,16 +84,22 @@ export function ModelsWorkbench() {
   const [provider, setProvider] = useState<ProviderId | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
+  const [assignError, setAssignError] = useState<string | null>(null)
   const [removing, setRemoving] = useState<string | null>(null)
   const [canDelete, setCanDelete] = useState(false)
+  const [dataMode, setDataMode] = useState<DataModeInfo | null>(null)
   const { playSound } = useSound()
 
   const load = useCallback(async (target?: ProviderId, refresh = false) => {
     setLoading(true)
     try {
-      const response = await api.models(refresh, target)
+      const [response, mode] = await Promise.all([
+        api.models(refresh, target),
+        api.dataMode().catch(() => null),
+      ])
       setData(response)
       setProvider(response.provider as ProviderId)
+      if (mode) setDataMode(mode)
     } catch {
       setData(null)
     } finally {
@@ -94,10 +115,15 @@ export function ModelsWorkbench() {
     async (role: "manager" | "worker", model: string) => {
       if (!provider) return
       setSaving(`${role}:${model}`)
+      setAssignError(null)
       try {
         await api.selectModels({ [role]: model, [`${role}_provider`]: provider })
         await load(provider)
         playSound("click")
+      } catch (caught) {
+        // A 409 here is the data mode refusing the provider. Its message names
+        // the mode and the role, so it is shown rather than replaced.
+        setAssignError(caught instanceof Error ? caught.message : "Could not assign that model.")
       } finally {
         setSaving(null)
       }
@@ -147,6 +173,7 @@ export function ModelsWorkbench() {
   const providers = data?.providers ?? []
   const models = data?.models ?? []
   const temperature = typeof selected.temperature === "number" ? selected.temperature : 0
+  const activeProvider = providers.find((entry) => entry.id === provider)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -180,7 +207,7 @@ export function ModelsWorkbench() {
               <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">{role.blurb}</p>
               <p className="mt-3.5 truncate font-mono text-[13px] font-medium">{model}</p>
               <p className="mt-1 text-[11.5px] text-muted-foreground">
-                on {PROVIDER_LABELS[roleProvider] ?? (roleProvider || "—")}
+                on {labelOf(providers, roleProvider || null)}
               </p>
             </div>
           )
@@ -220,30 +247,72 @@ export function ModelsWorkbench() {
 
       {/* Provider selection ------------------------------------------------- */}
       <div className="px-6 pt-6 md:px-9">
-        <div className="mb-5 flex flex-wrap items-center gap-1.5">
+        {assignError && (
+          <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[13px] leading-relaxed text-warning">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{assignError}</span>
+          </div>
+        )}
+
+        <div className="mb-4 flex flex-wrap items-center gap-1.5">
           {providers.map((entry) => (
             <button
               key={entry.id}
               type="button"
               onClick={() => void load(entry.id)}
-              title={entry.base_url || "No endpoint configured"}
+              // A provider the mode forbids is still browsable — you may want to
+              // see what is there before switching. Assigning it is what fails,
+              // and the badge below says so before you try.
+              title={
+                entry.allowed
+                  ? entry.base_url || "No endpoint configured"
+                  : `${entry.label} is unavailable in ${dataMode?.mode ?? "this"} mode`
+              }
               className={cn(
-                "rounded-lg px-3 py-1.5 text-[12.5px] font-medium transition-colors duration-[var(--duration-fast)]",
+                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-medium",
+                "transition-colors duration-[var(--duration-fast)]",
                 provider === entry.id
                   ? "bg-primary text-primary-foreground shadow-xs"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 !entry.configured && provider !== entry.id && "opacity-45",
               )}
             >
-              {PROVIDER_LABELS[entry.id] ?? entry.id}
+              {entry.label}
+              {entry.kind === "cloud" && (
+                <span
+                  className={cn(
+                    "rounded px-1 py-0.5 text-[9.5px] uppercase tracking-[0.08em]",
+                    provider === entry.id ? "bg-primary-foreground/20" : "bg-muted-foreground/15",
+                  )}
+                >
+                  cloud
+                </span>
+              )}
             </button>
           ))}
-          {provider && (
+          {activeProvider && (
             <span className="ml-auto truncate font-mono text-[11px] text-muted-foreground">
-              {providers.find((entry) => entry.id === provider)?.base_url}
+              {activeProvider.base_url}
             </span>
           )}
         </div>
+
+        {activeProvider && !activeProvider.allowed && (
+          <p className="mb-4 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[12.5px] leading-relaxed text-warning">
+            {activeProvider.label} cannot be used while this session is set to {dataMode?.mode}. Change
+            the data mode in the sidebar to assign a model from here.
+          </p>
+        )}
+
+        {activeProvider?.hint && (
+          <p className="mb-4 text-[12.5px] leading-relaxed text-muted-foreground">{activeProvider.hint}</p>
+        )}
+
+        {activeProvider && (
+          <div className="mb-5">
+            <ProviderKey provider={activeProvider} onChanged={() => void load(activeProvider.id, true)} />
+          </div>
+        )}
       </div>
 
       {/* Installing, before browsing: on a fresh machine the list below is
@@ -266,7 +335,7 @@ export function ModelsWorkbench() {
 
         {!loading && models.length === 0 && !data?.error && provider && (
           <p className="rounded-xl border border-border bg-card p-5 text-[13px] leading-relaxed text-muted-foreground">
-            {EMPTY_HINTS[provider]}
+            {emptyHint(activeProvider)}
           </p>
         )}
 

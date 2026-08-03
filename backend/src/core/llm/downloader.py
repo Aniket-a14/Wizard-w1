@@ -38,8 +38,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Literal
 
-from src.config import LOCAL_PROVIDERS, settings
+from src.config import settings
 from src.core.llm.registry import model_registry
+from src.providers import LOCAL_PROVIDERS, label_for
 from src.utils.hostinfo import host_info
 from src.utils.logging import logger
 
@@ -184,7 +185,7 @@ class ModelDownloader:
                 "provider": name,
                 "can_download": False,
                 "can_delete": False,
-                "reason": "Hosted providers serve their own models; there is nothing to download.",
+                "reason": f"{label_for(name)} hosts its own models; there is nothing to download.",
             }
         if name == "ollama":
             return {

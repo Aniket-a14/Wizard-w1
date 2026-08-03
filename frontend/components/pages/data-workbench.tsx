@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { DataGrid } from "@/components/data-grid"
 import { PageHeader } from "@/components/page-header"
 import { api } from "@/lib/api"
-import type { DatasetSummary, DocumentSummary, ServerConfig } from "@/lib/types"
+import type { DataModeInfo, DatasetSummary, DocumentSummary, ServerConfig } from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
 
@@ -27,6 +27,7 @@ export function DataWorkbench() {
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
   const [activeDataset, setActiveDataset] = useState<string | null>(null)
   const [config, setConfig] = useState<ServerConfig | null>(null)
+  const [dataMode, setDataMode] = useState<DataModeInfo | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [attachingDoc, setAttachingDoc] = useState(false)
@@ -39,10 +40,11 @@ export function DataWorkbench() {
 
   const refresh = useCallback(async () => {
     try {
-      const session = await api.session()
+      const [session, mode] = await Promise.all([api.session(), api.dataMode().catch(() => null)])
       setDatasets(session.datasets)
       setDocuments(session.documents ?? [])
       setActiveDataset(session.active_dataset)
+      if (mode) setDataMode(mode)
       // Keep the viewer on whatever the user was looking at; fall back to active.
       setSelected((current) =>
         current && session.datasets.some((entry) => entry.name === current)
@@ -265,6 +267,16 @@ export function DataWorkbench() {
                     )}
                   </button>
 
+                  {/* Only where a prompt can be cloud-bound. Under local-only
+                      nothing is sent, so there is nothing to withhold. */}
+                  {dataMode && dataMode.mode !== "local-only" && (
+                    <DatasetPolicyRow
+                      dataset={dataset.name}
+                      mode={dataMode}
+                      onChanged={setDataMode}
+                    />
+                  )}
+
                   <div className="mt-3.5 flex items-center gap-1.5 border-t border-border pt-3">
                     {!isActive && (
                       <button
@@ -439,6 +451,81 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </dt>
       <dd className="tabular mt-0.5 truncate text-[13px] font-medium">{value}</dd>
+    </div>
+  )
+}
+
+
+/**
+ * Whether this source's real values may reach a cloud model.
+ *
+ * Per source rather than per session because sources are not alike: a published
+ * reference table and a payroll export do not deserve the same answer, and one
+ * setting for both means picking the wrong one for one of them. "Follow default"
+ * is a distinct state from either explicit choice — it tracks the session
+ * setting, so changing that changes this too.
+ */
+function DatasetPolicyRow({
+  dataset,
+  mode,
+  onChanged,
+}: {
+  dataset: string
+  mode: DataModeInfo
+  onChanged: (next: DataModeInfo) => void
+}) {
+  const override = mode.per_dataset[dataset]
+  const effective = override ?? mode.schema_only
+
+  const choose = async (value: boolean | null) => {
+    onChanged(
+      value === null
+        ? await api.clearDatasetPolicy(dataset)
+        : await api.setDatasetPolicy(dataset, value),
+    )
+  }
+
+  const options: { key: string; label: string; value: boolean | null; title: string }[] = [
+    {
+      key: "default",
+      label: "Default",
+      value: null,
+      title: `Follow the session setting (currently ${mode.schema_only ? "schema only" : "full data"})`,
+    },
+    { key: "schema", label: "Schema only", value: true, title: "Names and types reach cloud models; values do not" },
+    { key: "full", label: "Full data", value: false, title: "Sample rows and distributions reach cloud models" },
+  ]
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-muted-foreground">To cloud models</span>
+        <span className={cn("text-[11px] font-medium", effective ? "text-success" : "text-warning")}>
+          {effective ? "schema only" : "full data"}
+        </span>
+      </div>
+      <div className="mt-1.5 flex items-center gap-0.5 rounded-lg bg-muted p-0.5" role="radiogroup" aria-label={`Cloud data policy for ${dataset}`}>
+        {options.map((option) => {
+          const active = option.value === null ? override === undefined : override === option.value
+          return (
+            <button
+              key={option.key}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              title={option.title}
+              onClick={() => void choose(option.value)}
+              className={cn(
+                "flex-1 rounded-md px-1.5 py-1 text-[10.5px] font-medium",
+                "transition-[background-color,color] duration-[var(--duration-fast)]",
+                active ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {option.label}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

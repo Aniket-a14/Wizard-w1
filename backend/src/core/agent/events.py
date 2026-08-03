@@ -48,6 +48,8 @@ class EventType(StrEnum):
     PLAN_REVISED = "plan_revised"  # {plan, why}
     ASSUMPTION = "assumption"  # {text, kind}
     VERIFICATION = "verification"  # {status, detail}
+    #: What the turn cost. Absent under local-only, where there is no meter.
+    USAGE = "usage"  # {calls, total_tokens, cost_usd, any_cloud, estimated}
 
 
 class Phase(StrEnum):

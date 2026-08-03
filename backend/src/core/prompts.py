@@ -24,13 +24,16 @@ MAX_UNIQUE_VALUES_SHOWN = 8
 MAX_WARNINGS = 8
 
 
-def _describe_columns(df: pd.DataFrame, columns: list[str]) -> str:
+def _describe_columns(df: pd.DataFrame, columns: list[str], redact: bool = False) -> str:
     """Compact per-column schema table (dtype, null %, sample) for the chosen columns."""
     rows = []
     total = len(df)
     for column in columns:
         series = df[column]
         null_pct = (series.isna().sum() / total * 100) if total else 0.0
+        if redact:
+            rows.append(f"| {column} | {series.dtype} | {null_pct:.1f}% |")
+            continue
         try:
             sample = series.dropna().iloc[0]
             sample_text = str(sample)[:40]
@@ -38,11 +41,13 @@ def _describe_columns(df: pd.DataFrame, columns: list[str]) -> str:
             sample_text = ""
         rows.append(f"| {column} | {series.dtype} | {null_pct:.1f}% | {sample_text} |")
 
+    if redact:
+        return "| column | dtype | null % |\n| --- | --- | --- |\n" + "\n".join(rows)
     header = "| column | dtype | null % | example |\n| --- | --- | --- | --- |"
     return header + "\n" + "\n".join(rows)
 
 
-def _categorical_insights(df: pd.DataFrame, columns: list[str]) -> str:
+def _categorical_insights(df: pd.DataFrame, columns: list[str], redact: bool = False) -> str:
     candidates = [
         c
         for c in columns
@@ -57,7 +62,10 @@ def _categorical_insights(df: pd.DataFrame, columns: list[str]) -> str:
             uniques = df[column].dropna().unique()
         except (TypeError, ValueError):
             continue
-        if len(uniques) <= MAX_UNIQUE_VALUES_SHOWN:
+        if redact:
+            # The count is a shape fact; the values themselves are data.
+            lines.append(f"- **{column}**: {len(uniques)} distinct values (withheld)")
+        elif len(uniques) <= MAX_UNIQUE_VALUES_SHOWN:
             values = ", ".join(f"`{v}`" for v in uniques)
             lines.append(f"- **{column}**: {values}")
         else:
@@ -129,8 +137,15 @@ def generate_system_context(
     query: str = "",
     session_id: str | None = None,
     max_columns: int | None = None,
+    redact: bool = False,
 ) -> str:
-    """Builds a size-bounded description of the active dataset."""
+    """Builds a size-bounded description of the active dataset.
+
+    ``redact`` strips every real value — sample rows, distributions, distinct
+    values, per-column examples — leaving names, dtypes, null rates and shape.
+    It is set per prompt from where that prompt is going, so a cloud-bound
+    planner can be redacted while a local worker is not.
+    """
     columns, truncated = context_retriever.select_columns(query or "", df, max_columns)
 
     truncation_note = ""
@@ -140,20 +155,24 @@ def generate_system_context(
             f"All {len(df.columns)} columns exist on `df` and can be referenced by name.*\n"
         )
 
-    subset = df[columns] if columns else df
+    subset = df.loc[:, list(columns)] if columns else df
 
-    numeric = subset.select_dtypes(include="number")
-    if not numeric.empty:
-        statistics = numeric.describe().T[["count", "mean", "std", "min", "max"]].round(3).to_markdown()
+    if redact:
+        statistics = "*Withheld — compute what you need in code.*"
+        glimpse = "*Withheld. The columns above are real; the values are not shown.*"
     else:
-        statistics = "*No numeric columns in scope.*"
+        numeric = subset.select_dtypes(include="number")
+        if not numeric.empty:
+            statistics = numeric.describe().T[["count", "mean", "std", "min", "max"]].round(3).to_markdown()
+        else:
+            statistics = "*No numeric columns in scope.*"
 
-    try:
-        glimpse = subset.head(3).to_markdown(index=False)
-    except Exception:
-        buffer = io.StringIO()
-        subset.head(3).to_string(buf=buffer)
-        glimpse = buffer.getvalue()
+        try:
+            glimpse = subset.head(3).to_markdown(index=False)
+        except Exception:
+            buffer = io.StringIO()
+            subset.head(3).to_string(buf=buffer)
+            glimpse = buffer.getvalue()
 
     semantic_lines = []
     if catalog:
@@ -164,11 +183,18 @@ def generate_system_context(
             semantic_lines.append(f"- **{column}**: `{semantic_type}`")
     semantic_block = "\n".join(semantic_lines[:30]) if semantic_lines else "*Not profiled.*"
 
+    redaction_note = (
+        "\n*This session withholds real values from this model. Column names, types and null rates "
+        "are accurate; no value shown below is data. Do not guess or invent values — compute them.*\n"
+        if redact
+        else ""
+    )
+
     return f"""<dataset_context>
 Shape: {len(df):,} rows x {len(df.columns)} columns.
-{truncation_note}
+{truncation_note}{redaction_note}
 <schema>
-{_describe_columns(subset, columns)}
+{_describe_columns(subset, columns, redact)}
 </schema>
 
 <data_glimpse>
@@ -180,7 +206,7 @@ Shape: {len(df):,} rows x {len(df.columns)} columns.
 </numeric_summary>
 {_quality_warnings(df, columns)}
 <categorical_insights>
-{_categorical_insights(df, columns)}
+{_categorical_insights(df, columns, redact)}
 </categorical_insights>
 
 <semantic_types>
@@ -189,9 +215,9 @@ Shape: {len(df):,} rows x {len(df.columns)} columns.
 </dataset_context>"""
 
 
-def create_cleaning_prompt(df: pd.DataFrame, catalog: dict[str, Any]) -> str:
+def create_cleaning_prompt(df: pd.DataFrame, catalog: dict[str, Any], redact: bool = False) -> str:
     """Asks the worker to emit a cleaning script for the uploaded frame."""
-    context = generate_system_context(df, catalog, query="clean missing values types")
+    context = generate_system_context(df, catalog, query="clean missing values types", redact=redact)
 
     return f"""<role>
 You are a senior data engineer. Produce a short, safe cleaning script for the dataset below.
@@ -350,6 +376,7 @@ def create_prompt(
     session_id: str | None = None,
     negative_example: str | None = None,
     max_columns: int | None = None,
+    redact: bool = False,
 ) -> str:
     """Worker prompt: turn an approved plan into executable Python."""
     # The tier's column budget, not the global one. `TierBudget.max_columns`
@@ -358,7 +385,7 @@ def create_prompt(
     # and categorical values for 60 -- several thousand tokens it then had to
     # read before emitting anything, on the machine least able to afford it.
     context = generate_system_context(
-        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns
+        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns, redact=redact
     )
 
     plan_block = f"\n<approved_plan>\n{plan}\n</approved_plan>\n" if plan else ""
@@ -436,10 +463,11 @@ def create_planning_prompt(
     session_id: str | None = None,
     history: str = "",
     max_columns: int | None = None,
+    redact: bool = False,
 ) -> str:
     """Manager prompt: produce a plan, not code."""
     context = generate_system_context(
-        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns
+        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns, redact=redact
     )
 
     revision_block = ""

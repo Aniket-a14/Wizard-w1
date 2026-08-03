@@ -30,10 +30,12 @@ from typing import Any
 import pandas as pd
 
 from src.config import settings
+from src.core.data_mode import DataPolicy, normalize as normalize_data_mode
 from src.core.database import db_mgr
 from src.core.execution import CodeExecutor
 from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
+from src.core.llm.usage import usage_ledger
 from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
@@ -119,6 +121,11 @@ class Session:
         self.documents: dict[str, ContextDocument] = {}
         self.active_dataset: str | None = None
         self.models = ModelPreferences()
+        # Session-wide, seeded from the configured default. What the user has
+        # agreed may leave this machine, and how much of the data a cloud-bound
+        # prompt may carry — see `core/data_mode.py`.
+        self.data_mode: str = settings.data_mode
+        self.data_policy = DataPolicy(schema_only=settings.DATA_SCHEMA_ONLY)
         self.executor = CodeExecutor(session_id)
         self._lock = threading.Lock()
 
@@ -202,6 +209,9 @@ class Session:
                 return False
             if self.active_dataset == name:
                 self.active_dataset = next(iter(self.datasets), None)
+            # Dropped with the dataset, so re-uploading a file of the same name
+            # does not silently inherit a policy the user set for a different one.
+            self.data_policy.forget(name)
         db_mgr.delete_schema(name, session_id=self.id)
         for suffix in ("", ".feather"):
             (self.workspace / f"{name}{suffix}").unlink(missing_ok=True)
@@ -379,14 +389,23 @@ class Session:
             "datasets": [handle.summary() for handle in self.datasets.values()],
             "documents": [document.summary() for document in self.documents.values()],
             "models": self.models.to_dict(),
+            "data_mode": self.data_mode,
+            "data_policy": self.data_policy.to_dict(),
+            "usage": usage_ledger.totals(self.id),
             "sandboxed": runtime_backend.active_backend() == "docker",
             "execution_backend": runtime_backend.active_backend(),
         }
+
+    def set_data_mode(self, mode: str) -> str:
+        """Switches the mode and returns what it actually became."""
+        self.data_mode = normalize_data_mode(mode)
+        return self.data_mode
 
     def dispose(self):
         """Releases the container and forgets persisted rows for this session."""
         runtime_backend.release_runtime(self.id)
         runtime_backend.forget_capabilities(self.id)
+        usage_ledger.forget(self.id)
         db_mgr.delete_session_data(self.id)
         with self._lock:
             self.datasets.clear()

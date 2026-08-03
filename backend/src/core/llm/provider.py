@@ -29,7 +29,10 @@ from enum import StrEnum
 from typing import Any
 
 from src.config import settings
+from src.core.data_mode import check_provider
 from src.core.llm.resources import ResidentPlan, plan_for_models
+from src.core.llm.usage import extract_usage, usage_ledger
+from src.providers import describe
 from src.utils.logging import logger
 
 
@@ -58,6 +61,9 @@ class ModelSpec:
     num_ctx: int
     base_url: str = ""
     api_key: str = ""
+    #: Which wire dialect to speak. Carried here rather than re-derived in
+    #: `_build_client` so nothing below branches on a provider name.
+    api_style: str = "openai"
     #: How long the server should hold this model after the call. Derived from
     #: whether the manager and worker can share memory on this machine, so it is
     #: part of the cache key -- a client built when they fitted must not be
@@ -78,6 +84,14 @@ class ModelSpec:
 
 class LLMUnavailableError(RuntimeError):
     """Raised when no client could be constructed for a request."""
+
+
+class DataModeViolation(LLMUnavailableError):
+    """Raised when the session's data mode forbids the provider a role resolved to.
+
+    A subclass of the unavailable error so existing handlers already surface it,
+    but distinguishable because this one is a policy decision rather than a fault.
+    """
 
 
 class LLMProvider:
@@ -125,9 +139,22 @@ class LLMProvider:
         temperature: float | None = None,
         max_tokens: int | None = None,
         provider: str | None = None,
+        data_mode: str | None = None,
     ) -> ModelSpec:
-        """Turns a role plus optional per-request overrides into a concrete spec."""
+        """Turns a role plus optional per-request overrides into a concrete spec.
+
+        The data-mode boundary is enforced here because this is the one function
+        every call already passes through, so a session that assigns its own
+        provider per role cannot route around it.
+        """
         resolved_provider = settings.resolve_provider(provider)
+
+        refusal = check_provider(data_mode or "", resolved_provider, role.value)
+        if refusal:
+            raise DataModeViolation(refusal)
+
+        descriptor = describe(resolved_provider)
+        style = descriptor.api_style if descriptor else "openai"
         return ModelSpec(
             provider=resolved_provider,
             model=(model or self.default_model_for(role, resolved_provider)).strip(),
@@ -135,9 +162,10 @@ class LLMProvider:
             max_tokens=max_tokens or settings.MAX_TOKENS,
             num_ctx=settings.LLM_NUM_CTX,
             keep_alive=self.keep_alive_for(resolved_provider),
-            base_url=settings.provider_openai_base_url(resolved_provider)
-            if resolved_provider != "ollama"
-            else settings.provider_root_url(resolved_provider),
+            api_style=style,
+            base_url=settings.provider_root_url(resolved_provider)
+            if style == "ollama"
+            else settings.provider_openai_base_url(resolved_provider),
             api_key=settings.provider_api_key(resolved_provider),
         )
 
@@ -203,7 +231,7 @@ class LLMProvider:
             logger.warning("No model resolved", provider=spec.provider, base_url=spec.base_url)
             return None
         try:
-            if spec.provider == "ollama":
+            if spec.api_style == "ollama":
                 from langchain_ollama import ChatOllama
 
                 logger.info("Initializing ChatOllama client", model=spec.model, temperature=spec.temperature)
@@ -229,6 +257,30 @@ class LLMProvider:
                     client_kwargs={"timeout": settings.LLM_REQUEST_TIMEOUT},
                 )
 
+            if spec.api_style == "anthropic":
+                try:
+                    from langchain_anthropic import ChatAnthropic
+                except ImportError as exc:  # pragma: no cover - depends on optional extra
+                    raise LLMUnavailableError(
+                        "Anthropic support needs the `langchain-anthropic` package. "
+                        "Install it with `pip install -r requirements-optional.txt`."
+                    ) from exc
+
+                logger.info("Initializing ChatAnthropic client", model=spec.model)
+                # Assembled as a dict because the client's own annotations want a
+                # SecretStr, which it coerces from a plain string at runtime.
+                anthropic_kwargs: dict[str, Any] = {
+                    "model_name": spec.model,
+                    "base_url": spec.base_url or None,
+                    "api_key": spec.api_key or None,
+                    "temperature": spec.temperature,
+                    # Anthropic requires an output bound; the per-purpose budget is it.
+                    "max_tokens_to_sample": spec.max_tokens,
+                    "timeout": settings.LLM_REQUEST_TIMEOUT,
+                    "stop": None,
+                }
+                return ChatAnthropic(**anthropic_kwargs)
+
             try:
                 from langchain_openai import ChatOpenAI
             except ImportError:  # pragma: no cover - depends on optional extra
@@ -251,6 +303,10 @@ class LLMProvider:
                 max_tokens=spec.max_tokens,
                 timeout=settings.LLM_REQUEST_TIMEOUT,
             )
+        except LLMUnavailableError:
+            # A missing optional package names what to install; swallowing it here
+            # would replace that with a generic "no client available".
+            raise
         except Exception as exc:
             logger.error("Failed to construct LLM client", provider=spec.provider, model=spec.model, error=str(exc))
             return None
@@ -263,6 +319,15 @@ class LLMProvider:
     # ------------------------------------------------------------------ #
     # Invocation
     # ------------------------------------------------------------------ #
+    def _record(self, spec: ModelSpec, role: LLMRole, session_id: str | None, response: Any, prompt: str, text: str):
+        """Books one call against the session. Never raises — a meter must not fail a turn."""
+        try:
+            usage_ledger.record(
+                session_id, spec.provider, spec.model, role.value, extract_usage(response, prompt, text)
+            )
+        except Exception as exc:  # pragma: no cover - accounting is best effort
+            logger.warning("Could not record token usage", error=str(exc))
+
     def complete(
         self,
         prompt: str,
@@ -271,15 +336,21 @@ class LLMProvider:
         temperature: float | None = None,
         provider: str | None = None,
         max_tokens: int | None = None,
+        data_mode: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Blocking completion. Returns "" when the provider is unreachable."""
-        spec = self.resolve(role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens)
+        spec = self.resolve(
+            role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
+        )
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
         try:
             response = client.invoke(prompt)
-            return self._extract_text(response)
+            text = self._extract_text(response)
+            self._record(spec, role, session_id, response, prompt, text)
+            return text
         except Exception as exc:
             logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=str(exc))
             raise LLMUnavailableError(str(exc)) from exc
@@ -292,14 +363,20 @@ class LLMProvider:
         temperature: float | None = None,
         provider: str | None = None,
         max_tokens: int | None = None,
+        data_mode: str | None = None,
+        session_id: str | None = None,
     ) -> str:
-        spec = self.resolve(role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens)
+        spec = self.resolve(
+            role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
+        )
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
         try:
             response = await client.ainvoke(prompt)
-            return self._extract_text(response)
+            text = self._extract_text(response)
+            self._record(spec, role, session_id, response, prompt, text)
+            return text
         except Exception as exc:
             logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=str(exc))
             raise LLMUnavailableError(str(exc)) from exc
@@ -312,18 +389,23 @@ class LLMProvider:
         temperature: float | None = None,
         provider: str | None = None,
         max_tokens: int | None = None,
+        data_mode: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Yields text deltas as the model produces them.
 
         Falls back to a single yield of the full response when the underlying
         client does not implement ``astream``.
         """
-        spec = self.resolve(role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens)
+        spec = self.resolve(
+            role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
+        )
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
 
         if not hasattr(client, "astream"):
+            # `acomplete` books this call itself, so nothing is recorded here.
             yield await self.acomplete(
                 prompt,
                 role=role,
@@ -331,17 +413,27 @@ class LLMProvider:
                 temperature=temperature,
                 provider=provider,
                 max_tokens=max_tokens,
+                data_mode=data_mode,
+                session_id=session_id,
             )
             return
 
+        # Usage arrives on one chunk, usually the last. Held so the whole stream
+        # is booked exactly once, which is what `test_turn_cost` pins.
+        produced: list[str] = []
+        counted: Any = None
         try:
             async for chunk in client.astream(prompt):
                 text = self._extract_text(chunk)
+                if getattr(chunk, "usage_metadata", None) or getattr(chunk, "response_metadata", None):
+                    counted = chunk
                 if text:
+                    produced.append(text)
                     yield text
         except Exception as exc:
             logger.error("LLM streaming failed", provider=spec.provider, model=spec.model, error=str(exc))
             raise LLMUnavailableError(str(exc)) from exc
+        self._record(spec, role, session_id, counted, prompt, "".join(produced))
 
     async def stream_to(
         self,
@@ -352,11 +444,14 @@ class LLMProvider:
         temperature: float | None = None,
         provider: str | None = None,
         max_tokens: int | None = None,
+        data_mode: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Streams a completion, invoking ``on_delta`` per chunk, and returns the full text.
 
         ``on_delta`` may be sync or async; both are supported so callers can push
-        straight into a WebSocket without wrapping.
+        straight into a WebSocket without wrapping. Usage is booked by ``astream``,
+        so this must not book it again.
         """
         buffer: list[str] = []
         async for delta in self.astream(
@@ -366,6 +461,8 @@ class LLMProvider:
             temperature=temperature,
             provider=provider,
             max_tokens=max_tokens,
+            data_mode=data_mode,
+            session_id=session_id,
         ):
             buffer.append(delta)
             if on_delta is not None:
@@ -374,9 +471,16 @@ class LLMProvider:
                     await result
         return "".join(buffer)
 
-    async def describe_image(self, base64_png: str, model: str | None = None, provider: str | None = None) -> str:
+    async def describe_image(
+        self,
+        base64_png: str,
+        model: str | None = None,
+        provider: str | None = None,
+        data_mode: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """Multimodal description of a rendered chart."""
-        spec = self.resolve(LLMRole.VISION, model=model, temperature=0.2, provider=provider)
+        spec = self.resolve(LLMRole.VISION, model=model, temperature=0.2, provider=provider, data_mode=data_mode)
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
@@ -396,7 +500,9 @@ class LLMProvider:
             ]
         )
         response = await client.ainvoke([message])
-        return self._extract_text(response).strip()
+        text = self._extract_text(response).strip()
+        self._record(spec, LLMRole.VISION, session_id, response, base64_png, text)
+        return text
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -407,6 +513,12 @@ class LLMProvider:
         only check that if they are told which host was tried.
         """
         where = spec.base_url or "the configured endpoint"
+        descriptor = describe(spec.provider)
+        if descriptor is not None and descriptor.requires_key and not spec.api_key:
+            return (
+                f"{descriptor.label} needs an API key and none is set. "
+                f"Add one on the Models page, or set {descriptor.key_field} in backend/.env."
+            )
         if not spec.model:
             return (
                 f"No model is available on {spec.provider} at {where}. "

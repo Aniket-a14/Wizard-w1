@@ -27,11 +27,17 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from src.config import LOCAL_PROVIDERS, PROVIDERS, settings
+from src.config import settings
+from src.core.credentials import credential_store
+from src.core.data_mode import allowed_providers, normalize
+from src.providers import PROVIDER_TABLE, describe
 from src.utils.logging import logger
 
 
 CACHE_TTL_SECONDS = 30
+
+#: Anthropic requires this header on every request; it is not optional.
+ANTHROPIC_API_VERSION = "2023-06-01"
 
 # An empty result is cached too, for a shorter window. Without this a provider
 # that is merely switched off is re-probed on every lookup, and a refused TCP
@@ -166,6 +172,8 @@ class ModelRegistry:
             models = self._list_ollama(name)
         elif name == "lmstudio":
             models = self._list_lmstudio(name)
+        elif (descriptor := describe(name)) is not None and descriptor.api_style == "anthropic":
+            models = self._list_anthropic(name)
         else:
             models = self._list_gateway(name)
 
@@ -173,22 +181,35 @@ class ModelRegistry:
         self._cached_at[name] = now
         return models
 
-    def available_providers(self) -> list[dict[str, Any]]:
+    def available_providers(self, data_mode: str | None = None) -> list[dict[str, Any]]:
         """Describes every provider the picker can offer, without probing any of them.
 
         Deliberately does no network I/O: this is rendered on every page load,
         and a provider that is merely configured-but-offline must not add its
         connect timeout to that.
         """
+        mode = normalize(data_mode)
+        allowed = allowed_providers(mode)
         return [
             {
-                "id": name,
-                "base_url": settings.provider_root_url(name),
-                "configured": settings.provider_is_configured(name),
-                "local": name in LOCAL_PROVIDERS,
-                "is_default": name == settings.API_PROVIDER,
+                "id": descriptor.id,
+                "label": descriptor.label,
+                "kind": descriptor.kind,
+                "base_url": settings.provider_root_url(descriptor.id),
+                "configured": settings.provider_is_configured(descriptor.id),
+                "local": descriptor.kind == "local",
+                "is_default": descriptor.id == settings.API_PROVIDER,
+                "requires_key": descriptor.requires_key,
+                # Never the key itself. `has_key` covers the environment too, so
+                # a container-configured provider does not read as unconfigured.
+                "has_key": bool(settings.provider_api_key(descriptor.id)),
+                "key_stored": credential_store.has(descriptor.id),
+                "key_hint": credential_store.hint(descriptor.id),
+                "allowed": descriptor.id in allowed,
+                "hint": descriptor.hint,
+                "docs_url": descriptor.docs_url,
             }
-            for name in PROVIDERS
+            for descriptor in PROVIDER_TABLE
         ]
 
     # ------------------------------------------------------------------ #
@@ -263,17 +284,49 @@ class ModelRegistry:
         models.sort(key=lambda m: m.name)
         return models
 
+    def _list_anthropic(self, provider: str) -> list[ModelInfo]:
+        """Anthropic's own model list. Not OpenAI-shaped: its own header pair and `display_name`."""
+        base = settings.provider_root_url(provider).rstrip("/")
+        key = settings.provider_api_key(provider)
+        if not base or not key:
+            # Asking without a key returns 401, which would be recorded as an
+            # unreachable provider. The picker should say "add a key" instead.
+            self._errors[provider] = "No Anthropic API key is set. Add one to list the available models."
+            return []
+
+        payload = self._get_json(
+            provider,
+            f"{base}/models?limit=100",
+            headers={"x-api-key": key, "anthropic-version": ANTHROPIC_API_VERSION},
+        )
+        if payload is None:
+            return []
+
+        models: list[ModelInfo] = []
+        for entry in payload.get("data", []):
+            name = entry.get("id") or ""
+            if name:
+                models.append(
+                    ModelInfo(
+                        name=name,
+                        family=str(entry.get("display_name") or ""),
+                        capabilities=classify(name),
+                        provider=provider,
+                    )
+                )
+        models.sort(key=lambda m: m.name, reverse=True)
+        return models
+
     def _list_gateway(self, provider: str, base_url: str | None = None) -> list[ModelInfo]:
         base = (base_url if base_url is not None else settings.provider_openai_base_url(provider)).rstrip("/")
         if not base:
-            # Nothing to enumerate; surface the configured names so the UI is not empty.
+            # Nothing to enumerate. Surface any pinned names so the picker is not
+            # empty, but not the blank strings they now default to.
+            self._errors[provider] = f"No endpoint is configured for {provider}. Set its base URL to list models."
             return [
-                ModelInfo(name=settings.MODEL_NAME, capabilities=classify(settings.MODEL_NAME), provider=provider),
-                ModelInfo(
-                    name=settings.WORKER_MODEL_NAME,
-                    capabilities=classify(settings.WORKER_MODEL_NAME),
-                    provider=provider,
-                ),
+                ModelInfo(name=name, capabilities=classify(name), provider=provider)
+                for name in dict.fromkeys([settings.MODEL_NAME.strip(), settings.WORKER_MODEL_NAME.strip()])
+                if name
             ]
 
         api_key = settings.provider_api_key(provider)

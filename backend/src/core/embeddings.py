@@ -36,6 +36,7 @@ from typing import Any
 import numpy as np
 
 from src.config import settings
+from src.core.data_mode import allows_provider
 from src.utils.logging import logger
 
 
@@ -284,6 +285,19 @@ class EmbeddingService:
             self._remote_checked = True
 
             provider = settings.resolve_provider(settings.EMBEDDING_PROVIDER or None)
+            if not allows_provider(settings.data_mode, provider):
+                # Embeddings are a role like any other, and text sent to be
+                # embedded is data. Degrade to the hashing encoder rather than
+                # raise: retrieval getting worse is survivable, a failed question
+                # is not.
+                logger.info(
+                    "Embedding provider is not allowed by the data mode; using the local encoder",
+                    provider=provider,
+                    data_mode=settings.data_mode,
+                )
+                self._note_remote_failure()
+                return None
+
             model = settings.EMBEDDING_REMOTE_MODEL.strip() or self._discover_model(provider)
             if not model:
                 self._note_remote_failure()

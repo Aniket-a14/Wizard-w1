@@ -60,11 +60,13 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
+from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import ExecutionResult
 from src.core.feedback_store import FeedbackStore
 from src.core.llm import LLMRole, llm_provider, model_registry
-from src.core.llm.provider import LLMUnavailableError
+from src.core.llm.provider import DataModeViolation, LLMUnavailableError
 from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
+from src.core.llm.usage import usage_ledger
 from src.core.memory import working_memory
 from src.core.prompts import (
     create_answer_prompt,
@@ -161,6 +163,7 @@ class RunState:
     pending_approval: dict[str, Any] | None = None
     verification: str = ""
     grounding: GroundingReport = field(default_factory=GroundingReport)
+    usage: dict[str, Any] = field(default_factory=dict)
     started_at: float = field(default_factory=time.time)
 
     @property
@@ -188,6 +191,7 @@ class RunResult:
     mode: str = "auto"
     verification: str = ""
     grounding: dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -209,6 +213,7 @@ class RunResult:
             "mode": self.mode,
             "verification": self.verification,
             "grounding": self.grounding,
+            "usage": self.usage,
         }
 
 
@@ -242,6 +247,19 @@ class AnalysisOrchestrator:
         candidate = (mode or "auto").strip().lower()
         return candidate if candidate in MODES else "auto"
 
+    @staticmethod
+    def _redact_for(session: Session, role: str) -> bool:
+        """Whether the prompt for ``role`` must be stripped of real values.
+
+        Asked per role rather than once per turn: under hybrid the manager may be
+        on a cloud provider while the worker is local, and only the cloud-bound
+        prompt should lose its sample rows.
+        """
+        provider = settings.resolve_provider(session.models.provider_for(role))
+        # The active dataset, so a table marked more sensitive than the session
+        # default is treated that way rather than averaged with the others.
+        return should_redact(session.data_mode, session.data_policy, provider, dataset=session.active_dataset)
+
     async def _budget_for(self, session: Session, mode: str) -> TierBudget:
         """Sizes this turn to the model actually behind the manager role.
 
@@ -255,6 +273,10 @@ class AnalysisOrchestrator:
                 LLMRole.MANAGER,
                 model=session.models.manager,
                 provider=session.models.manager_provider,
+                # The session's mode, not the configured default: sizing a turn
+                # must not be the one call that disagrees about which provider
+                # is in play.
+                data_mode=session.data_mode,
             )
             parameter_size = await asyncio.to_thread(model_registry.parameter_size_of, spec.model, spec.provider)
         except Exception as exc:
@@ -308,6 +330,13 @@ class AnalysisOrchestrator:
             await self._finalize(state, session, emitter)
             return self._result(state, "completed")
 
+        except DataModeViolation as exc:
+            # A policy decision, not a fault: the user's own words back, with no
+            # "check that the provider is running" advice attached to them.
+            logger.info("Run refused by the data mode", reason=str(exc))
+            await emit(emitter, EventType.ERROR, content=str(exc))
+            state.answer = str(exc)
+            return self._result(state, "failed")
         except LLMUnavailableError as exc:
             message = (
                 f"Could not reach the language model: {exc}. "
@@ -380,6 +409,7 @@ class AnalysisOrchestrator:
             session_id=session.id,
             history=session.history_prompt(),
             max_columns=budget.max_columns,
+            redact=self._redact_for(session, "manager"),
         )
 
         raw = await self._stream_plan(prompt, session, emitter)
@@ -400,7 +430,14 @@ class AnalysisOrchestrator:
         # A plan may request a web search; that leaves the machine, so it always
         # requires explicit consent regardless of the approval setting.
         search_match = SEARCH_PATTERN.search(state.plan)
-        if search_match:
+        if search_match and not tool_allowed(session.data_mode, "web_search"):
+            # Not an approval prompt: under local-only there is no consent that
+            # would make this allowed, so asking would be theatre.
+            refusal = tool_refusal("web_search")
+            state.warnings.append(refusal)
+            state.plan = SEARCH_PATTERN.sub("", state.plan).strip() or state.instruction
+            await emit(emitter, EventType.WARNING, content=refusal)
+        elif search_match:
             query = search_match.group(1)
             state.pending_approval = {
                 "tool": "web_search",
@@ -470,6 +507,8 @@ class AnalysisOrchestrator:
             temperature=session.models.temperature,
             provider=session.models.manager_provider,
             max_tokens=settings.output_budget("plan"),
+            data_mode=session.data_mode,
+            session_id=session.id,
         )
         await emit_chunks(splitter.flush())
         return "".join(buffer)
@@ -478,6 +517,13 @@ class AnalysisOrchestrator:
     # Web search
     # ------------------------------------------------------------------ #
     async def _run_search(self, state: RunState, session: Session, query: str, emitter: Emitter | None):
+        # Re-checked here: the mode can change between the approval and the run.
+        if not tool_allowed(session.data_mode, "web_search"):
+            refusal = tool_refusal("web_search")
+            state.warnings.append(refusal)
+            await emit(emitter, EventType.WARNING, content=refusal)
+            return
+
         state.phase = Phase.SEARCHING
         await emit(emitter, EventType.STEP_START, id="search", label=f"Searching: {query}", kind="tool")
 
@@ -630,6 +676,8 @@ class AnalysisOrchestrator:
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
                 max_tokens=settings.output_budget("decision"),
+                data_mode=session.data_mode,
+                session_id=session.id,
             )
         except LLMUnavailableError:
             # Losing the manager mid-run should not lose the work already done.
@@ -785,6 +833,8 @@ class AnalysisOrchestrator:
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
                 max_tokens=settings.output_budget("plan"),
+                data_mode=session.data_mode,
+                session_id=session.id,
             )
         except LLMUnavailableError:
             return
@@ -962,6 +1012,7 @@ class AnalysisOrchestrator:
             session_id=session.id,
             negative_example=negative.text if negative else None,
             max_columns=budget.max_columns,
+            redact=self._redact_for(session, "worker"),
         )
 
         raw = await llm_provider.acomplete(
@@ -1080,6 +1131,8 @@ class AnalysisOrchestrator:
                 temperature=session.models.temperature,
                 provider=session.models.worker_provider,
                 max_tokens=settings.output_budget("code"),
+                data_mode=session.data_mode,
+                session_id=session.id,
             )
         except LLMUnavailableError:
             await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
@@ -1154,7 +1207,11 @@ class AnalysisOrchestrator:
     async def _describe_plot(self, image: str, session: Session) -> str:
         try:
             return await llm_provider.describe_image(
-                image, model=session.models.vision, provider=session.models.vision_provider
+                image,
+                model=session.models.vision,
+                provider=session.models.vision_provider,
+                data_mode=session.data_mode,
+                session_id=session.id,
             )
         except Exception as exc:
             logger.debug("Vision description unavailable", error=str(exc))
@@ -1219,6 +1276,8 @@ class AnalysisOrchestrator:
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
                 max_tokens=settings.output_budget("answer"),
+                data_mode=session.data_mode,
+                session_id=session.id,
             )
             await emit_chunks(splitter.flush())
             state.answer = "".join(chunks).strip()
@@ -1303,6 +1362,11 @@ class AnalysisOrchestrator:
 
         state.phase = Phase.DONE
         downloads = self._collect_downloads(state, session)
+        state.usage = usage_ledger.totals(session.id)
+        # Only where a meter means something. Under local-only nothing was spent
+        # and the honest surface is silence, not a row of zeroes.
+        if state.usage.get("any_cloud"):
+            await emit(emitter, EventType.USAGE, **state.usage)
         await emit(
             emitter,
             EventType.FINAL,
@@ -1318,6 +1382,7 @@ class AnalysisOrchestrator:
             tier=state.tier,
             grounding=state.grounding.to_dict(),
             verification=state.verification,
+            usage=state.usage,
         )
 
     @staticmethod
@@ -1399,6 +1464,7 @@ class AnalysisOrchestrator:
             mode=state.mode,
             verification=state.verification,
             grounding=state.grounding.to_dict(),
+            usage=state.usage,
         )
 
 

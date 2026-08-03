@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
 
 import { AnimatedOrb } from "@/components/animated-orb"
+import { DataModeControl } from "@/components/data-mode-control"
 import { SoundToggle } from "@/components/sound-toggle"
 import { api } from "@/lib/api"
 import type { ServerConfig } from "@/lib/types"
@@ -120,6 +121,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="shrink-0 border-t border-border px-3 py-3">
+          {/* Above the diagnostics rows, not among them: this one is a control,
+              and it is the only thing here the user can act on. */}
+          <div className="mb-2.5">
+            <DataModeControl />
+          </div>
+
           <div className="mb-2 space-y-1.5 px-1">
             <StatusRow
               label="Sandbox"

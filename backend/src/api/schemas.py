@@ -2,16 +2,34 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+from pydantic_core import PydanticCustomError
 
-from src.config import Provider
+from src.providers import PROVIDERS, exists as provider_exists
+
+
+def _known_provider(value: str) -> str:
+    cleaned = (value or "").strip().lower()
+    if not provider_exists(cleaned):
+        # A PydanticCustomError, not a bare ValueError: the validation handler
+        # serialises `errors()` straight to JSON, and a raw exception in the
+        # error context is not serialisable.
+        raise PydanticCustomError(
+            "unknown_provider",
+            "Unknown provider '{value}'. Known providers: {known}",
+            {"value": value, "known": ", ".join(PROVIDERS)},
+        )
+    return cleaned
 
 
 # Rejecting an unknown provider at the schema boundary means the session can
-# never hold a value the LLM layer would silently fall back on.
-ProviderName = Provider
+# never hold a value the LLM layer would silently fall back on. Validated against
+# the descriptor table rather than a Literal, so adding a backend stays a row.
+ProviderName = Annotated[str, AfterValidator(_known_provider)]
+
+DataModeName = Literal["local-only", "cloud-only", "hybrid"]
 
 
 class ErrorDetail(BaseModel):
@@ -75,6 +93,9 @@ class ServerConfig(BaseModel):
     # only whether Docker answered; these say what is actually in use.
     execution_backend: Literal["docker", "local", "inprocess"] = "inprocess"
     execution_backend_setting: str = "auto"
+    #: The configured default. A session may hold a different one.
+    data_mode: str = "local-only"
+    data_schema_only: bool = True
     sandbox_tier: str = "standard"
     system_profile: str = "server"
     host_cores: int = 0
@@ -92,6 +113,9 @@ class SessionResponse(BaseModel):
     datasets: list[dict[str, Any]] = Field(default_factory=list)
     documents: list[dict[str, Any]] = Field(default_factory=list)
     models: dict[str, Any] = Field(default_factory=dict)
+    data_mode: str = "local-only"
+    data_policy: dict[str, Any] = Field(default_factory=dict)
+    usage: dict[str, Any] = Field(default_factory=dict)
     #: True only for a container. A local runtime is isolated from the API
     #: process but is not a security boundary, so it does not claim to be one.
     sandboxed: bool = False
@@ -113,10 +137,87 @@ class ModelInfoResponse(BaseModel):
 
 class ProviderInfo(BaseModel):
     id: str
+    label: str = ""
+    kind: str = "local"
     base_url: str = ""
     configured: bool = False
     local: bool = False
     is_default: bool = False
+    requires_key: bool = False
+    #: Whether a key is available at all, from the environment or the store.
+    #: Never the key itself — only `key_hint`, which is masked.
+    has_key: bool = False
+    key_stored: bool = False
+    key_hint: str = ""
+    #: Whether the session's data mode permits this provider.
+    allowed: bool = True
+    hint: str = ""
+    docs_url: str = ""
+
+
+class ProviderCredentialRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=500)
+
+
+class ProvidersResponse(BaseModel):
+    providers: list[ProviderInfo] = Field(default_factory=list)
+    data_mode: DataModeName = "local-only"
+
+
+class DataModeRequest(BaseModel):
+    mode: DataModeName | None = None
+    schema_only: bool | None = None
+
+
+class DatasetPolicyRequest(BaseModel):
+    """Overrides the session default for one source."""
+
+    schema_only: bool
+
+
+class DataModeResponse(BaseModel):
+    mode: DataModeName
+    description: str
+    schema_only: bool
+    #: Per-source overrides. Absent from this map means "follow the default".
+    per_dataset: dict[str, bool] = Field(default_factory=dict)
+    #: Providers this mode permits, so the picker does not have to re-derive it.
+    allowed_providers: list[str] = Field(default_factory=list)
+    #: What schema-only actually withholds, in the words the UI shows.
+    withheld: list[str] = Field(default_factory=list)
+    #: Tools this mode switches off entirely, so the UI can present them as
+    #: unavailable rather than letting the user discover it mid-run.
+    disabled_tools: list[str] = Field(default_factory=list)
+
+
+class UsageRecordResponse(BaseModel):
+    provider: str
+    model: str
+    role: str
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    #: None when the model is local or its price is not published. Never 0.0 as
+    #: a stand-in for "unknown".
+    cost_usd: float | None = None
+    estimated: bool = False
+    cloud: bool = False
+
+
+class UsageResponse(BaseModel):
+    records: list[UsageRecordResponse] = Field(default_factory=list)
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float | None = None
+    any_cloud: bool = False
+    estimated: bool = False
+    unpriced_models: list[str] = Field(default_factory=list)
+    #: True when nothing in this session can incur cost, so the client can say
+    #: so rather than render a zero.
+    local_only: bool = True
 
 
 class ModelListResponse(BaseModel):
@@ -238,6 +339,7 @@ class ChatResponse(BaseModel):
     mode: str = "auto"
     verification: str = ""
     grounding: dict[str, Any] = Field(default_factory=dict)
+    usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class DocumentSummary(BaseModel):

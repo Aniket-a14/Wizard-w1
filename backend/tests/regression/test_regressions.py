@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
+import pytest
+from fastapi.testclient import TestClient
 
+from src.api.api import app
 from src.api.deps import SlidingWindowRateLimiter
 from src.config import Settings
 from src.core.agent.council import TheCouncil
@@ -31,6 +35,13 @@ from src.core.semantic_cache import semantic_cache
 from src.core.session import Session, SessionManager
 from src.core.tools.evaluator import Evaluator
 from src.core.tools.sandbox import PID_FILE, SandboxSession
+
+
+@pytest.fixture
+def client() -> Iterator[TestClient]:
+    with TestClient(app) as test_client:
+        yield test_client
+    SessionManager().shutdown()
 
 
 def test_report_endpoint_does_not_raise_attribute_error() -> None:
@@ -521,3 +532,138 @@ def test_the_logger_configures_on_an_interactive_terminal(monkeypatch) -> None:
         # Restore the non-tty configuration for the rest of the suite.
         monkeypatch.undo()
         configure_logger()
+
+
+def test_local_only_never_constructs_a_cloud_client(monkeypatch) -> None:
+    """The mechanism behind the local-first promise, pinned at its choke point.
+
+    Before Milestone 1 "your data stays local" was a property of how somebody
+    happened to configure their .env: a cloud provider assigned to a role was
+    simply used, and the prompt — sample rows and all — went to it. The check now
+    lives in `LLMProvider.resolve`, which every one of the nine call sites passes
+    through, precisely so a session pinning its own per-role provider cannot
+    route around it.
+    """
+    from src.core.data_mode import check_provider
+    from src.core.llm.provider import DataModeViolation
+    from src.providers import CLOUD_PROVIDERS
+
+    attempted: list[str] = []
+    monkeypatch.setattr(llm_provider, "_build_client", lambda spec: attempted.append(spec.provider))
+
+    for provider in sorted(CLOUD_PROVIDERS):
+        for role in (LLMRole.MANAGER, LLMRole.WORKER, LLMRole.VISION):
+            try:
+                llm_provider.resolve(role, model="anything", provider=provider, data_mode="local-only")
+            except DataModeViolation:
+                continue
+            raise AssertionError(f"{provider} was resolvable for {role.value} under local-only")
+
+    assert attempted == []
+    assert check_provider("local-only", "ollama") is None
+
+
+def test_switching_to_local_only_drops_a_pinned_cloud_role(client) -> None:
+    """Leaving the assignment in place would mean the next question failed rather
+    than ran, with nothing on screen explaining why — the setting the user just
+    chose to be safer would read as having broken the app."""
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    client.post("/api/data-mode", json={"mode": "hybrid"}, headers=headers)
+    assert (
+        client.post(
+            "/api/models",
+            json={"manager_provider": "anthropic", "manager": "claude-sonnet-4-5"},
+            headers=headers,
+        ).status_code
+        == 200
+    )
+
+    client.post("/api/data-mode", json={"mode": "local-only"}, headers=headers)
+    models = client.get("/api/session", headers=headers).json()["models"]
+    assert models["manager_provider"] is None
+
+
+def test_a_forbidden_provider_is_refused_when_it_is_chosen(client) -> None:
+    """A 409 naming the mode is actionable. Accepting the choice and failing at
+    run time three clicks later is not."""
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    client.post("/api/data-mode", json={"mode": "local-only"}, headers=headers)
+    response = client.post("/api/models", json={"worker_provider": "openai"}, headers=headers)
+
+    assert response.status_code == 409
+    assert "local-only" in response.json()["detail"]
+
+
+def test_the_cost_readout_is_absent_rather_than_zero_under_local_only(client) -> None:
+    """`$0.00` reads as a computed number. Under local-only nothing was spent and
+    nothing could be, and the client needs to be able to say that instead."""
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    client.post("/api/data-mode", json={"mode": "local-only"}, headers=headers)
+    usage = client.get("/api/usage", headers=headers).json()
+
+    assert usage["local_only"] is True
+    assert usage["cost_usd"] is None
+    assert usage["any_cloud"] is False
+
+
+def test_an_unpriced_cloud_model_never_reports_a_guessed_cost() -> None:
+    """The grounding layer's rule applied to the meter: report what is known,
+    say what is not, invent nothing."""
+    from src.core.llm.usage import SessionUsage, TokenUsage
+
+    usage = SessionUsage()
+    usage.add("custom_gateway", "someones-private-deployment", "manager", TokenUsage(10_000, 2_000))
+    totals = usage.to_dict()
+
+    assert totals["total_tokens"] == 12_000
+    assert totals["cost_usd"] is None
+    assert totals["unpriced_models"] == ["someones-private-deployment"]
+
+
+def test_a_per_dataset_policy_survives_to_the_prompt(client) -> None:
+    """The spec asks for the cloud-data policy to be settable per source, and a
+    setting that does not reach the prompt builder is decoration."""
+    import io
+
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+    client.post("/api/data-mode", json={"mode": "hybrid", "schema_only": False}, headers=headers)
+
+    csv = io.BytesIO(b"region,salary\nNorthwood,50000\nEastvale,61000\n")
+    upload = client.post(
+        "/api/datasets?clean=false",
+        files={"file": ("payroll.csv", csv, "text/csv")},
+        headers=headers,
+    )
+    assert upload.status_code == 200
+
+    mode = client.put("/api/data-mode/dataset/payroll.csv", json={"schema_only": True}, headers=headers).json()
+    assert mode["per_dataset"] == {"payroll.csv": True}
+
+    from src.core.agent.orchestrator import orchestrator
+    from src.core.session import session_manager
+
+    session = session_manager.get(session_id)
+    assert session is not None
+    session.models.manager_provider = "anthropic"
+    assert orchestrator._redact_for(session, "manager") is True, "the override did not reach the prompt decision"
+
+    cleared = client.delete("/api/data-mode/dataset/payroll.csv", headers=headers).json()
+    assert cleared["per_dataset"] == {}
+    assert orchestrator._redact_for(session, "manager") is False
+
+
+def test_a_policy_cannot_be_set_for_a_dataset_that_is_not_loaded(client) -> None:
+    """A silently-stored override for a name that does not exist would read as
+    protection that is not actually in force."""
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {"X-Session-Id": session_id}
+
+    response = client.put("/api/data-mode/dataset/ghost.csv", json={"schema_only": True}, headers=headers)
+    assert response.status_code == 404

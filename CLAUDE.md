@@ -8,6 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monorepo: `backend/` (Python 3.11, FastAPI) + `frontend/` (Next.js 16 / React 19 / Tailwind v4).
 
+## Roadmap
+The Wizard w2 evolution plan lives at `docs/wizard-evolution-spec.md` — read it before starting any milestone work.
+
 ## Commands
 
 ### Full stack
@@ -69,7 +72,7 @@ The orchestrator knows nothing about WebSockets; it emits typed events to an `Em
 
 Frames: `session`, `status`, `step_start`/`step_end`, `reasoning_delta`, `plan_delta`, `content_delta`, `code`, `stdout`, `artifact`, `approval_required`, `warning`, `error`, `final`.
 
-Investigation frames, added with the agentic loop: `iteration_start`, `action`, `observation`, `finding`, `plan_revised`, `assumption`, `verification`. The frames above are all still emitted, so a client that ignores these degrades rather than breaking. `observation` closes the most recent `action` that has none — the backend never correlates them by id.
+Investigation frames, added with the agentic loop: `iteration_start`, `action`, `observation`, `finding`, `plan_revised`, `assumption`, `verification`. `usage` carries what the turn cost, and is emitted **only when a cloud model ran** — under `local-only` there is nothing to meter and silence is the honest surface. The frames above are all still emitted, so a client that ignores these degrades rather than breaking. `observation` closes the most recent `action` that has none — the backend never correlates them by id.
 
 `reasoning_delta` vs `plan_delta` are split *during* streaming by tracking the `<thought>` tag boundary incrementally ([`_stream_plan`](backend/src/core/agent/orchestrator.py)), so the UI can show a live thinking panel that switches to the plan at the right moment.
 
@@ -93,7 +96,7 @@ orient (plan) → [approval gate] → loop → verify → answer
 - **Below the balanced tier the loop decides for itself** (`TierBudget.allow_decisions=False`). Asking a 1.5B model to choose an action costs a round-trip and buys nothing: it reads the transcript and picks from three options it does not reliably distinguish, and a reasoning distill spends its whole output budget deliberating and returns nothing parseable — so the call is paid for and the default is taken anyway. `_decide_deterministically` reads the answer off what happened: **a step that succeeded and printed something means stop**, anything else means write code. That turns a nine-call compact turn into a three-call one. `deep` restores the round-trip on every tier, or the composer's Deep control would be a no-op on exactly the setup where someone reaches for it.
 - The same function is the *default* on every tier when the model's answer is unparseable. The old default was `code` unconditionally, so the failure mode of asking a weak model to choose was to keep spending.
 - `AGENT_TURN_TIMEOUT` is a wall-clock deadline. It is checked **before an iteration is claimed** — never mid-call, since a request in flight is already paid for, and not after `iterations_used` is incremented, or the turn reports an iteration it abandoned. Verification is the first thing it gives up.
-- Plan approval is opt-in (`AGENT_REQUIRE_APPROVAL`). A plan containing `SEARCH: "…"` **always** halts for consent regardless — that leaves the machine.
+- Plan approval is opt-in (`AGENT_REQUIRE_APPROVAL`). A plan containing `SEARCH: "…"` halts for consent regardless — that leaves the machine. Under `local-only` it is **refused** rather than gated: there is no consent that would make it allowed, so asking would be theatre.
 - An approved plan skips `_orient` entirely, which is where the gate lives, so it cannot re-fire. It must also not be downgraded to `fast`: approving work is not asking for less of it.
 - **The final answer is synthesised by the manager from real execution output** (`create_answer_prompt`). Do not reintroduce client-side cleanup of the response — the frontend used to regex-strip tracebacks, code blocks and numeric rows out of it, which deleted legitimate results.
 
@@ -233,9 +236,67 @@ An unclosed block yields empty visible text rather than half a monologue; caller
 `model_registry` enumerates what is really installed, per provider and cached per provider:
 - **Ollama** → `/api/tags`
 - **LM Studio** → `/api/v0/models` (native: real `type`, quantization, context length, load state), falling back to `/v1/models`
-- **Gateways** → `/v1/models`
+- **Anthropic** → `/v1/models` with `x-api-key` + `anthropic-version`. Asked only when a key exists: without one the endpoint returns 401, which would be recorded as an unreachable host and point the user at the wrong problem.
+- **OpenAI and gateways** → `/v1/models` with a bearer token
 
 Empty results are cached too, for a shorter TTL — a refused connect costs seconds, and one page load asks for both the list and a suggestion. `available_providers()` must stay network-free; it renders on every page load.
+
+### What a provider *is* — [providers.py](backend/src/providers.py)
+
+One row per backend: id, label, `kind` (local/cloud), `api_style` (ollama/openai/anthropic), default URL, which settings fields hold its URL and key, and whether it needs one. Adding Groq or a self-hosted vLLM is a row, not a code change.
+
+This replaced an `if name == "ollama" … elif` chain repeated in four places — root URL, OpenAI base URL, API key, is-configured — plus a fifth copy of the local/cloud split in `llm/resources.py`. Two of the five were missed whenever a provider was added, which is how a gateway model ended up being sent an Ollama keep-alive.
+
+It sits **beside `config.py`, not under `core/llm/`**, for the same reason `utils/hostinfo.py` does: `Settings` is built at import time and reads this table for its defaults, while `core.llm.__init__` imports `settings` back.
+
+`is_cloud()` treats an **unknown** provider as cloud. That is the safe direction — it feeds the data-mode check, where calling something unrecognised "local" would open the hole the check exists to close.
+
+`openai_suffix` is only non-empty for LM Studio, whose root is genuinely bare because `/api/v0` hangs off it. A hosted endpoint is configured with its version segment already in it, and appending one would break every existing install.
+
+### Data mode — [core/data_mode.py](backend/src/core/data_mode.py)
+
+**This is the mechanism behind the local-first promise.** Before it, "your data stays local" was a property of how somebody happened to configure their `.env`: a cloud provider assigned to a role was simply used, and the prompt — sample rows and all — went to it.
+
+`local-only` / `cloud-only` / `hybrid`, session-wide, seeded from `settings.data_mode`. `local-only` **refuses** a cloud provider rather than skipping it; a hard boundary, not a preference.
+
+**Enforcement lives in `LLMProvider.resolve`** — the one function all nine LLM call sites already pass through, so a session that pins its own `manager_provider` cannot route around it. A violation raises `DataModeViolation`, a subclass of `LLMUnavailableError` so existing handlers surface it, distinguishable because it is a policy decision and not a fault: the orchestrator catches it separately and does *not* append "check that the provider is running".
+
+Three axes, deliberately separate:
+- **mode** — which providers a role may resolve to.
+- **policy** (`DataPolicy`) — how much of the data a cloud-bound prompt carries.
+- **tools** — `web_search` is *unavailable* under `local-only`, not merely unchosen. The plan's `SEARCH:` directive is dropped with a warning rather than raising an approval prompt, because there is no consent that would make it allowed. `disabled_tools()` feeds the UI so this is stated up front rather than discovered mid-run.
+
+Switching mode **clears any role assignment the new mode forbids**. Leaving it would mean the next question failed instead of running, and the setting the user chose to be safer would read as having broken the app.
+
+Embeddings are a role like any other — text sent to be embedded is data — but a forbidden encoder **degrades to the hashing fallback** instead of raising. Retrieval getting worse is survivable; a failed question is not.
+
+### Redaction — `should_redact` + [prompts.py](backend/src/core/prompts.py)
+
+`generate_system_context(..., redact=True)` keeps shape, column names, dtypes, null rates and semantic types, and drops every real value: the `example` column, the `head(3)` glimpse, the `describe()` summary, and categorical distinct values (replaced by a count). It adds a line telling the model values were withheld and must be computed — without it, an empty glimpse reads as an empty table.
+
+**Decided per prompt, from the provider that prompt is going to**, not once per turn. Under `hybrid` with a cloud manager and a local worker, the planner is redacted and the code generator is not.
+
+**Execution output is deliberately *not* redacted.** The answer is synthesised from real stdout by `create_answer_prompt`; withholding it would leave the answering model nothing to answer from. The UI says this precisely rather than implying more than is true.
+
+Settable **per source** as well as per session (`DataPolicy.per_dataset`), because a published reference table and a payroll export do not deserve the same answer. "Follow default" is a real third state — an explicit override does not track the session setting. An override is dropped with its dataset, so re-uploading a file of the same name cannot inherit a policy set for a different one. Milestone 4's connections are sources too and reuse this field.
+
+### Credentials — [core/credentials.py](backend/src/core/credentials.py)
+
+Keys live in `credentials.json` under the platform config directory ([utils/appdirs.py](backend/src/utils/appdirs.py) — `%APPDATA%\Wizard`, `~/Library/Application Support/Wizard`, `$XDG_CONFIG_HOME/wizard`), which Milestone 8's CLI will manage too. `WIZARD_CONFIG_DIR` overrides it; the test suite pins it so no test touches a developer's real file.
+
+**This is not encryption at rest** — the guarantee is the OS's access control, the same one `~/.aws/credentials` has, and it is stated plainly rather than dressed up. Encrypting would need a passphrase at every backend start (breaking the unattended `wizard start` of Milestone 8) or a key stored beside the ciphertext, which protects nothing. **OS keychain integration is deliberately not taken**: three platform backends plus a dependency, and Secret Service is often absent on headless Linux, so a file fallback would be needed anyway. Everything goes through `credential_store`, so a keychain backend can be added later without touching a caller.
+
+Permissions are **enforced on all three platforms**, not documented on two. POSIX gets `0600`. Windows gets inheritance stripped and a single-user ACL via `icacls` — granted to the **SID read from the process token** (`whoami /user`), never to `%USERNAME%`: that is an ordinary environment variable and on one dev machine read `Wizard`, so the first write succeeded, the ACL handed the file to a user that did not exist, and the second write failed with `PermissionError`. The result is verified afterwards and rolled back to inherited permissions if the file came back unwritable, because a credentials file nobody can write is worse than one with default permissions.
+
+Resolution order is **environment/settings first, then the store**, so a container or CI run behaves exactly as configured. Keys are never logged and **never returned by any route** — only `has_key` and a masked `…abcd` hint.
+
+### Cost — [llm/usage.py](backend/src/core/llm/usage.py)
+
+`extract_usage` reads `usage_metadata`, then `response_metadata` (`token_usage`, or Ollama's `prompt_eval_count`/`eval_count`), then falls back to a `len/4` estimate flagged `exact=False`. Three shapes on purpose: the reported field differs between langchain-ollama, -openai and -anthropic and between versions of each, and a meter that silently reads zero is worse than one that admits it approximated.
+
+`usage_ledger` is keyed by session id rather than held on the `Session`, so `core/llm` does not import `core.session`. A streamed call is booked **once**, in `astream`, from whichever chunk carried the metadata — booking per chunk would multiply every plan and answer by its token count.
+
+**An unpriced model reports tokens and `cost_usd: None`, never a guess**, and is named in `unpriced_models` so the readout can say the total is a floor. That is the grounding layer's "report, don't invent" applied to money. Under `local-only` the API returns `local_only: true` and no cost at all — `$0.00` reads as a computed figure, and the true statement is that there is no meter.
 
 ### Installing models — [llm/downloader.py](backend/src/core/llm/downloader.py)
 
@@ -255,10 +316,12 @@ Downloads run on a thread and are **polled, not streamed** — a pull runs for m
 
 Pydantic-settings singleton reading `backend/.env` (see `backend/.env.example`). Notes:
 
-- `API_PROVIDER` is the *default* provider, not a global switch — see the models section. `MODEL_TYPE` exists only so older `.env` files still validate.
+- `API_PROVIDER` is the *default* provider, not a global switch — see the models section. `MODEL_TYPE` exists only so older `.env` files still validate. Neither is a `Literal` any more: the set of backends is data in `src/providers.py`, and a field validator rejects an unknown name at boot, which is the same loudness a `Literal` gave without a third place to edit.
+- **`DATA_MODE` empty means "derive it"**: `local-only` on a fresh install, `cloud-only` when `API_PROVIDER` is already a cloud backend. Derived rather than defaulted so upgrading a working cloud install does not break it in the name of protecting it. `DATA_SCHEMA_ONLY` defaults **on** — the conservative option is the one that should need no decision.
+- `openai` used to mean "whatever `GATEWAY_API_URL` says". It now means `api.openai.com`, so an install that had pointed it at its own gateway has that URL carried across — but only when `API_PROVIDER` is `openai`, or a `custom_gateway` URL would hijack the real one.
 - `LMSTUDIO_BASE_URL` is stored as a bare root; a pasted `/v1` suffix is stripped by a validator, because discovery needs `/api/v0` off the same root. LM Studio binds loopback only until "Serve on Local Network" is enabled, which is the usual cause of an empty picker from inside Docker.
 - `LLM_NUM_CTX` reaches Ollama only. OpenAI-compatible servers fix context length when the model is loaded, so it is deliberately not sent there. It is **derived from the host** (laptop 8192 / server 16384 / hpc 32768) and `0` means "derive it". This is a *load-time* parameter: it fixes the KV cache reserved for every resident model, so asking for 16k when prompts reach 2k evicts the worker to make room for the manager on every iteration. Prompts here are budgeted and do not reach 8k — the measured compact-tier turn is ~2,100 prompt tokens across all three calls.
-- **`OLLAMA_BASE_URL` / `LMSTUDIO_BASE_URL` are rewritten from `host.docker.internal` to `127.0.0.1` when the backend is not containerised**, and only when the user did not set them. That hostname is how a container reaches its host and is correct inside compose (which passes it itself); outside one it is a name Docker Desktop happens to add to the hosts file, so it resolves on a dev machine that has Docker and fails outright on one that does not — exactly the Docker-less install the local execution backend exists to serve. The shipped `.env.example` therefore leaves both commented out.
+- **Every local provider's base URL is rewritten from `host.docker.internal` to `127.0.0.1` when the backend is not containerised** (the loop is driven by the descriptor table's `url_field`, so a new local backend is covered without touching the validator), and only when the user did not set them. That hostname is how a container reaches its host and is correct inside compose (which passes it itself); outside one it is a name Docker Desktop happens to add to the hosts file, so it resolves on a dev machine that has Docker and fails outright on one that does not — exactly the Docker-less install the local execution backend exists to serve. The shipped `.env.example` therefore leaves both commented out.
 - The shipped `.env.example` also leaves `LLM_NUM_THREAD` and `LLM_NUM_CTX` unset. A value in the example file is copied to every machine and defeats the derivation on all of them, which is how a 4-physical-core laptop ended up running eight inference threads.
 - `cors_origins` / `cors_allow_credentials` are resolved together: a wildcard origin forces credentials off, because the combination is invalid in every browser.
 - `PLOT_FORMAT` is coupled across two places — the visualization rule in `create_prompt` and the artifact branch in `_execute`. Change both.
@@ -319,6 +382,12 @@ Four routes, no landing page — `/` **is** the workspace:
 - Grounding and verification arrive **twice**: as a warning string (for REST clients with no richer surface) and as structured fields. `message.tsx` filters the two known prefixes out of the plain warning list so nothing is said twice. Those prefixes are coupled to `GroundingReport.warning()` and `orchestrator._verify`.
 - `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
 - The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.
+- **[data-mode-control.tsx](frontend/components/data-mode-control.tsx) is in the nav rail, not in Settings.** Whether anything leaves the machine is not a preference to be found three screens deep; the rail already mounts once from the root layout, so it costs no remount and never disturbs the chat socket. The cost line sits with it because spending is a consequence of that choice, not a separate topic.
+- The cost readout is **live**: the backend's `usage` frame carries session totals, [use-chat-stream.ts](frontend/lib/use-chat-stream.ts) pushes them into [usage-store.ts](frontend/lib/usage-store.ts), and the rail subscribes through `useSyncExternalStore` — the same pattern as `use-sound`, and for the same reason (`set-state-in-effect` is an error here). The frame replaces rather than accumulates: the backend ledger is the source of truth, and adding on the client would double-count a reconnect.
+- Provider **labels and hints come from the backend**, not from the frontend. There used to be two hardcoded `Record<ProviderId, string>` maps — one in the picker, one on `/models` — and adding a backend meant editing both plus the union type. `ProviderId` is now just `string`.
+- The per-source cloud-data control lives on `/data` beside each table, since that is where you already are when you decide a table is sensitive. It offers three states, not two: "Default" tracks the session setting rather than copying it.
+- `/settings` has a **Data** section: the mode in force, what schema-only withholds *by name*, which tools the mode disables, and the session's usage table. Under `local-only` it states that no external call is possible rather than rendering a zeroed meter.
+- `/models` can hold an **API key** per cloud provider ([models/provider-key.tsx](frontend/components/models/provider-key.tsx)). The field never shows the stored key — only a masked tail — because reading one back to render it would put it in a response, a browser cache and a devtools log for no benefit.
 - `/settings` has an **Inference** section reporting what local inference actually runs with (threads, context window, keep-alive, turn deadline) plus `performance_notes` — settings that will make the install slow, named in plain language by the backend (`routes/meta.performance_notes`). Each note is checked by its *symptom* against the measured machine, not by whether the value was pinned: the host-sizing validator assigns to those fields, so `model_fields_set` cannot tell a user's choice from a derived one by the time anyone can ask. Silence means nothing is fighting the machine, so the empty case says that explicitly rather than rendering nothing.
 - `/settings` reports the runtime **actually in force**, not just "Docker or not": `local` gets a plain statement of what it does and does not protect, and only `inprocess` gets a warning. It also shows the measured host facts the resource limits were derived from — the answer to "why is it only using four threads" should be one screen, not a support conversation.
 - `/models` can **install** a model, not only choose one — [models/model-install.tsx](frontend/components/models/model-install.tsx). It sits above the installed list because on a fresh machine that list is empty and it is the only control that does anything. Progress is polled; a provider that cannot download shows the reason instead of a button.
@@ -356,7 +425,9 @@ The loop changes the call *count*, not just the content: a `fast` run is plan �
 
 The autouse teardown clears state through `semantic_cache.clear()`, **not** `db_mgr.clear_cache()` — `add()` writes to SQLite *and* to the in-process exact-match cache, and clearing only the table leaves a live entry that sends a later test with the same question down the cache-hit path. That failure is order-dependent and invisible when the file is run alone.
 
-`conftest.py` pins `OLLAMA_BASE_URL` and `LMSTUDIO_BASE_URL` to `http://127.0.0.1:1`. Model discovery is the one component that dials out on its own; port 1 is refused instantly instead of waiting on a connect timeout or resolving `host.docker.internal`, which is a real host on some dev machines.
+`conftest.py` also pins `WIZARD_CONFIG_DIR` to a temp directory — no test may read or write a developer's real credentials file — and `DATA_MODE=hybrid` with `DATA_SCHEMA_ONLY=false`, so each test states the mode and policy it means to exercise instead of inheriting a default that would refuse half the providers under test. The autouse teardown clears `usage_ledger` alongside the semantic cache, since it accumulates per session id.
+
+`conftest.py` pins `OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` to `http://127.0.0.1:1`. Model discovery is the one component that dials out on its own; port 1 is refused instantly instead of waiting on a connect timeout or resolving `host.docker.internal`, which is a real host on some dev machines.
 
 ## Conventions
 

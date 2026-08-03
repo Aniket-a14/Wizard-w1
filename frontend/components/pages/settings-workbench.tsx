@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader, Section } from "@/components/page-header"
 import { api, clearStoredSessionId, getStoredSessionId } from "@/lib/api"
-import type { ServerConfig, SessionInfo } from "@/lib/types"
+import type { DataModeInfo, ServerConfig, SessionInfo, UsageTotals } from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
 
@@ -22,13 +22,26 @@ export function SettingsWorkbench() {
   const [session, setSession] = useState<SessionInfo | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [dataMode, setDataMode] = useState<DataModeInfo | null>(null)
+  const [usage, setUsage] = useState<UsageTotals | null>(null)
   const { soundOn, toggleSound } = useSound()
 
   const refresh = useCallback(async () => {
-    const [nextConfig, nextSession] = await Promise.allSettled([api.config(), api.session()])
+    const [nextConfig, nextSession, nextMode, nextUsage] = await Promise.allSettled([
+      api.config(),
+      api.session(),
+      api.dataMode(),
+      api.usage(),
+    ])
     if (nextConfig.status === "fulfilled") setConfig(nextConfig.value)
     if (nextSession.status === "fulfilled") setSession(nextSession.value)
+    if (nextMode.status === "fulfilled") setDataMode(nextMode.value)
+    if (nextUsage.status === "fulfilled") setUsage(nextUsage.value)
     setSessionId(getStoredSessionId())
+  }, [])
+
+  const setSchemaOnly = useCallback(async (schemaOnly: boolean) => {
+    setDataMode(await api.setDataMode({ schema_only: schemaOnly }))
   }, [])
 
   useEffect(() => {
@@ -147,6 +160,84 @@ export function SettingsWorkbench() {
           <strong className="font-medium text-foreground">Start over</strong> discards the session
           entirely — datasets, history and container.
         </p>
+      </Section>
+
+      <Section
+        title="Data"
+        description="Which models this session may reach, and how much of your data a cloud-bound prompt carries."
+      >
+        <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="text-[13.5px] font-medium">{MODE_LABELS[dataMode?.mode ?? ""] ?? "—"}</span>
+            <span className="text-[12.5px] text-muted-foreground">{dataMode?.description}</span>
+          </div>
+          <p className="mt-2 text-[12px] text-muted-foreground">
+            Change it from the control in the sidebar — it is there on every screen because it decides
+            whether anything leaves this machine.
+          </p>
+
+          {/* Named up front rather than discovered mid-run: a tool this mode
+              switches off is unavailable, not merely unchosen. */}
+          {dataMode && dataMode.disabled_tools.length > 0 && (
+            <p className="mt-3 border-t border-border pt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+              Unavailable in this mode:{" "}
+              <span className="font-medium text-foreground">
+                {dataMode.disabled_tools.map((tool) => tool.replace(/_/g, " ")).join(", ")}
+              </span>
+              . The agent is not permitted to use it, rather than being asked not to.
+            </p>
+          )}
+        </div>
+
+        {/* Only meaningful once something can be cloud-bound. Under local-only
+            nothing is withheld because nothing is sent. */}
+        {dataMode && dataMode.mode !== "local-only" && (
+          <div className="mt-3 rounded-xl border border-border bg-card p-4 shadow-xs">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[13.5px] font-medium">Withhold real values from cloud prompts</p>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                  Column names, types, null rates and row counts still go — a model cannot write
+                  correct code without them. Computed results still come back, because the answer is
+                  written from them.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={dataMode.schema_only}
+                aria-label="Withhold real values from cloud prompts"
+                onClick={() => void setSchemaOnly(!dataMode.schema_only)}
+                className={cn(
+                  "relative h-6 w-11 shrink-0 rounded-full transition-colors duration-[var(--duration-base)]",
+                  dataMode.schema_only ? "bg-brand" : "bg-muted",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 h-5 w-5 rounded-full bg-card shadow-sm",
+                    "transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
+                    dataMode.schema_only ? "translate-x-[1.375rem]" : "translate-x-0.5",
+                  )}
+                />
+              </button>
+            </div>
+
+            {dataMode.withheld.length > 0 && (
+              <ul className="mt-3 space-y-1 border-t border-border pt-3">
+                {dataMode.withheld.map((item) => (
+                  <li key={item} className="text-[12px] text-muted-foreground">
+                    — {item}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        <div className="mt-3">
+          <UsagePanel usage={usage} />
+        </div>
       </Section>
 
       <Section
@@ -367,6 +458,12 @@ export function SettingsWorkbench() {
   )
 }
 
+const MODE_LABELS: Record<string, string> = {
+  "local-only": "Local only",
+  "cloud-only": "Cloud only",
+  hybrid: "Hybrid",
+}
+
 const BACKEND_LABELS: Record<string, string> = {
   docker: "Docker container",
   local: "Local subprocess",
@@ -477,6 +574,84 @@ function Fact({
       >
         {value}
       </dd>
+    </div>
+  )
+}
+
+
+/**
+ * What this session has spent.
+ *
+ * Under local-only there is no meter at all — not a zero. A "$0.00" reads as a
+ * figure that was computed, and the true statement is that no call could have
+ * cost anything. A cloud model whose price is not published is reported in
+ * tokens and named, rather than folded into a total that would then be wrong.
+ */
+function UsagePanel({ usage }: { usage: UsageTotals | null }) {
+  if (!usage) return null
+
+  if (usage.local_only) {
+    return (
+      <div className="rounded-xl border border-success/25 bg-success/5 p-4">
+        <p className="text-[13.5px] font-medium text-success">No external calls</p>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          Every model in this session runs on this machine, so there is nothing to bill and nothing
+          to meter.
+        </p>
+      </div>
+    )
+  }
+
+  if (usage.calls === 0) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4">
+        <p className="text-[13.5px] font-medium">No calls yet</p>
+        <p className="mt-1 text-[12.5px] text-muted-foreground">
+          Usage appears here once this session asks a question.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-[13.5px] font-medium">
+          {usage.calls} call{usage.calls === 1 ? "" : "s"} · {usage.total_tokens.toLocaleString()} tokens
+        </p>
+        {usage.cost_usd !== null && (
+          <p className="tabular text-[13.5px] font-medium">
+            ${usage.cost_usd < 0.01 ? usage.cost_usd.toFixed(4) : usage.cost_usd.toFixed(2)}
+            {usage.estimated && (
+              <span className="ml-1.5 text-[11.5px] font-normal text-muted-foreground">estimated</span>
+            )}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-3 space-y-1.5 border-t border-border pt-3">
+        {usage.records.map((record) => (
+          <div
+            key={`${record.provider}:${record.model}:${record.role}`}
+            className="flex flex-wrap items-baseline justify-between gap-2 text-[12px]"
+          >
+            <span className="min-w-0 truncate font-mono text-muted-foreground">
+              {record.model} · {record.role}
+            </span>
+            <span className="tabular shrink-0 text-muted-foreground">
+              {record.total_tokens.toLocaleString()} tok
+              {record.cost_usd !== null && ` · $${record.cost_usd.toFixed(4)}`}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {usage.unpriced_models.length > 0 && (
+        <p className="mt-3 border-t border-border pt-3 text-[12px] leading-relaxed text-muted-foreground">
+          No published price for {usage.unpriced_models.join(", ")}, so their tokens are counted but
+          not costed. The total above is therefore a floor, not the whole bill.
+        </p>
+      )}
     </div>
   )
 }

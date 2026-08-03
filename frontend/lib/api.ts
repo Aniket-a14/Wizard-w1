@@ -7,12 +7,16 @@
  */
 
 import type {
+  DataMode,
+  DataModeInfo,
   DocumentSummary,
   ModelDownloadState,
   ModelDownloadsResponse,
   ModelListResponse,
+  ProvidersResponse,
   ServerConfig,
   SessionInfo,
+  UsageTotals,
   WorkspaceFileEntry,
 } from "./types"
 
@@ -111,6 +115,47 @@ export const api = {
       method: "POST",
       body: JSON.stringify(selection),
     }),
+
+  /**
+   * What this session will and will not send anywhere.
+   *
+   * Switching the mode can clear a role's provider assignment — one the new mode
+   * forbids — so callers must re-read the session afterwards rather than assume
+   * their local copy is still accurate.
+   */
+  dataMode: () => request<DataModeInfo>("/api/data-mode"),
+
+  setDataMode: (body: { mode?: DataMode; schema_only?: boolean }) =>
+    request<DataModeInfo>("/api/data-mode", { method: "POST", body: JSON.stringify(body) }),
+
+  /** Override the session default for one source; delete to follow it again. */
+  setDatasetPolicy: (dataset: string, schemaOnly: boolean) =>
+    request<DataModeInfo>(`/api/data-mode/dataset/${encodeURIComponent(dataset)}`, {
+      method: "PUT",
+      body: JSON.stringify({ schema_only: schemaOnly }),
+    }),
+
+  clearDatasetPolicy: (dataset: string) =>
+    request<DataModeInfo>(`/api/data-mode/dataset/${encodeURIComponent(dataset)}`, {
+      method: "DELETE",
+    }),
+
+  providers: () => request<ProvidersResponse>("/api/providers"),
+
+  /** The key is written to local disk by the backend and never read back. */
+  setProviderKey: (provider: string, apiKey: string) =>
+    request<{ status: string; provider: string; key_hint: string }>(
+      `/api/providers/${encodeURIComponent(provider)}/credentials`,
+      { method: "PUT", body: JSON.stringify({ api_key: apiKey }) },
+    ),
+
+  deleteProviderKey: (provider: string) =>
+    request<{ status: string; provider: string }>(
+      `/api/providers/${encodeURIComponent(provider)}/credentials`,
+      { method: "DELETE" },
+    ),
+
+  usage: () => request<UsageTotals>("/api/usage"),
 
   /**
    * Installing a model without leaving the app.

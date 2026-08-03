@@ -232,6 +232,41 @@ async def test_search_request_halts_for_consent(loaded_session: Session, stub_ll
     assert result.pending_approval["query"] == "current inflation rate"
 
 
+async def test_local_only_refuses_a_search_rather_than_asking(loaded_session: Session, stub_llm) -> None:
+    """Under local-only there is no consent that would make this allowed, so
+    prompting for one would be theatre. The run continues without the search and
+    says why, rather than stopping."""
+    loaded_session.data_mode = "local-only"
+    stub_llm(
+        [
+            '<thought>I need context.</thought>\nSEARCH: "current inflation rate"',
+            "```python\nprint('done')\n```",
+            "All done.",
+        ]
+    )
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="adjust for inflation", mode="fast", emitter=EventCollector()
+    )
+
+    assert result.status == "completed"
+    assert result.pending_approval is None
+    assert any("local-only" in warning for warning in result.warnings)
+
+
+async def test_a_turn_reports_what_it_cost(loaded_session: Session, stub_llm) -> None:
+    """The readout has to survive to the client; the ledger being right is not
+    enough if nothing carries it out of the orchestrator."""
+    stub_llm(["1. Print ok\n2. Stop", "```python\nprint('ok')\n```", "It printed ok."])
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="print ok", mode="fast", emitter=EventCollector()
+    )
+
+    assert "usage" in result.to_dict()
+    assert result.usage["calls"] >= 0
+
+
 # --------------------------------------------------------------------------- #
 # Guarding and correction
 # --------------------------------------------------------------------------- #

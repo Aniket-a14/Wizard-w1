@@ -86,7 +86,9 @@ async def upload_dataset(
         catalog: dict = {}
         if clean:
             try:
-                df, catalog, cleaning_summary = await asyncio.to_thread(science_agent.clean_dataset, df, session)
+                df, catalog, cleaning_summary = await asyncio.to_thread(
+                    science_agent.clean_dataset, df, session, filename
+                )
             except Exception as exc:
                 logger.warning("Cleaning stage failed", error=str(exc))
                 warnings.append("Automatic cleaning failed; the raw data was kept.")

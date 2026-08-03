@@ -4,7 +4,7 @@ import { Check, ChevronDown, Cpu, RefreshCw, TriangleAlert } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { api } from "@/lib/api"
-import type { ModelListResponse, ProviderId } from "@/lib/types"
+import type { ModelListResponse, ProviderId, ProviderInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const ROLES = [
@@ -12,20 +12,25 @@ const ROLES = [
   { key: "worker", label: "Code", hint: "Writes the Python that runs" },
 ] as const
 
-const PROVIDER_LABELS: Record<ProviderId, string> = {
-  ollama: "Ollama",
-  lmstudio: "LM Studio",
-  openai: "OpenAI",
-  custom_gateway: "Gateway",
+/**
+ * Labels and empty-state hints come from the backend's provider table. There
+ * used to be a copy of both maps here and another on /models, and adding a
+ * backend meant editing all three.
+ */
+function labelOf(providers: ProviderInfo[], id: string): string {
+  return providers.find((entry) => entry.id === id)?.label ?? id
 }
 
-/** What to suggest when a provider returns nothing, keyed by why it is usually empty. */
-const EMPTY_HINTS: Record<ProviderId, string> = {
-  ollama: "No models found. Pull one first — any model works, e.g. `ollama pull qwen3:8b`.",
-  lmstudio:
-    "No models found. Start the LM Studio server (Developer tab) and enable “Serve on Local Network” so the backend can reach it.",
-  openai: "No models found. Check GATEWAY_API_URL and GATEWAY_API_KEY.",
-  custom_gateway: "No models found. Check GATEWAY_API_URL and GATEWAY_API_KEY.",
+function emptyHint(entry: ProviderInfo | undefined): string {
+  if (!entry) return "No models found."
+  if (entry.requires_key && !entry.has_key) {
+    return `${entry.label} needs an API key. Add one on the Models page.`
+  }
+  if (entry.id === "ollama") return "No models found. Pull one first — any model works, e.g. `ollama pull qwen3:8b`."
+  if (entry.id === "lmstudio") {
+    return "No models found. Start the LM Studio server (Developer tab) and enable “Serve on Local Network” so the backend can reach it."
+  }
+  return `No models found on ${entry.label}. Check its endpoint and key on the Models page.`
 }
 
 function formatSize(bytes: number): string {
@@ -170,23 +175,28 @@ export function ModelPicker() {
 
           {providers.length > 1 && (
             <div className="flex flex-wrap gap-1 border-b border-border px-1.5 py-1.5">
-              {providers.map((provider) => (
-                <button
-                  key={provider.id}
-                  type="button"
-                  onClick={() => void showProvider(provider.id)}
-                  title={provider.base_url || "No endpoint configured"}
-                  className={cn(
-                    "rounded-md px-2 py-1 text-[11px] font-medium transition-colors duration-[var(--duration-fast)]",
-                    shownProvider === provider.id
-                      ? "bg-foreground text-background"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                    !provider.configured && shownProvider !== provider.id && "opacity-40",
-                  )}
-                >
-                  {PROVIDER_LABELS[provider.id] ?? provider.id}
-                </button>
-              ))}
+              {providers
+                // A provider the data mode forbids is not offered here at all:
+                // this menu exists to be clicked, and every choice in it should
+                // be one the session can actually make.
+                .filter((provider) => provider.allowed)
+                .map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    onClick={() => void showProvider(provider.id)}
+                    title={provider.base_url || "No endpoint configured"}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-[11px] font-medium transition-colors duration-[var(--duration-fast)]",
+                      shownProvider === provider.id
+                        ? "bg-foreground text-background"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      !provider.configured && shownProvider !== provider.id && "opacity-40",
+                    )}
+                  >
+                    {provider.label}
+                  </button>
+                ))}
             </div>
           )}
 
@@ -200,7 +210,7 @@ export function ModelPicker() {
 
             {!loading && data && data.models.length === 0 && !data.error && (
               <p className="px-2 py-3 text-xs text-muted-foreground">
-                {EMPTY_HINTS[shownProvider] ?? "No models found."}
+                {emptyHint(providers.find((entry) => entry.id === shownProvider))}
               </p>
             )}
 
@@ -244,8 +254,8 @@ export function ModelPicker() {
 
           <p className="border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
             {mixed
-              ? `Reasoning on ${PROVIDER_LABELS[selected.manager_provider as ProviderId] ?? selected.manager_provider} · code on ${PROVIDER_LABELS[selected.worker_provider as ProviderId] ?? selected.worker_provider}`
-              : `Provider: ${PROVIDER_LABELS[shownProvider] ?? shownProvider ?? "…"} · applies to this session`}
+              ? `Reasoning on ${labelOf(providers, String(selected.manager_provider))} · code on ${labelOf(providers, String(selected.worker_provider))}`
+              : `Provider: ${shownProvider ? labelOf(providers, shownProvider) : "…"} · applies to this session`}
           </p>
         </div>
       )}

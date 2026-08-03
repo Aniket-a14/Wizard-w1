@@ -8,27 +8,37 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_session, require_api_key
 from src.api.schemas import (
+    DataModeRequest,
+    DataModeResponse,
+    DatasetPolicyRequest,
     HealthResponse,
     ModelDownloadRequest,
     ModelDownloadsResponse,
     ModelDownloadState,
     ModelListResponse,
     ModelSelection,
+    ProviderCredentialRequest,
     ProviderDownloadCapability,
+    ProviderInfo,
+    ProvidersResponse,
     ServerConfig,
     SessionResponse,
+    UsageResponse,
 )
 from src.config import settings
+from src.core.credentials import credential_store
+from src.core.data_mode import allowed_providers, check_provider, describe_mode, disabled_tools
 from src.core.embeddings import embedding_service
 from src.core.infra.cache import get_cache
 from src.core.infra.queue import get_queue
 from src.core.ingest.documents import supported_document_extensions
 from src.core.ingest.loader import DatasetLoader
-from src.core.llm import llm_provider, model_registry
+from src.core.llm import llm_provider, model_registry, usage_ledger
 from src.core.llm.downloader import ProviderNotDownloadable, model_downloader
 from src.core.llm.reasoning import looks_like_reasoning_model
 from src.core.session import Session
 from src.core.tools import runtime as runtime_backend
+from src.providers import exists as provider_exists
 from src.utils.hostinfo import host_info
 from src.utils.logging import logger
 
@@ -164,7 +174,132 @@ async def server_config() -> ServerConfig:
         llm_keep_alive=settings.LLM_KEEP_ALIVE,
         memory_plan=_memory_plan_dict(),
         performance_notes=performance_notes(),
+        data_mode=settings.data_mode,
+        data_schema_only=settings.DATA_SCHEMA_ONLY,
     )
+
+
+#: What schema-only withholds, in the words the UI shows. Kept beside the code
+#: that implements it (`prompts.generate_system_context`) so the two cannot drift.
+SCHEMA_ONLY_WITHHELD = [
+    "Sample rows",
+    "Per-column example values",
+    "Numeric distributions (count, mean, std, min, max)",
+    "Distinct values of categorical columns",
+]
+
+
+def _data_mode_response(session: Session) -> DataModeResponse:
+    return DataModeResponse(
+        mode=session.data_mode,  # type: ignore[arg-type]
+        description=describe_mode(session.data_mode),
+        schema_only=session.data_policy.schema_only,
+        per_dataset=dict(session.data_policy.per_dataset),
+        allowed_providers=sorted(allowed_providers(session.data_mode)),
+        # Only meaningful where a prompt can be cloud-bound. Under local-only
+        # nothing is withheld because nothing is sent.
+        withheld=SCHEMA_ONLY_WITHHELD if session.data_policy.schema_only and session.data_mode != "local-only" else [],
+        disabled_tools=disabled_tools(session.data_mode),
+    )
+
+
+@router.get("/api/data-mode", response_model=DataModeResponse)
+async def get_data_mode(session: Session = Depends(get_session)) -> DataModeResponse:
+    """What this session will and will not send anywhere."""
+    return _data_mode_response(session)
+
+
+@router.post("/api/data-mode", response_model=DataModeResponse, dependencies=[Depends(require_api_key)])
+async def set_data_mode(request: DataModeRequest, session: Session = Depends(get_session)) -> DataModeResponse:
+    """Switches the mode, and drops any role assignment the new mode forbids.
+
+    Clearing the assignment matters: leaving a cloud provider pinned to a role
+    under local-only would mean the next question failed instead of running, and
+    the user would have to work out why.
+    """
+    if request.mode is not None:
+        session.set_data_mode(request.mode)
+        for role in ("manager", "worker", "vision"):
+            assigned = session.models.provider_for(role)
+            if assigned and check_provider(session.data_mode, assigned, role):
+                setattr(session.models, f"{role}_provider", None)
+                setattr(session.models, role, None)
+
+    if request.schema_only is not None:
+        session.data_policy.schema_only = request.schema_only
+
+    return _data_mode_response(session)
+
+
+@router.put("/api/data-mode/dataset/{name}", response_model=DataModeResponse, dependencies=[Depends(require_api_key)])
+async def set_dataset_policy(
+    name: str, request: DatasetPolicyRequest, session: Session = Depends(get_session)
+) -> DataModeResponse:
+    """Overrides the session default for one source.
+
+    Sources are not alike: a published reference table and a payroll export do
+    not deserve the same answer, and one session-wide setting means picking the
+    wrong one for one of them.
+    """
+    if name not in session.datasets:
+        raise HTTPException(status_code=404, detail=f"No dataset named {name!r} in this session")
+    session.data_policy.set_for(name, request.schema_only)
+    return _data_mode_response(session)
+
+
+@router.delete(
+    "/api/data-mode/dataset/{name}", response_model=DataModeResponse, dependencies=[Depends(require_api_key)]
+)
+async def clear_dataset_policy(name: str, session: Session = Depends(get_session)) -> DataModeResponse:
+    """Drops the override so this source follows the session default again."""
+    session.data_policy.clear_for(name)
+    return _data_mode_response(session)
+
+
+@router.get("/api/providers", response_model=ProvidersResponse)
+async def list_providers(session: Session = Depends(get_session)) -> ProvidersResponse:
+    """Every backend, whether it has a key, and whether this mode allows it.
+
+    Network-free by construction — this renders on every page load.
+    """
+    return ProvidersResponse(
+        providers=[ProviderInfo(**entry) for entry in model_registry.available_providers(session.data_mode)],
+        data_mode=session.data_mode,  # type: ignore[arg-type]
+    )
+
+
+@router.put("/api/providers/{provider}/credentials", dependencies=[Depends(require_api_key)])
+async def set_provider_credential(provider: str, request: ProviderCredentialRequest) -> dict:
+    """Stores an API key on this machine. The key is never read back."""
+    if not provider_exists(provider):
+        raise HTTPException(status_code=404, detail=f"Unknown provider {provider!r}")
+    if not await asyncio.to_thread(credential_store.set, provider, request.api_key):
+        raise HTTPException(status_code=500, detail="Could not write the credentials file. See the server log.")
+    # A key changes what a client can reach, and both are cached.
+    model_registry.invalidate(provider)
+    llm_provider.clear_cache()
+    return {"status": "saved", "provider": provider, "key_hint": credential_store.hint(provider)}
+
+
+@router.delete("/api/providers/{provider}/credentials", dependencies=[Depends(require_api_key)])
+async def delete_provider_credential(provider: str) -> dict:
+    if not provider_exists(provider):
+        raise HTTPException(status_code=404, detail=f"Unknown provider {provider!r}")
+    removed = await asyncio.to_thread(credential_store.delete, provider)
+    model_registry.invalidate(provider)
+    llm_provider.clear_cache()
+    return {"status": "removed" if removed else "not_stored", "provider": provider}
+
+
+@router.get("/api/usage", response_model=UsageResponse)
+async def session_usage(session: Session = Depends(get_session)) -> UsageResponse:
+    """Tokens and, where the price is published, spend for this session.
+
+    ``local_only`` is what lets the client state that nothing was spent instead
+    of rendering a zero that looks computed.
+    """
+    totals = usage_ledger.totals(session.id)
+    return UsageResponse(**totals, local_only=session.data_mode == "local-only")
 
 
 @router.get("/api/models", response_model=ModelListResponse)
@@ -201,7 +336,7 @@ async def list_models(
             "worker_provider": session.models.worker_provider or settings.API_PROVIDER,
             "vision_provider": session.models.vision_provider or settings.API_PROVIDER,
         },
-        providers=model_registry.available_providers(),
+        providers=[ProviderInfo(**entry) for entry in model_registry.available_providers(session.data_mode)],
         error=model_registry.error_for(resolved) if not models else None,
     )
 
@@ -261,6 +396,14 @@ async def delete_model(model: str, provider: str | None = None) -> dict:
 @router.post("/api/models", response_model=SessionResponse, dependencies=[Depends(require_api_key)])
 async def select_models(selection: ModelSelection, session: Session = Depends(get_session)) -> SessionResponse:
     """Sets this session's preferred models. Unspecified fields keep their value."""
+    # Refused here rather than at run time: a 409 naming the mode is actionable,
+    # a failed question three clicks later is not.
+    for role in ("manager", "worker", "vision"):
+        chosen = getattr(selection, f"{role}_provider")
+        refusal = check_provider(session.data_mode, chosen, role) if chosen else None
+        if refusal:
+            raise HTTPException(status_code=409, detail=refusal)
+
     for role in ("manager", "worker", "vision"):
         model = getattr(selection, role)
         provider = getattr(selection, f"{role}_provider")

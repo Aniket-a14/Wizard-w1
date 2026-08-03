@@ -14,6 +14,7 @@ import pandas as pd
 from src.config import settings
 from src.core.agent.events import EventCollector
 from src.core.agent.orchestrator import RunResult, orchestrator
+from src.core.data_mode import should_redact
 from src.core.execution import ExecutionResult
 from src.core.llm import LLMRole, llm_provider
 from src.core.prompts import create_cleaning_prompt
@@ -111,7 +112,9 @@ class ScientificAgent:
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def clean_dataset(df: pd.DataFrame, session: Session) -> tuple[pd.DataFrame, dict[str, Any], str]:
+    def clean_dataset(
+        df: pd.DataFrame, session: Session, dataset: str | None = None
+    ) -> tuple[pd.DataFrame, dict[str, Any], str]:
         """Profiles the frame and applies a model-authored cleaning script.
 
         The script is executed through :class:`CodeExecutor`, so it is statically
@@ -131,13 +134,22 @@ class ScientificAgent:
         if not _needs_cleaning(df):
             return df, catalog, "No cleaning was necessary."
 
+        worker_provider = settings.resolve_provider(session.models.worker_provider)
         try:
             response = llm_provider.complete(
-                create_cleaning_prompt(df, catalog),
+                create_cleaning_prompt(
+                    df,
+                    catalog,
+                    # Cleaning is the first prompt a file is ever put into, so it
+                    # has to honour that file's own policy, not the session's.
+                    redact=should_redact(session.data_mode, session.data_policy, worker_provider, dataset=dataset),
+                ),
                 role=LLMRole.WORKER,
                 model=session.models.worker,
                 provider=session.models.worker_provider,
                 max_tokens=settings.output_budget("code"),
+                data_mode=session.data_mode,
+                session_id=session.id,
             )
         except Exception as exc:
             logger.warning("Cleaning skipped, model unavailable", error=str(exc))

@@ -17,6 +17,8 @@ from pathlib import Path
 
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-data-"))
 TEST_WORKSPACE_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-ws-"))
+# Nothing in the suite may read or write the developer's real credentials file.
+TEST_CONFIG_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-config-"))
 
 os.environ.update(
     {
@@ -40,6 +42,20 @@ os.environ.update(
         # `host.docker.internal`, which is a real host on some dev machines).
         "OLLAMA_BASE_URL": "http://127.0.0.1:1",
         "LMSTUDIO_BASE_URL": "http://127.0.0.1:1",
+        # Same reason, for the cloud providers: `available_providers` and the
+        # registry must never dial out to a real endpoint during a test.
+        "OPENAI_BASE_URL": "http://127.0.0.1:1",
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
+        "OPENAI_API_KEY": "",
+        "ANTHROPIC_API_KEY": "",
+        "GATEWAY_API_URL": "",
+        "GATEWAY_API_KEY": "",
+        # Pinned rather than derived. The default is `local-only`, which would
+        # refuse every cloud provider the suite exercises; `hybrid` lets each
+        # test state the mode it means to test.
+        "DATA_MODE": "hybrid",
+        "DATA_SCHEMA_ONLY": "false",
+        "WIZARD_CONFIG_DIR": str(TEST_CONFIG_DIR),
         "COUNCIL_ENABLED": "false",
         "VISION_ENABLED": "false",
         "RATE_LIMIT_MAX_REQUESTS": "10000",
@@ -60,6 +76,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
+from src.core.credentials import credential_store  # noqa: E402
+from src.core.llm.usage import usage_ledger  # noqa: E402
 from src.core.semantic_cache import semantic_cache  # noqa: E402
 from src.core.session import Session, session_manager  # noqa: E402
 
@@ -143,9 +161,14 @@ def _clean_database():
     ``db_mgr.clear_cache()``: ``store()`` writes to the SQLite table *and* to the
     in-process exact-match cache, so clearing only the table leaves a live entry
     that makes a later test with the same question take the cache-hit path.
+
+    The usage ledger is cleared for the same reason: it accumulates per session
+    id, and a test asserting on a turn's cost must not inherit another's tokens.
     """
     yield
     semantic_cache.clear()
+    usage_ledger.clear()
+    credential_store.reload()
 
 
 @pytest.fixture

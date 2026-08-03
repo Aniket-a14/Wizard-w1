@@ -13,7 +13,7 @@ import pytest
 
 from src.config import PROVIDERS, settings
 from src.core.llm import LLMRole, llm_provider
-from src.core.llm.provider import LLMProvider
+from src.core.llm.provider import LLMProvider, LLMUnavailableError
 from src.core.llm.registry import ModelRegistry, classify
 
 
@@ -103,6 +103,154 @@ def test_unavailable_message_names_the_endpoint() -> None:
     spec = llm_provider.resolve(LLMRole.WORKER, model="mystery", provider="lmstudio")
     message = llm_provider._unavailable_message(spec)
     assert "lmstudio" in message and spec.base_url in message and "mystery" in message
+
+
+# --------------------------------------------------------------------------- #
+# Cloud providers, resolved through the same path as the local ones
+# --------------------------------------------------------------------------- #
+def test_a_cloud_provider_resolves_like_any_other(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
+    spec = llm_provider.resolve(LLMRole.MANAGER, model="claude-sonnet-4-5", provider="anthropic", data_mode="hybrid")
+    assert spec.provider == "anthropic"
+    assert spec.base_url == "https://api.anthropic.com/v1"
+    assert spec.api_style == "anthropic"
+
+
+def test_the_wire_dialect_comes_from_the_descriptor() -> None:
+    """Nothing below `resolve` may branch on a provider name."""
+    styles = {
+        name: llm_provider.resolve(LLMRole.MANAGER, model="m", provider=name, data_mode="hybrid").api_style
+        for name in PROVIDERS
+    }
+    assert styles == {
+        "ollama": "ollama",
+        "lmstudio": "openai",
+        "anthropic": "anthropic",
+        "openai": "openai",
+        "custom_gateway": "openai",
+    }
+
+
+def test_a_cloud_role_gets_no_keep_alive() -> None:
+    """Keep-alive is an instruction to a local daemon. A hosted endpoint has no
+    residency to manage, and sending one would be meaningless."""
+    spec = llm_provider.resolve(LLMRole.MANAGER, model="claude-sonnet-4-5", provider="anthropic", data_mode="hybrid")
+    assert spec.keep_alive == ""
+
+
+def test_the_same_model_on_two_cloud_providers_has_distinct_cache_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "GATEWAY_API_URL", "https://gateway.example/v1")
+    first = llm_provider.resolve(LLMRole.MANAGER, model="gpt-4o", provider="openai", data_mode="hybrid")
+    second = llm_provider.resolve(LLMRole.MANAGER, model="gpt-4o", provider="custom_gateway", data_mode="hybrid")
+    assert first.cache_key() != second.cache_key()
+
+
+def test_a_missing_key_is_reported_as_a_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not as an unreachable endpoint: the two have completely different fixes."""
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    spec = llm_provider.resolve(LLMRole.MANAGER, model="claude-sonnet-4-5", provider="anthropic", data_mode="hybrid")
+    message = llm_provider._unavailable_message(spec)
+    assert "API key" in message
+    assert "ANTHROPIC_API_KEY" in message
+
+
+def test_the_anthropic_client_is_actually_constructible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Built for real, not mocked.
+
+    Every other test in this file stubs the client out, so a wrong keyword here
+    -- the output bound is `max_tokens_to_sample`, and `stop` must be passed --
+    would only surface at runtime, on a machine with a real key, which is not
+    this one. No network call is made: constructing the client does not talk to
+    anything.
+    """
+    pytest.importorskip("langchain_anthropic", reason="optional extra; see requirements-optional.txt")
+
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    spec = llm_provider.resolve(
+        LLMRole.MANAGER, model="claude-sonnet-4-5", provider="anthropic", max_tokens=1024, data_mode="hybrid"
+    )
+    client = llm_provider._build_client(spec)
+
+    assert client is not None
+    assert type(client).__name__ == "ChatAnthropic"
+    assert getattr(client, "model", None) == "claude-sonnet-4-5"
+    assert getattr(client, "max_tokens", None) == 1024
+
+
+def test_a_missing_anthropic_package_says_what_to_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Degrade with an instruction, never with a bare "no client available"."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse(name, *args, **kwargs):
+        if name == "langchain_anthropic":
+            raise ImportError("No module named 'langchain_anthropic'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    monkeypatch.setattr(builtins, "__import__", refuse)
+
+    spec = llm_provider.resolve(LLMRole.MANAGER, model="claude-sonnet-4-5", provider="anthropic", data_mode="hybrid")
+    with pytest.raises(LLMUnavailableError, match="langchain-anthropic"):
+        llm_provider._build_client(spec)
+
+
+def test_anthropic_discovery_sends_its_own_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anthropic is not OpenAI-shaped: `x-api-key` and a required version header."""
+    seen: dict[str, Any] = {}
+
+    def fake_get(self, provider, url, headers=None, *, quiet=False):
+        seen["url"] = url
+        seen["headers"] = headers or {}
+        return {"data": [{"id": "claude-sonnet-4-5", "display_name": "Claude Sonnet 4.5"}]}
+
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(ModelRegistry, "_get_json", fake_get)
+
+    models = ModelRegistry().list_models(provider="anthropic")
+    assert [m.name for m in models] == ["claude-sonnet-4-5"]
+    assert seen["headers"]["x-api-key"] == "sk-ant-test"
+    assert "anthropic-version" in seen["headers"]
+
+
+def test_anthropic_without_a_key_says_so_instead_of_asking(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unauthenticated request returns 401, which would be recorded as an
+    unreachable host — pointing the user at the wrong problem."""
+    called = False
+
+    def fake_get(self, provider, url, headers=None, *, quiet=False):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ModelRegistry, "_get_json", fake_get)
+
+    registry = ModelRegistry()
+    assert registry.list_models(provider="anthropic") == []
+    assert called is False
+    assert "key" in (registry.error_for("anthropic") or "")
+
+
+def test_available_providers_describes_the_whole_table() -> None:
+    entries = ModelRegistry().available_providers("hybrid")
+    assert [entry["id"] for entry in entries] == list(PROVIDERS)
+    assert all(entry["kind"] in ("local", "cloud") for entry in entries)
+    assert all(entry["label"] for entry in entries)
+
+
+def test_available_providers_marks_what_the_mode_forbids() -> None:
+    entries = {entry["id"]: entry for entry in ModelRegistry().available_providers("local-only")}
+    assert entries["ollama"]["allowed"] is True
+    assert entries["anthropic"]["allowed"] is False
+
+
+def test_available_providers_never_carries_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-secret-value")
+    entries = ModelRegistry().available_providers("hybrid")
+    assert "sk-ant-secret-value" not in str(entries)
+    assert next(entry for entry in entries if entry["id"] == "anthropic")["has_key"] is True
 
 
 # --------------------------------------------------------------------------- #

@@ -5,20 +5,33 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Deliberately not under `core.infra`: `Settings` is constructed at import time,
-# and that package's __init__ imports the cache, which imports `settings` back.
+# Both sit outside `core/` because `Settings` is built at import time and
+# `core.*.__init__` imports `settings` back.
+from src.providers import CLOUD_PROVIDERS, LOCAL_PROVIDERS, PROVIDERS, describe, is_cloud
 from src.utils.hostinfo import host_info
 
 
-# Every backend the runtime can talk to. "ollama" and "lmstudio" are local
-# daemons; the other two are OpenAI-compatible endpoints reached over HTTP.
-Provider = Literal["ollama", "lmstudio", "openai", "custom_gateway"]
+# Not a Literal any more: the set of backends is data in `src.providers`, and
+# `_validate_provider` below still rejects an unknown name at boot.
+Provider = str
 
-PROVIDERS: tuple[str, ...] = ("ollama", "lmstudio", "openai", "custom_gateway")
+# Re-exported for callers that have always imported them from here.
+__all__ = [
+    "CLOUD_PROVIDERS",
+    "LOCAL_PROVIDERS",
+    "PROVIDERS",
+    "AgentTier",
+    "DataMode",
+    "Provider",
+    "TierBudget",
+    "settings",
+]
 
-# Providers whose model list can be enumerated without the user configuring a
-# URL first, and which therefore always appear in the picker.
-LOCAL_PROVIDERS: frozenset[str] = frozenset({"ollama", "lmstudio"})
+
+# What the user has agreed may leave this machine, and the mechanism behind the
+# local-first promise: `local-only` refuses a cloud provider outright rather than
+# quietly using it, `cloud-only` is the inverse, `hybrid` assigns per role.
+DataMode = Literal["local-only", "cloud-only", "hybrid"]
 
 
 # How the agentic loop is sized for the model actually behind it.
@@ -199,6 +212,19 @@ class Settings(BaseSettings):
     VISION_MODEL_NAME: str = ""
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     FEEDBACK_FILE: str = "feedback_data.json"
+
+    #: Empty means "derive it" — see the `data_mode` property.
+    DATA_MODE: str = ""
+    #: Cloud-bound prompts carry column names, dtypes and null rates but no real
+    #: values. On by default: the conservative option should need no decision.
+    DATA_SCHEMA_ONLY: bool = True
+
+    # URL and key fields named by the rows in `src.providers`. Keys may also come
+    # from the local credential store — see `provider_api_key`.
+    OPENAI_BASE_URL: str = ""
+    OPENAI_API_KEY: str = ""
+    ANTHROPIC_BASE_URL: str = ""
+    ANTHROPIC_API_KEY: str = ""
 
     # ------------------------------------------------------------------ #
     # Embeddings
@@ -458,6 +484,22 @@ class Settings(BaseSettings):
     def _strip_origins(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("API_PROVIDER", "MODEL_TYPE")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if cleaned not in PROVIDERS:
+            raise ValueError(f"Unknown provider {value!r}. Known providers: {', '.join(PROVIDERS)}")
+        return cleaned
+
+    @field_validator("DATA_MODE")
+    @classmethod
+    def _validate_data_mode(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if cleaned and cleaned not in ("local-only", "cloud-only", "hybrid"):
+            raise ValueError(f"Unknown DATA_MODE {value!r}. Use local-only, cloud-only or hybrid.")
+        return cleaned
+
     @field_validator("LMSTUDIO_BASE_URL")
     @classmethod
     def _normalize_lmstudio_url(cls, value: str) -> str:
@@ -517,17 +559,18 @@ class Settings(BaseSettings):
             # room for the manager on every iteration.
             self.LLM_NUM_CTX = {"laptop": 8192, "server": 16384, "hpc": 32768}.get(host.profile, 8192)
 
-        if "OLLAMA_BASE_URL" not in explicit and not host.containerised:
-            # `host.docker.internal` is how a container reaches its host, and it
-            # is the right default *in* compose. Outside one it is a name Docker
-            # Desktop happens to add to the hosts file, so it resolves on a dev
-            # machine with Docker installed and fails outright on one without --
-            # which is precisely the Docker-less install the local backend exists
-            # to serve. Where we are is already measured, so it is not guessed.
-            self.OLLAMA_BASE_URL = self.OLLAMA_BASE_URL.replace("host.docker.internal", "127.0.0.1")
+        if not host.containerised:
+            # `host.docker.internal` is how a container reaches its host and is
+            # right *in* compose. Outside one it is a name Docker Desktop happens
+            # to add to the hosts file, so it fails on a machine without Docker —
+            # precisely the install the local backend exists to serve.
+            for name in LOCAL_PROVIDERS:
+                field = (describe(name).url_field if describe(name) else "") or ""
+                if not field or field in explicit:
+                    continue
+                current = str(getattr(self, field, "") or "")
+                setattr(self, field, current.replace("host.docker.internal", "127.0.0.1"))
 
-        if "LMSTUDIO_BASE_URL" not in explicit and not host.containerised:
-            self.LMSTUDIO_BASE_URL = self.LMSTUDIO_BASE_URL.replace("host.docker.internal", "127.0.0.1")
         if "SANDBOX_MEM_LIMIT" not in explicit and ram:
             # An eighth of RAM per sandbox: enough for a real frame, small
             # enough that several sessions plus a local model still fit.
@@ -545,6 +588,14 @@ class Settings(BaseSettings):
             # The local runtime is bounded like a container, so switching
             # backends does not silently change how much memory code may take.
             self.LOCAL_RUNTIME_MEM_LIMIT = self.SANDBOX_MEM_LIMIT
+
+        # `openai` used to mean "whatever GATEWAY_API_URL says". It now means
+        # api.openai.com, so an install that had pointed it at its own gateway
+        # keeps working only if that configuration is carried across.
+        if self.API_PROVIDER == "openai" and not self.OPENAI_BASE_URL.strip() and self.GATEWAY_API_URL.strip():
+            self.OPENAI_BASE_URL = self.GATEWAY_API_URL.strip()
+            if not self.OPENAI_API_KEY.strip():
+                self.OPENAI_API_KEY = self.GATEWAY_API_KEY
 
         return self
 
@@ -568,36 +619,59 @@ class Settings(BaseSettings):
         return candidate if candidate in PROVIDERS else self.API_PROVIDER
 
     def provider_root_url(self, provider: str | None = None) -> str:
-        """Root URL of the daemon, with no API-version suffix."""
-        name = self.resolve_provider(provider)
-        if name == "ollama":
-            return self.OLLAMA_BASE_URL.rstrip("/")
-        if name == "lmstudio":
-            return self.LMSTUDIO_BASE_URL.rstrip("/")
-        return self.GATEWAY_API_URL.rstrip("/")
+        """Root URL of this backend, before any API-surface suffix."""
+        descriptor = describe(self.resolve_provider(provider))
+        if descriptor is None:  # pragma: no cover - resolve_provider guarantees one
+            return ""
+        configured = str(getattr(self, descriptor.url_field, "") or "").strip() if descriptor.url_field else ""
+        return (configured or descriptor.default_base_url).rstrip("/")
 
     def provider_openai_base_url(self, provider: str | None = None) -> str:
-        """The `/v1` base an OpenAI-compatible client should be pointed at."""
-        name = self.resolve_provider(provider)
-        root = self.provider_root_url(name)
-        if name == "lmstudio":
-            return f"{root}/v1"
-        # A gateway URL is configured by hand and already includes its version
-        # segment, so appending one here would break every existing install.
-        return root
+        """The base an OpenAI-compatible client should be pointed at."""
+        descriptor = describe(self.resolve_provider(provider))
+        root = self.provider_root_url(provider)
+        return f"{root}{descriptor.openai_suffix}" if descriptor and root else root
 
     def provider_api_key(self, provider: str | None = None) -> str:
+        """This provider's key: the environment first, then the local store.
+
+        Environment wins so a container or a CI run keeps behaving as configured;
+        the store is what the settings UI writes to.
+        """
         name = self.resolve_provider(provider)
-        if name == "lmstudio":
-            return self.LMSTUDIO_API_KEY
-        return self.GATEWAY_API_KEY
+        descriptor = describe(name)
+        if descriptor is None:  # pragma: no cover - resolve_provider guarantees one
+            return ""
+        configured = str(getattr(self, descriptor.key_field, "") or "").strip() if descriptor.key_field else ""
+        if configured:
+            return configured
+
+        # Imported here: this module loads before most of `core`.
+        from src.core.credentials import credential_store
+
+        return credential_store.get(name)
 
     def provider_is_configured(self, provider: str | None = None) -> bool:
-        """Whether this provider has somewhere to connect to."""
+        """Whether this provider has somewhere to connect to, and a key if it needs one."""
         name = self.resolve_provider(provider)
-        if name in LOCAL_PROVIDERS:
-            return bool(self.provider_root_url(name))
-        return bool(self.GATEWAY_API_URL.strip())
+        descriptor = describe(name)
+        if descriptor is None:  # pragma: no cover - resolve_provider guarantees one
+            return False
+        if not self.provider_root_url(name):
+            return False
+        return bool(self.provider_api_key(name)) if descriptor.requires_key else True
+
+    @property
+    def data_mode(self) -> str:
+        """The mode in force, with the empty "derive it" value resolved.
+
+        Derived rather than defaulted so upgrading a cloud-configured install does
+        not break it in the name of protecting it.
+        """
+        chosen = self.DATA_MODE.strip().lower()
+        if chosen in ("local-only", "cloud-only", "hybrid"):
+            return chosen
+        return "cloud-only" if is_cloud(self.API_PROVIDER) else "local-only"
 
     # ------------------------------------------------------------------ #
     # Agent budgeting

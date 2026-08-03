@@ -32,6 +32,8 @@ export type EventType =
   | "plan_revised"
   | "assumption"
   | "verification"
+  // What the turn cost. Only emitted when a cloud model was involved.
+  | "usage"
 
 export type Phase =
   | "idle"
@@ -158,7 +160,18 @@ export interface ChatMessage {
   mode?: AnalysisMode
 }
 
-export type ProviderId = "ollama" | "lmstudio" | "openai" | "custom_gateway"
+/**
+ * Provider ids are strings, not a union.
+ *
+ * The backend keeps one descriptor table (`src/providers.py`) and reports
+ * labels, hints and docs links from it, so adding a backend is a row there
+ * rather than an edit here plus two hardcoded `Record<ProviderId, string>`
+ * maps that had to be kept in step by hand.
+ */
+export type ProviderId = string
+
+/** What the session has agreed may leave this machine. */
+export type DataMode = "local-only" | "cloud-only" | "hybrid"
 
 export interface ModelInfo {
   name: string
@@ -176,10 +189,69 @@ export interface ModelInfo {
 
 export interface ProviderInfo {
   id: ProviderId
+  label: string
+  kind: "local" | "cloud"
   base_url: string
   configured: boolean
   local: boolean
   is_default: boolean
+  requires_key: boolean
+  /** Whether a key exists at all — from the environment or the local store. */
+  has_key: boolean
+  key_stored: boolean
+  /** Masked tail only. The key itself never leaves the backend. */
+  key_hint: string
+  /** Whether the current data mode permits this provider. */
+  allowed: boolean
+  hint: string
+  docs_url: string
+}
+
+export interface ProvidersResponse {
+  providers: ProviderInfo[]
+  data_mode: DataMode
+}
+
+export interface DataModeInfo {
+  mode: DataMode
+  description: string
+  schema_only: boolean
+  /** Per-source overrides. A name absent here follows `schema_only`. */
+  per_dataset: Record<string, boolean>
+  allowed_providers: string[]
+  /** What schema-only withholds. Empty when nothing is being sent anywhere. */
+  withheld: string[]
+  /** Tools this mode switches off entirely, named so the UI can say so up front. */
+  disabled_tools: string[]
+}
+
+export interface UsageRecord {
+  provider: string
+  model: string
+  role: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  /** Null for a local model, and for a cloud model whose price is unpublished. */
+  cost_usd: number | null
+  estimated: boolean
+  cloud: boolean
+}
+
+export interface UsageTotals {
+  records: UsageRecord[]
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cost_usd: number | null
+  any_cloud: boolean
+  estimated: boolean
+  /** Cloud models the backend could not price, named rather than under-reported. */
+  unpriced_models: string[]
+  /** True when nothing in this session can incur cost. */
+  local_only: boolean
 }
 
 export type DownloadStatus =
@@ -266,6 +338,9 @@ export interface SessionInfo {
   datasets: DatasetSummary[]
   documents: DocumentSummary[]
   models: Record<string, string | number | null>
+  data_mode: DataMode
+  data_policy: { schema_only: boolean; per_dataset: Record<string, boolean> }
+  usage: UsageTotals
   sandboxed: boolean
   execution_backend: ExecutionBackend
 }
@@ -345,6 +420,9 @@ export interface ServerConfig {
   execution_backend: ExecutionBackend
   /** The configured preference — "auto" resolves to one of the above. */
   execution_backend_setting: string
+  /** The configured default. A session may hold a different one. */
+  data_mode: DataMode
+  data_schema_only: boolean
   sandbox_tier: string
   system_profile: string
   host_cores: number
