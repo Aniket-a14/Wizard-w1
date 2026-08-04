@@ -29,6 +29,11 @@ os.environ.update(
         # imports pandas for every session the suite creates. The in-process
         # interpreter is what these tests exercise and assert on.
         "EXECUTION_BACKEND": "inprocess",
+        # Pinned rather than inherited, so each test states the sandbox mode it
+        # means to exercise. Nothing in the suite spawns a child to contain, and
+        # `require` would make policy construction raise where a test only meant
+        # to read it back.
+        "HOST_SANDBOX": "off",
         "API_PROVIDER": "ollama",
         "DATA_DIR": str(TEST_DATA_DIR),
         "WORKSPACE_DIR": str(TEST_WORKSPACE_DIR),
@@ -160,6 +165,24 @@ def session() -> Session:
 def loaded_session(session: Session, simple_df: pd.DataFrame) -> Session:
     session.add_dataset("dataset.csv", simple_df.copy())
     return session
+
+
+@pytest.fixture(autouse=True)
+def _never_reach_a_package_index(monkeypatch):
+    """Stops an approved `library_install` gate from running a real `pip`.
+
+    Consent to install is now acted on in the parent process rather than
+    reactively inside the daemon, which put a real network call directly behind
+    a gate that several tests approve on purpose. The suite ran `pip install`
+    against PyPI for six hundred seconds once before this existed.
+
+    Stubbed rather than pinned through settings, because the setting also
+    decides whether the gate is *offered* — turning it off would silence the
+    consent tests instead of protecting them.
+    """
+    from src.core.tools import packages
+
+    monkeypatch.setattr(packages, "install", lambda *args, **kwargs: (True, "install stubbed for tests"))
 
 
 @pytest.fixture(autouse=True)

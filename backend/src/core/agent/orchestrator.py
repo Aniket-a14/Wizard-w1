@@ -83,7 +83,7 @@ from src.core.prompts import (
 from src.core.rag.retriever import context_retriever
 from src.core.security.code_guard import imported_modules
 from src.core.semantic_cache import semantic_cache
-from src.core.tools import runtime as runtime_backend
+from src.core.tools import packages, runtime as runtime_backend
 from src.core.tools.evaluator import Evaluator
 from src.utils.logging import logger
 
@@ -361,25 +361,52 @@ class AnalysisOrchestrator:
     async def _permit_install(self, state: RunState, session: Session, emitter: Emitter | None, code: str) -> bool:
         """Gates an install the generated code would otherwise trigger.
 
-        Checked statically, before execution. The runtime installs reactively on
-        ``ModuleNotFoundError``, which happens *after* the program has started
-        running -- so a gate waiting for that signal would be asking permission
-        for something that had already happened.
+        Checked statically, before execution, because a gate waiting for the
+        runtime's own ``ModuleNotFoundError`` would be asking permission for
+        something that had already begun.
+
+        Consent is also where the install now *happens*, on every backend but
+        Docker. Doing it in the child would put it behind that child's network
+        policy -- which denies outbound traffic -- and would separate the
+        decision from the action by a whole process boundary.
         """
         missing = runtime_backend.missing_modules(imported_modules(code), session.id)
         if not missing:
             return True
 
+        if not settings.SANDBOX_ALLOW_RUNTIME_PIP:
+            # Nothing to consent to. Let the code run and fail on its own import
+            # error, which is retryable and lets the loop write something else --
+            # asking a question whose only possible answer is "no" is worse.
+            return True
+
         subject = ", ".join(sorted(missing))
-        return await self._permit(
+        allowed = await self._permit(
             state,
             session,
             emitter,
             "library_install",
             subject,
             f"The analysis needs {subject}, which is not installed. Install it?",
-            detail="Installs into the analysis runtime, not into your system Python.",
+            detail="Installs into this session's own library directory, not into your system Python.",
         )
+        if not allowed:
+            return False
+
+        if runtime_backend.active_backend() == "docker":
+            # The container installs into itself and is thrown away with the
+            # session; there is no environment of the user's to protect.
+            return True
+
+        ok, detail = await asyncio.to_thread(packages.install, runtime_backend.workspace_for(session.id), missing)
+        if not ok:
+            await self._refuse(state, emitter, f"Could not install {subject}: {detail}")
+            return False
+
+        # The runtime reported these as absent; it can import them now.
+        runtime_backend.forget_capabilities(session.id)
+        await emit(emitter, EventType.STATUS, content=detail)
+        return True
 
     async def _permit_paths(self, state: RunState, session: Session, emitter: Emitter | None, paths: list[str]) -> bool:
         """Gates a read or write the guard rejected for being outside the workspace."""

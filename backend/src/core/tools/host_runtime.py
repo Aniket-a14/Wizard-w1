@@ -14,10 +14,13 @@ loopback socket, which buys back most of what a container was providing:
 * **crash isolation**: a segfault or a runaway allocation takes down the child,
   not the API process serving every other session.
 
-What it is not is a security boundary. The child runs as the same user with the
-same filesystem access, so :class:`CodeGuard` is the only thing standing between
-model output and the machine. Docker remains the right answer for untrusted
-input; this is the right answer for running your own analysis on your own laptop.
+Whether it is a *security* boundary depends on ``HOST_SANDBOX``. With it off the
+child runs as the same user with the same filesystem access, and
+:class:`CodeGuard` is the only thing between model output and the machine. With
+it on, :mod:`src.core.security.sandbox` restricts the child through the OS --
+Landlock and seccomp, an ``sandbox-exec`` profile, or a job object and a low
+integrity level -- and the runtime reports back which of those actually took,
+rather than the configuration being taken as evidence that they did.
 """
 
 from __future__ import annotations
@@ -33,6 +36,8 @@ import time
 from pathlib import Path
 
 from src.config import settings
+from src.core.security.sandbox import SpawnPlan, plan_spawn, policy_for
+from src.core.security.sandbox.bootstrap import render_bootstrap
 from src.core.tools.daemon import DaemonClient, find_free_port, render_daemon
 from src.utils.logging import logger
 
@@ -40,13 +45,19 @@ from src.utils.logging import logger
 class HostSession(DaemonClient):
     """One subprocess bound to one user session."""
 
-    def __init__(self, session_id: str, workspace_dir: Path):
+    def __init__(self, session_id: str, workspace_dir: Path, extra_roots: tuple[str, ...] = ()):
         self.session_id = session_id
         self.workspace_dir = workspace_dir
+        # Directories the user consented to. The sandbox must not deny what the
+        # permission profile was asked about and allowed, or the grant reads as
+        # broken.
+        self.extra_roots = extra_roots
         self.process: subprocess.Popen | None = None
         self.port: int | None = None
         self.created_at = time.time()
         self._script_path: Path | None = None
+        self._bootstrap_path: Path | None = None
+        self._plan: SpawnPlan | None = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
@@ -84,11 +95,28 @@ class HostSession(DaemonClient):
             encoding="utf-8",
         )
 
+        entry = self._script_path
+        policy = policy_for(self.workspace_dir, self.extra_roots)
+        if policy.enabled:
+            # The daemon is run *through* the bootstrap so the restrictions are
+            # in force before it imports anything; it still ends up as
+            # `__main__` in a process of its own, so nothing else changes.
+            entry = self.workspace_dir / ".runtime_bootstrap.py"
+            entry.write_text(render_bootstrap(policy, self._script_path), encoding="utf-8")
+            self._bootstrap_path = entry
+
+        plan = plan_spawn(policy, [sys.executable, "-u", str(entry), str(self.port)], self.workspace_dir)
+        self._plan = plan
+
         env = dict(os.environ)
         env["MPLBACKEND"] = "Agg"
         # The child inherits our interpreter but must not inherit our import
         # path assumptions: it only ever needs the third-party analysis stack.
         env.pop("PYTHONSTARTUP", None)
+        # Matplotlib, fontconfig and pip cache under the user's home, which no
+        # writable root covers -- so an unredirected child fails on `import
+        # matplotlib`, before any generated code exists.
+        env.update(plan.env)
 
         creation_flags = 0
         preexec = None
@@ -101,7 +129,7 @@ class HostSession(DaemonClient):
 
         try:
             self.process = subprocess.Popen(
-                [sys.executable, "-u", str(self._script_path), str(self.port)],
+                plan.argv,
                 cwd=str(self.workspace_dir),
                 env=env,
                 stdin=subprocess.DEVNULL,
@@ -115,12 +143,21 @@ class HostSession(DaemonClient):
             self.process = None
             raise
 
+        if plan.adopt is not None:
+            plan.adopt(self.process)
+
         if not self._wait_ready():
             detail = self._drain_startup_output()
             self.stop()
             raise RuntimeError(f"Host runtime did not start: {detail or 'no output'}")
 
-        logger.info("Host runtime started", session=self.session_id, port=self.port, pid=self.process.pid)
+        logger.info(
+            "Host runtime started",
+            session=self.session_id,
+            port=self.port,
+            pid=self.process.pid,
+            sandbox=plan.mechanism,
+        )
 
     def _wait_ready(self) -> bool:
         """Waits for the daemon to listen, giving up early if the child died.
@@ -194,7 +231,11 @@ class HostSession(DaemonClient):
                     handle.close()
             except Exception:
                 pass
-        for path in (self._script_path, self.pid_file):
+        plan, self._plan = self._plan, None
+        if plan is not None and plan.teardown is not None:
+            plan.teardown()
+
+        for path in (self._script_path, self._bootstrap_path, self.pid_file):
             try:
                 if path is not None:
                     path.unlink(missing_ok=True)
@@ -229,6 +270,22 @@ class HostRuntimePool:
 
         return sandbox_pool.workspace_for(session_id)
 
+    @staticmethod
+    def _consented_roots(session_id: str) -> tuple[str, ...]:
+        """Directories the permission profile has already granted this session.
+
+        Read here rather than passed in, because a runtime is created lazily
+        from several call sites and none of them holds the session. Imported
+        inside the function: `core.session` imports this module's pool.
+        """
+        try:
+            from src.core.session import session_manager
+
+            session = session_manager.get(session_id)
+            return tuple(session.permissions.extra_roots) if session is not None else ()
+        except Exception:  # noqa: BLE001 - a missing session is not an error here
+            return ()
+
     def get(self, session_id: str, create: bool = True) -> HostSession | None:
         session = self._sessions.get(session_id)
         if session is not None:
@@ -249,7 +306,7 @@ class HostRuntimePool:
             existing = self._sessions.get(session_id)
             if existing is not None and existing.is_running:
                 return existing
-            session = HostSession(session_id, self.workspace_for(session_id))
+            session = HostSession(session_id, self.workspace_for(session_id), self._consented_roots(session_id))
             try:
                 session.start()
             except Exception as exc:

@@ -24,6 +24,8 @@ import socket
 import struct
 from collections.abc import Callable
 
+from src.core.tools.packages import DISTRIBUTION_NAMES, LIBS_DIRNAME
+
 
 DAEMON_PATH = "/tmp/wizard_sandbox_daemon.py"
 PID_FILE = "/tmp/wizard_sandbox_daemon.pid"
@@ -79,6 +81,8 @@ WORKSPACE = %(workspace)r
 BIND_HOST = "%(bind_host)s"
 MEM_BYTES = %(mem_bytes)d
 PROBE_MODULES = %(probe_modules)s
+DISTRIBUTIONS = %(distributions)s
+LIBS_DIR = os.path.join(WORKSPACE, %(libs_dirname)r)
 
 
 def apply_memory_limit():
@@ -210,37 +214,9 @@ def load_dataset(exec_globals, pd):
 
 
 def install_missing(module_name):
-    # Import name -> distribution name, for the cases where they differ. A
-    # missing entry is not a problem: the import name is tried as-is, which is
-    # correct for the large majority of packages.
-    mapping = {
-        "sklearn": "scikit-learn",
-        "bs4": "beautifulsoup4",
-        "yaml": "pyyaml",
-        "PIL": "pillow",
-        "docx": "python-docx",
-        "cv2": "opencv-python-headless",
-        "dateutil": "python-dateutil",
-        "sqlalchemy": "SQLAlchemy",
-        "skimage": "scikit-image",
-        "statsmodels.api": "statsmodels",
-        "mpl_toolkits": "matplotlib",
-        "pyarrow.parquet": "pyarrow",
-        "Levenshtein": "python-Levenshtein",
-        "fuzzywuzzy": "fuzzywuzzy",
-        "wordcloud": "wordcloud",
-        "umap": "umap-learn",
-        "shap": "shap",
-        "prophet": "prophet",
-        "pmdarima": "pmdarima",
-        "arch": "arch",
-        "geopy": "geopy",
-        "folium": "folium",
-        # The CPU build. The default xgboost wheel bundles CUDA and is 154MB
-        # compressed for a machine that in this context has no GPU anyway.
-        "xgboost": "xgboost-cpu",
-    }
-    package = mapping.get(module_name, module_name)
+    # The map is injected rather than duplicated, so the container path and the
+    # parent-side installer cannot disagree about what `sklearn` is called.
+    package = DISTRIBUTIONS.get(module_name, module_name)
     print("[sandbox] installing missing package: " + package)
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--quiet", "--disable-pip-version-check", package],
@@ -276,6 +252,12 @@ def run_server(port=%(port)d):
     with open(PID_FILE, "w") as handle:
         handle.write(str(os.getpid()))
 
+    # Libraries the parent installed for this session on demand. Prepended so a
+    # session-local version wins, and present from the start so an install
+    # between two executions needs no restart -- only a cache invalidation.
+    if LIBS_DIR not in sys.path:
+        sys.path.insert(0, LIBS_DIR)
+
     apply_memory_limit()
 
     import matplotlib
@@ -297,6 +279,19 @@ def run_server(port=%(port)d):
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((BIND_HOST, port))
     server.listen(4)
+
+    # The network policy is applied here and nowhere earlier: a filter that
+    # refuses to create sockets cannot be installed before the listener exists.
+    # accept() on an already-bound descriptor makes no socket() call, so the
+    # connection the parent needs survives it.
+    sandbox_report = dict(getattr(__builtins__, "__wizard_sandbox__", None) or {})
+    seal = getattr(__builtins__, "__wizard_seal__", None)
+    if seal is not None:
+        try:
+            sandbox_report.update(seal() or {})
+        except Exception as exc:
+            sandbox_report["network"] = {"enforced": False, "detail": "seal failed: " + str(exc)}
+
     print("Sandbox daemon listening on port " + str(port))
     sys.stdout.flush()
 
@@ -317,7 +312,10 @@ def run_server(port=%(port)d):
                 continue
 
             if action == "capabilities":
-                send_message(conn, {"status": "success", "modules": probe_capabilities()})
+                send_message(
+                    conn,
+                    {"status": "success", "modules": probe_capabilities(), "sandbox": sandbox_report},
+                )
                 conn.close()
                 continue
 
@@ -359,6 +357,12 @@ def run_server(port=%(port)d):
             status = "success"
             try:
                 plt.close("all")
+                # The parent may have installed into LIBS_DIR since the last
+                # execution; without this the finder's negative cache still says
+                # the module is missing.
+                import importlib
+
+                importlib.invalidate_caches()
                 try:
                     exec(code, exec_globals)
                 except ModuleNotFoundError as exc:
@@ -442,6 +446,8 @@ def render_daemon(
         "bind_host": bind_host,
         "mem_bytes": int(mem_bytes),
         "probe_modules": json.dumps(list(PROBE_MODULES)),
+        "distributions": json.dumps(DISTRIBUTION_NAMES),
+        "libs_dirname": LIBS_DIRNAME,
     }
 
 
@@ -588,6 +594,15 @@ class DaemonClient:
         """Modules importable in the runtime, as reported by the runtime."""
         modules = self._simple("capabilities", "modules", None)
         return frozenset(modules) if modules else frozenset()
+
+    def sandbox_report(self) -> dict:
+        """What the runtime says was **actually** applied to it.
+
+        Asked of the child rather than derived from the configuration, because
+        the milestone's claim is enforced containment and only the process that
+        made the syscalls knows whether they succeeded.
+        """
+        return self._simple("capabilities", "sandbox", {}) or {}
 
     def reload_dataset(self) -> bool:
         """Re-reads the datasets from the workspace without restarting."""
