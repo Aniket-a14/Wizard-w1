@@ -18,8 +18,7 @@ import os
 
 import pytest
 
-from src.core.security.sandbox import capability
-from src.core.security.sandbox import selftest
+from src.core.security.sandbox import capability, selftest
 
 
 pytestmark = pytest.mark.skipif(

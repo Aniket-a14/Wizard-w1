@@ -69,7 +69,7 @@ cd frontend && npm ci && npm run dev
 
 `EXECUTION_BACKEND` defaults to `host`: generated code runs in a **subprocess** of the backend — a separate process with a memory ceiling, a per-step timeout, an interrupt that works, and a namespace that survives between steps. Docker is opt-in; set `EXECUTION_BACKEND=docker` to use a container per session instead.
 
-It is not a security boundary: the subprocess runs as you, with your files. The static code guard still applies. Use Docker for data or questions you did not write yourself.
+That subprocess is contained by the operating system (`HOST_SANDBOX=best-effort`): writes are confined to the session workspace, outbound network is denied, and memory and process counts are capped. What your machine can actually enforce differs by platform and is listed on `/settings`, with a reason for every gap — press **Verify** there to have it spawn a probe that attempts each forbidden operation rather than take the claim on trust. The static code guard still runs first. Docker remains the strongest option for data or questions you did not write yourself.
 
 Any model you have pulled appears in the picker, and the app picks a sensible one per role on its own — no model name is configured anywhere by default.
 

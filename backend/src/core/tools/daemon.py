@@ -66,6 +66,7 @@ PROBE_MODULES: tuple[str, ...] = (
 # be injected into a generic python image without rebuilding when it changes.
 DAEMON_SCRIPT = '''
 import base64
+import builtins
 import io
 import json
 import os
@@ -284,8 +285,11 @@ def run_server(port=%(port)d):
     # refuses to create sockets cannot be installed before the listener exists.
     # accept() on an already-bound descriptor makes no socket() call, so the
     # connection the parent needs survives it.
-    sandbox_report = dict(getattr(__builtins__, "__wizard_sandbox__", None) or {})
-    seal = getattr(__builtins__, "__wizard_seal__", None)
+    # `builtins` by name, never the `__builtins__` global: runpy runs this script
+    # with that bound to a *dict*, so getattr would find nothing and the seal
+    # would be silently skipped on every real session.
+    sandbox_report = dict(getattr(builtins, "__wizard_sandbox__", None) or {})
+    seal = getattr(builtins, "__wizard_seal__", None)
     if seal is not None:
         try:
             sandbox_report.update(seal() or {})

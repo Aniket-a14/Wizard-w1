@@ -157,7 +157,25 @@ class HostSession(DaemonClient):
             port=self.port,
             pid=self.process.pid,
             sandbox=plan.mechanism,
+            enforced=self._enforced_summary() if policy.enabled else "off",
         )
+
+    def _enforced_summary(self) -> str:
+        """What the child says actually took, asked of the child.
+
+        The configuration is not evidence -- only the process that made the
+        syscalls knows whether they succeeded, and a restriction that was
+        refused must be visible somewhere the operator can find it.
+        """
+        report = self.sandbox_report()
+        if not report:
+            return "unreported"
+        applied = sorted(name for name, entry in report.items() if (entry or {}).get("enforced"))
+        refused = sorted(name for name, entry in report.items() if not (entry or {}).get("enforced"))
+        parts = [f"+{','.join(applied)}" if applied else "+none"]
+        if refused:
+            parts.append(f"-{','.join(refused)}")
+        return " ".join(parts)
 
     def _wait_ready(self) -> bool:
         """Waits for the daemon to listen, giving up early if the child died.

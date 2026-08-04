@@ -396,3 +396,27 @@ def test_the_child_module_imports_nothing_from_src() -> None:
             imported.add(node.module.split(".")[0])
 
     assert "src" not in imported
+
+
+# --------------------------------------------------------------------------- #
+# The bootstrap-to-daemon handoff
+# --------------------------------------------------------------------------- #
+def test_the_daemon_reads_the_seal_off_the_builtins_module() -> None:
+    """`runpy.run_path` binds `__builtins__` in the script's globals to a *dict*,
+    so `getattr(__builtins__, "__wizard_seal__")` finds nothing and the network
+    filter is never installed — silently, on every real session, while the
+    self-test still reports it blocked because the probe calls the seal itself.
+    """
+    from src.core.tools.daemon import DAEMON_SCRIPT
+
+    assert "\nimport builtins\n" in DAEMON_SCRIPT
+    assert 'getattr(builtins, "__wizard_seal__"' in DAEMON_SCRIPT
+    assert "getattr(__builtins__," not in DAEMON_SCRIPT
+
+
+def test_the_bootstrap_leaves_both_phases_where_the_daemon_looks(workspace: Path) -> None:
+    policy = SandboxPolicy(writable=(str(workspace),), readable=())
+    source = render_bootstrap(policy, workspace / "daemon.py")
+
+    assert "builtins.__wizard_sandbox__" in source
+    assert "builtins.__wizard_seal__" in source

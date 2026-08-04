@@ -102,6 +102,31 @@ def release_runtime(session_id: str) -> None:
     host_runtime_pool.release(session_id)
 
 
+def rebind_roots(session_id: str) -> bool:
+    """Rebuilds a host runtime so a newly consented directory is inside its sandbox.
+
+    The OS policy is fixed when the child starts -- a Landlock ruleset cannot be
+    widened after ``restrict_self``, and neither can an SBPL profile or a lowered
+    token. So a ``workspace_write`` grant made at iteration four reaches the AST
+    guard but not the kernel, and the write the user was asked about and allowed
+    fails anyway. Restarting is the only way to make the grant real.
+
+    Only the host backend under an enforcing sandbox needs it. The daemon reloads
+    the session's datasets and tables from the workspace on start, so what is
+    lost is intermediate variables, not the data.
+    """
+    if active_backend() != "host" or settings.HOST_SANDBOX == "off":
+        return False
+
+    from src.core.tools.host_runtime import host_runtime_pool
+
+    if host_runtime_pool.get(session_id, create=False) is None:
+        return False
+    host_runtime_pool.release(session_id)
+    forget_capabilities(session_id)
+    return True
+
+
 def workspace_for(session_id: str):
     from src.core.tools.sandbox import sandbox_pool
 
@@ -268,6 +293,7 @@ __all__ = [
     "capabilities",
     "forget_capabilities",
     "get_runtime",
+    "rebind_roots",
     "release_runtime",
     "tier_modules",
     "workspace_for",

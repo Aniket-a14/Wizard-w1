@@ -229,3 +229,48 @@ def test_widening_the_workspace_does_not_widen_anything_else() -> None:
     assert CodeGuard.scan("open('/srv/session/../../etc/shadow')", extra_roots=allowed).ok is False
     # /workspace stays valid: the extra root is added to the list, not swapped in.
     assert CodeGuard.scan("df.to_csv('/workspace/out.csv')", extra_roots=allowed).ok is True
+
+
+# --------------------------------------------------------------------------- #
+# A consented directory has to reach the kernel, not just the guard
+# --------------------------------------------------------------------------- #
+class _StoppableRuntime:
+    is_running = True
+
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_a_new_root_restarts_the_runtime_the_sandbox_already_fixed(monkeypatch) -> None:
+    """A Landlock ruleset cannot be widened after `restrict_self`, so consent
+    given at iteration four reaches the AST guard and not the kernel. Without a
+    restart the user is asked, says yes, and the write still fails.
+    """
+    from src.core.tools.host_runtime import host_runtime_pool
+
+    monkeypatch.setattr("src.config.settings.EXECUTION_BACKEND", "host")
+    monkeypatch.setattr("src.config.settings.HOST_SANDBOX", "best-effort")
+    runtime = _StoppableRuntime()
+    monkeypatch.setitem(host_runtime_pool._sessions, "s1", runtime)
+
+    assert runtime_backend.rebind_roots("s1") is True
+    assert runtime.stopped is True
+    assert host_runtime_pool.get("s1", create=False) is None
+
+
+def test_nothing_is_restarted_when_no_sandbox_fixed_the_roots(monkeypatch) -> None:
+    """With the OS sandbox off the child never had a policy to widen, so paying
+    for a restart would throw away the namespace for nothing.
+    """
+    from src.core.tools.host_runtime import host_runtime_pool
+
+    monkeypatch.setattr("src.config.settings.EXECUTION_BACKEND", "host")
+    monkeypatch.setattr("src.config.settings.HOST_SANDBOX", "off")
+    runtime = _StoppableRuntime()
+    monkeypatch.setitem(host_runtime_pool._sessions, "s2", runtime)
+
+    assert runtime_backend.rebind_roots("s2") is False
+    assert runtime.stopped is False

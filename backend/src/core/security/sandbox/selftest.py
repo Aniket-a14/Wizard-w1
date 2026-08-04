@@ -40,7 +40,7 @@ from src.utils.logging import logger
 #: `198.51.100.1` is TEST-NET-2 (RFC 5737) and is guaranteed not to route, so a
 #: machine with an open sandbox never actually reaches anything -- an unblocked
 #: attempt times out instead of contacting a real host.
-PROBE_SCRIPT = '''
+PROBE_SCRIPT = """
 import builtins
 import json
 import os
@@ -119,7 +119,7 @@ else:
 sandbox = getattr(builtins, "__wizard_sandbox__", None)
 print("WIZARD_SELFTEST " + json.dumps({"checks": results, "applied": sandbox}))
 sys.stdout.flush()
-'''
+"""
 
 
 @dataclass

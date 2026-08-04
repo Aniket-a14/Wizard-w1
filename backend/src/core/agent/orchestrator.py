@@ -427,6 +427,16 @@ class AnalysisOrchestrator:
         # everything else it checks still applies to the re-scan.
         for path in set(paths):
             session.permissions.allow_root(posixpath.dirname(path.replace("\\", "/")) or path)
+
+        # The OS sandbox fixed its roots when the child started and cannot be
+        # widened in place, so without this the grant passes the guard and is
+        # then refused by the kernel.
+        if await asyncio.to_thread(runtime_backend.rebind_roots, session.id):
+            await emit(
+                emitter,
+                EventType.STATUS,
+                content="Restarted the runtime so it can reach that directory; loaded tables are restored.",
+            )
         return True
 
     @staticmethod
