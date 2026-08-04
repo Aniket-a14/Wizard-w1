@@ -21,14 +21,14 @@ docker compose up --build -d                 # backend :8000, frontend :3000
 docker compose --profile redis up -d         # optional shared cache/queue
 
 SANDBOX_TIER=core docker compose up --build -d   # smaller sandbox image
-EXECUTION_BACKEND=local docker compose up -d     # no sandbox image at all
+EXECUTION_BACKEND=host docker compose up -d      # no sandbox image at all
 ```
 
 ### Without Docker
 ```bash
 pip install -r requirements.txt -r requirements-local.txt
-uvicorn src.api.api:app --port 8000          # from backend/; EXECUTION_BACKEND=auto finds no
-                                             # Docker and runs code in a subprocess instead
+uvicorn src.api.api:app --port 8000          # from backend/; EXECUTION_BACKEND defaults to
+                                             # host, which runs code in a subprocess
 ```
 
 ### Backend
@@ -49,9 +49,13 @@ ruff check . --fix && ruff format .          # CI runs `ruff check` + `ruff form
 
 `asyncio_mode = "auto"`, so async tests need no decorator.
 
-**Tests never touch Docker, Ollama or the network, and never spawn a process.** `backend/tests/conftest.py` sets `EXECUTION_BACKEND=inprocess`, `SANDBOX_ENABLED=false` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is instantiated at import time. Keep new env pinning at the top of that file.
+**Tests never touch Docker, Ollama or the network, and never spawn a process.** `backend/tests/conftest.py` sets `EXECUTION_BACKEND=inprocess`, `SANDBOX_ENABLED=false`, `HOST_SANDBOX=off` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is instantiated at import time. Keep new env pinning at the top of that file.
 
-`EXECUTION_BACKEND=inprocess` is load-bearing: `SANDBOX_ENABLED=false` alone now means only "no Docker", and `auto` would fall through to the **local subprocess** runtime — spawning a child that imports pandas for every session the suite creates.
+An autouse fixture also stubs `tools.packages.install`. Consent to a library install is acted on in the parent, which put a real `pip install` directly behind a gate several tests approve on purpose — the suite reached PyPI for 600 seconds once before that stub existed. Stubbed rather than pinned off through settings, because that setting also decides whether the gate is *offered*, so turning it off silences the consent tests instead of protecting them.
+
+`backend/tests/sandbox/` is the one directory that spawns a process. It is skipped unless `WIZARD_SANDBOX_SELFTEST=1` is set, and CI never sets it; it is the only place the containment claims are checked against a kernel rather than a docstring.
+
+`EXECUTION_BACKEND=inprocess` is load-bearing: `SANDBOX_ENABLED=false` alone now means only "no Docker", and the default `host` would spawn a child that imports pandas for every session the suite creates.
 
 ### Frontend
 ```bash
@@ -118,10 +122,13 @@ Deterministic, no LLM calls, and it **reports rather than edits** — post-proce
 
 | Value | What runs the code | Isolation |
 |-------|--------------------|-----------|
+| `host` (default) | one **subprocess** per session | separate process with `RLIMIT_AS`, timeout, interrupt — **not yet** a security boundary |
 | `docker` | one container per session | process, filesystem, network, memory, PIDs, caps |
-| `local` | one **subprocess** per session | separate process with `RLIMIT_AS`, timeout, interrupt — **not** a security boundary |
 | `inprocess` | guarded `exec` in the API process | none, and the namespace does not persist |
-| `auto` (default) | docker if reachable, else local | — |
+
+`auto` and `local` are the pre-w2 spellings and are folded to `host` by a `mode="before"` field validator, so an existing `.env` keeps working and nothing downstream ever sees them. **Docker is opt-in**: it is reached only when named, and naming it on a machine with no reachable daemon degrades to `host` with a warning. That reverses an earlier rule which resolved an unreachable Docker to `inprocess` so a weaker guarantee could not be substituted silently — but `inprocess` is the least contained runtime there is, so that answered "your container is missing" by removing the isolation that remained. The substitution is announced instead: logged, and `/settings` renders the setting and the resolved runtime separately.
+
+`ExecutionResult.isolation` (`container` / `os-sandbox` / `process` / `none`) is what the UI keys on; `sandboxed` is derived from it. It used to mean "container specifically", which stopped being the same question once the host backend could be contained by the OS.
 
 `local` is not a degraded mode and does not warn per message; only `inprocess` does. Docker remains the right answer for input you did not write yourself.
 
@@ -150,7 +157,7 @@ Blocks banned modules, banned builtins, interpreter-internals attributes, bare `
 - **Every** session table is preloaded into `tables['<table_key>']` from `<workspace>/tables/*.feather`, with `df` still bound to the active one. Cross-table questions need them all in the namespace at once. `remove_dataset` must call `reload_dataset()`, or the deleted frame stays queryable.
 - `WORKSPACE` is parameterised: `/workspace` in a container, the session directory locally. Paths are interpolated with **`%r`**, not into `"..."`, because a Windows path inside a string literal is a set of escape sequences (`C:\Users` is a truncated `\U`). This previously used `Path.as_posix()`, which is only a *conversion on Windows* — on Linux and macOS a Windows path is one opaque filename, the backslashes survive, and the daemon fails to parse. That made two tests pass on the developer's machine and fail on every CI runner. `repr` is correct on every platform and keeps native separators, which is what the daemon wants since it runs on the same OS as the backend.
 - `capabilities` probes with `find_spec`, so it costs a path search rather than twenty imports. It is consulted on every prompt build.
-- `DaemonClient` owns the protocol; `SandboxSession` and `LocalSession` add only lifecycle.
+- `DaemonClient` owns the protocol; `SandboxSession` and `HostSession` add only lifecycle.
 
 ### Docker backend — [tools/sandbox.py](backend/src/core/tools/sandbox.py)
 
@@ -160,14 +167,41 @@ Blocks banned modules, banned builtins, interpreter-internals attributes, bare `
 - Limits: `mem_limit`, `pids_limit`, optional `cpu_quota`, `cap_drop=ALL`, `no-new-privileges`, plus a socket deadline per execution. The daemon's own `RLIMIT_AS` is deliberately left off here — Docker already enforces the ceiling, and a soft limit inside a hard-limited cgroup turns an OOM kill into a confusing `MemoryError`.
 - The image tag carries the tier (`settings.sandbox_image`), so switching `SANDBOX_TIER` builds a new image instead of reusing one with different libraries in it.
 
-### Local backend — [tools/local_runtime.py](backend/src/core/tools/local_runtime.py)
+### OS sandbox — [security/sandbox/](backend/src/core/security/sandbox/)
 
-`LocalRuntimePool` creates **one subprocess per session**, lazily. Same daemon, same protocol, no image.
+With Docker opt-in, this is what stands between generated code and the machine on a default install. The AST guard is unchanged and still runs first; this is the layer beneath it.
 
-- `RLIMIT_AS` from `LOCAL_RUNTIME_MEM_LIMIT` on POSIX. **Windows has no equivalent without pywin32**, so there the cap is documented rather than enforced — do not claim otherwise in the UI.
+`HOST_SANDBOX` is **`off` / `best-effort` / `require`**, defaulting to `best-effort`. Three states rather than a bool because a silent downgrade and a refusal are both wrong as a universal answer: a 5.10 kernel has no Landlock and must still be able to run, while someone who set `require` to get a boundary should not be handed a subprocess that merely looks like one. `HOST_SANDBOX_NETWORK` (`deny`/`allow`, default `deny`) governs *outbound* traffic only — loopback is always permitted, because the daemon protocol is a loopback socket.
+
+Split so the majority is testable without spawning anything, which is the only way any of it gets reviewed from a developer machine running one OS:
+
+| module | what it is |
+|---|---|
+| `policy.py` | `SandboxPolicy` — inert, JSON-safe data. The single description of the boundary; the three platforms are renderings of it. |
+| `profiles.py` | Generates the macOS SBPL profile as a pure function, so it can be asserted as an exact string on Linux or Windows. |
+| `capability.py` | What this machine can enforce, **per feature, with a reason for every gap**. |
+| `spawn.py` | Decorates the launch. Returns a `SpawnPlan` rather than spawning, so `HostSession` stays the single owner of process lifecycle. |
+| `child.py` | The only part that restricts a live process. Loaded **by file path**, imports nothing from `src`. |
+| `selftest.py` | Spawns a probe that tries to escape and reports what stopped it. |
+
+**Enforcement is two-phase**, because the daemon binds a loopback TCP listener and a filter denying `socket()` cannot be installed before it. `apply_policy` runs before the daemon (filesystem, memory, no-new-privs); `seal_network` runs after `listen()` — `accept()` on an already-bound descriptor makes no `socket()` call, so the connection the parent needs survives a filter refusing to create new ones. The bootstrap leaves the seal on `builtins.__wizard_seal__`; the daemon calls it and returns the result through `capabilities`, so **the parent reports what was enforced rather than what was configured**.
+
+- **Linux** — `PR_SET_NO_NEW_PRIVS`, then Landlock (syscalls 444/445/446), ABI probed via `create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` and the handled-access set masked to what that ABI admits, since passing an unknown bit fails the call outright. Then a seccomp-bpf filter refusing `socket()` for `AF_INET`/`AF_INET6`/`AF_PACKET`/`AF_NETLINK` — expressible exactly because the domain is a scalar argument, and BPF cannot dereference a pointer.
+- **macOS** — a deny-by-default SBPL profile via `sandbox-exec`. Availability is **probed**, not inferred from an OS version: it has carried a deprecation warning since 10.14 and still works well past it, and the documented replacement (App Sandbox entitlements) needs a signed app bundle, which a `git clone` does not have.
+- **Windows** — a job object supplying `ProcessMemoryLimit`, `ActiveProcessLimit` and `KILL_ON_JOB_CLOSE`. **This is what closes the `RLIMIT_AS`-on-POSIX-only gap.** Plus a Low integrity level the child applies **to itself** — Windows permits lowering your own token, and the alternative (`CreateProcessAsUserW`) would mean reimplementing `Popen`'s `poll`/`wait`/`terminate`/stdout pipe around a raw handle. Reads keep working under the no-write-up policy; the workspace is labelled Low via `icacls` so the child can still write there. Assignment to the job happens just after spawn rather than through `CREATE_SUSPENDED`, because `subprocess` closes the thread handle — a microsecond gap during interpreter startup, written down rather than glossed over. **Network is not enforced on Windows** and `capability.detect()` says so with the reason: WFP needs administrator, and AppContainer would require re-ACLing the user's Python installation.
+
+**Two things that break without deliberate handling.** Matplotlib, fontconfig and pip cache under the user's home, which no writable root covers — so `policy.cache_environment()` redirects `MPLCONFIGDIR`, `XDG_CACHE_HOME`, `TMPDIR` and friends into the workspace, or the child dies on `import matplotlib` before any generated code exists. And a `workspace_write` grant from the permission profile widens the **sandbox** as well as the guard, or consent the user was asked for and gave reads as broken.
+
+**Verification is an action, not a reading.** `GET /api/sandbox/selftest` spawns a child through the real machinery and has it attempt each forbidden operation. Outcomes are `blocked` / `allowed` / **`inconclusive`** — the probe dials a TEST-NET address (RFC 5737, guaranteed not to route), so a timeout proves nothing either way, and calling that a pass would be exactly the invented claim the trust layer forbids. A feature the platform reports as unsupported does not fail the verdict; failing for it would train the reader to ignore a red result on the machines that have a real one.
+
+### Host backend — [tools/host_runtime.py](backend/src/core/tools/host_runtime.py)
+
+`HostRuntimePool` creates **one subprocess per session**, lazily. Same daemon, same protocol, no image. This is the default backend.
+
+- `RLIMIT_AS` from `HOST_RUNTIME_MEM_LIMIT` on POSIX. **Windows has no equivalent without pywin32**, so there the cap is documented rather than enforced — do not claim otherwise in the UI. `LOCAL_RUNTIME_*` is still accepted as an alias for every `HOST_RUNTIME_*` field.
 - Interrupt: `SIGINT` on POSIX, `CTRL_BREAK_EVENT` on Windows — which needs `CREATE_NEW_PROCESS_GROUP` at spawn, or the signal reaches the API process too.
 - `get()` restarts a child that has exited (OOM kill, crash) rather than handing out a dead one.
-- Runtime pip is off by default here: unlike a container, it would install into the environment the backend itself runs in.
+- Runtime pip inside the daemon is off by default here: unlike a container, it would install into the environment the backend itself runs in. **On-demand installs happen in the parent** instead — [tools/packages.py](backend/src/core/tools/packages.py) runs `pip install --target <workspace>/.libs`, which the daemon has on `sys.path` and re-scans with `importlib.invalidate_caches()` before each execution. Two reasons: inside a sandboxed child the install sits behind a network policy that denies it, and Milestone 2's `library_install` gate that authorises it already runs in the parent, so the decision and the action were a process boundary apart. `SANDBOX_ALLOW_RUNTIME_PIP` is the master switch; when it is off the gate is not offered at all, because a question whose only possible answer is no is worse than no question.
 
 ### Sessions — [session.py](backend/src/core/session.py)
 
@@ -356,11 +390,11 @@ Pydantic-settings singleton reading `backend/.env` (see `backend/.env.example`).
 - `cors_origins` / `cors_allow_credentials` are resolved together: a wildcard origin forces credentials off, because the combination is invalid in every browser.
 - `PLOT_FORMAT` is coupled across two places — the visualization rule in `create_prompt` and the artifact branch in `_execute`. Change both.
 - `SANDBOX_ENABLED=false` disables container creation entirely; `EMBEDDINGS_FORCE_FALLBACK=true` skips every real encoder. Both are set in CI, alongside `EXECUTION_BACKEND=inprocess`.
-- **`SYSTEM_PROFILE` finally does something.** On `auto` the host is measured at boot ([utils/hostinfo.py](backend/src/utils/hostinfo.py)) and `LLM_NUM_THREAD`, `QUEUE_MAX_WORKERS`, `SANDBOX_MEM_LIMIT`, `LOCAL_RUNTIME_MEM_LIMIT` and `SESSION_MAX_ACTIVE` are derived from it. It was previously read by nothing at all, so those were server constants on every machine: eight inference threads on a four-core laptop, and `32 x 2g` = 64 GB of permitted containers.
+- **`SYSTEM_PROFILE` finally does something.** On `auto` the host is measured at boot ([utils/hostinfo.py](backend/src/utils/hostinfo.py)) and `LLM_NUM_THREAD`, `QUEUE_MAX_WORKERS`, `SANDBOX_MEM_LIMIT`, `HOST_RUNTIME_MEM_LIMIT` and `SESSION_MAX_ACTIVE` are derived from it. It was previously read by nothing at all, so those were server constants on every machine: eight inference threads on a four-core laptop, and `32 x 2g` = 64 GB of permitted containers.
 - The derivation runs in a `model_validator(mode="after")` and **only fills fields the user did not set** — `model_fields_set` carries anything from the environment or the .env. A **blank** string counts as unset, because `docker-compose.yml` passes optional knobs as `${VAR:-}` and an empty environment variable is still present.
 - `hostinfo` is under `utils/`, not `core/infra/`: `Settings` is constructed at import time and `core.infra.__init__` imports the cache, which imports `settings` back.
 - Host sizing and `AGENT_TIER` are **separate axes**. How much memory a runtime gets depends on the machine; how many iterations the agent gets depends on the model. A frontier gateway model still gets a `full` budget on a laptop.
-- `EXECUTION_BACKEND` (`auto`/`docker`/`local`/`inprocess`) picks the runtime; `SANDBOX_TIER` (`core`/`standard`/`full`) picks how much toolkit the image installs. `settings.docker_backend_allowed` / `local_backend_allowed` express *permission* only — whether Docker is reachable belongs to `core.tools.runtime`, since config cannot import the sandbox.
+- `HOST_SANDBOX` (`off`/`best-effort`/`require`) and `HOST_SANDBOX_NETWORK` size the OS sandbox — see that section. `EXECUTION_BACKEND` (`host`/`docker`/`inprocess`) picks the runtime; `SANDBOX_TIER` (`core`/`standard`/`full`) picks how much toolkit the image installs. `settings.docker_backend_allowed` / `host_backend_allowed` express *permission* only — whether Docker is reachable belongs to `core.tools.runtime`, since config cannot import the sandbox. `host_backend_allowed` is true under `docker` too, because that is where an unreachable daemon lands.
 - **`MODEL_NAME` / `WORKER_MODEL_NAME` / `VISION_MODEL_NAME` are empty by default**, meaning "use whatever this provider has installed", resolved through `model_registry.suggest`. Setting one pins it. They used to be hardcoded Ollama tags, which made those two models load-bearing — both 404 on LM Studio and on every gateway.
 - `AGENT_TIER` (`auto`/`compact`/`balanced`/`full`) sizes the loop. On `auto` it is inferred from the manager model's parameter count via `tier_for_parameter_size`: <4B compact, 4–30B balanced, ≥30B full. Gateways report no size and get `balanced` — guessing `compact` would cripple the strongest models available.
 - `settings.budget_for(mode, parameter_size)` is the single place mode and tier combine. `TierBudget` carries its own `tier` name so callers never reverse-match numbers back to a tier. `fast` returns `allow_verification=False` — verification is a second code generation *and* a second execution. `deep` returns `allow_decisions=True` on every tier.

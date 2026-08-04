@@ -6,9 +6,9 @@ that ran on every upload. Only the first was checked. Everything now funnels
 through :meth:`CodeExecutor.execute`, which guards first and executes second.
 
 Which runtime serves a session is decided by :mod:`src.core.tools.runtime`: a
-container, a local subprocess, or -- only when neither is permitted -- a guarded
-``exec`` in this process. The first two are both fully supported; the third is
-the genuinely degraded one and says so.
+host subprocess (the default), a container, or -- only when spawning is forbidden
+-- a guarded ``exec`` in this process. The first two are both fully supported;
+the third is the genuinely degraded one and says so.
 """
 
 from __future__ import annotations
@@ -29,9 +29,8 @@ from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
 
-# Builtins removed from the local fallback namespace. This is a mitigation, not a
-# boundary -- Docker is the boundary. Anything the guard already rejects will
-# never get here.
+# Builtins removed from the in-process fallback namespace. A mitigation, not a
+# boundary. Anything the guard already rejects will never get here.
 BLOCKED_BUILTINS = frozenset(
     {"eval", "exec", "compile", "open", "input", "exit", "quit", "help", "__import__", "breakpoint"}
 )
@@ -50,11 +49,16 @@ class ExecutionResult:
     #: paths travel structurally rather than being read back out of the sentence.
     blocked_paths: list[str] = field(default_factory=list)
     retryable_error: bool = False
-    #: True only for a container. A local subprocess is isolated from the API
-    #: process but is not a security boundary, so it does not claim to be one.
+    #: True when a real boundary was in force. Derived from :attr:`isolation`
+    #: rather than set directly -- it used to mean "container specifically",
+    #: which stopped being the same question once the host backend could be
+    #: contained by the OS.
     sandboxed: bool = True
-    #: Which backend actually ran this: ``docker`` / ``local`` / ``inprocess``.
+    #: Which backend actually ran this: ``host`` / ``docker`` / ``inprocess``.
     backend: str = "docker"
+    #: What was actually containing the code: ``container``, ``os-sandbox``,
+    #: ``process`` (a separate process, no OS policy applied) or ``none``.
+    isolation: str = "container"
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -69,9 +73,19 @@ class ExecutionResult:
             "blocked_reason": self.blocked_reason,
             "sandboxed": self.sandboxed,
             "backend": self.backend,
+            "isolation": self.isolation,
             "has_image": self.image is not None,
             "warnings": self.warnings,
         }
+
+
+#: How much containment each backend carries. ``host`` becomes ``os-sandbox``
+#: once the OS policy layer lands; until then it is honestly just a process.
+ISOLATION_BY_BACKEND = {"docker": "container", "host": "process", "inprocess": "none"}
+
+
+def isolation_for(backend: str) -> str:
+    return ISOLATION_BY_BACKEND.get(backend, "none")
 
 
 class CodeExecutor:
@@ -112,10 +126,10 @@ class CodeExecutor:
         tables: dict[str, pd.DataFrame] | None = None,
         allowed_roots: tuple[str, ...] = (),
     ) -> ExecutionResult:
-        """Runs ``code``, preferring the container and falling back to in-process.
+        """Runs ``code`` on whichever runtime serves this session.
 
-        ``tables`` matters only on the local path: the container reads every
-        session table off its bind mount at startup, so passing them again would
+        ``tables`` matters only on the in-process path: both daemons read every
+        session table off the workspace at startup, so passing them again would
         pay a full serialisation per call for something already there.
         """
         verdict, prepared = self.guard(code, allowed_roots)
@@ -130,8 +144,9 @@ class CodeExecutor:
                     code=prepared,
                     ok=False,
                     retryable_error=True,
-                    sandboxed=backend == "docker",
+                    sandboxed=isolation_for(backend) in ("container", "os-sandbox"),
                     backend=backend,
+                    isolation=isolation_for(backend),
                 )
             logger.warning("Execution blocked by guard", reason=verdict.reason, session=self.session_id)
             return ExecutionResult(
@@ -141,8 +156,9 @@ class CodeExecutor:
                 blocked=True,
                 blocked_reason=verdict.reason,
                 blocked_paths=list(verdict.paths) if verdict.only_paths else [],
-                sandboxed=backend == "docker",
+                sandboxed=isolation_for(backend) in ("container", "os-sandbox"),
                 backend=backend,
+                isolation=isolation_for(backend),
             )
 
         runtime = runtime_backend.get_runtime(self.session_id)
@@ -155,9 +171,10 @@ class CodeExecutor:
                 image=image,
                 ok=not failed,
                 retryable_error=failed,
-                sandboxed=backend == "docker",
+                sandboxed=isolation_for(backend) in ("container", "os-sandbox"),
                 backend=backend,
-                # No warning for `local`: it is a supported way to run, and the
+                isolation=isolation_for(backend),
+                # No warning for `host`: it is a supported way to run, and the
                 # isolation actually in force is reported once on /settings
                 # rather than restated on every message. Only the in-process
                 # path below warns, because only it has no isolation at all.
@@ -211,8 +228,8 @@ class CodeExecutor:
         original_stdout = sys.stdout
         warning = (
             "No isolated runtime was available, so this ran in a restricted interpreter "
-            "inside the API process. Start Docker, or allow the local subprocess runtime, "
-            "to restore isolation."
+            "inside the API process. Set EXECUTION_BACKEND=host in backend/.env to run it in a "
+            "separate process instead."
         )
 
         try:
@@ -239,6 +256,7 @@ class CodeExecutor:
                 ok=True,
                 sandboxed=False,
                 backend="inprocess",
+                isolation="none",
                 warnings=[warning],
             )
         except Exception as exc:
@@ -254,6 +272,7 @@ class CodeExecutor:
                 retryable_error=True,
                 sandboxed=False,
                 backend="inprocess",
+                isolation="none",
                 warnings=[warning],
             )
         finally:
@@ -296,7 +315,7 @@ class CodeExecutor:
 def plot_output_path(session_id: str) -> str:
     """Path the worker is told to write interactive charts to.
 
-    ``/workspace`` inside a container; the session's own directory for a local
+    ``/workspace`` inside a container; the session's own directory for a host
     runtime, which is started with that directory as its working directory and
     as the daemon's ``WORKSPACE``.
     """
@@ -308,4 +327,4 @@ def host_plot_path(session_id: str):
     return runtime_backend.workspace_for(session_id) / "plot.html"
 
 
-__all__ = ["CodeExecutor", "ExecutionResult", "plot_output_path", "host_plot_path", "settings"]
+__all__ = ["CodeExecutor", "ExecutionResult", "isolation_for", "plot_output_path", "host_plot_path", "settings"]

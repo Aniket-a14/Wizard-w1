@@ -24,21 +24,38 @@ from src.core.tools.daemon import PROBE_MODULES, render_daemon
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     ("setting", "expected"),
-    [("inprocess", "inprocess"), ("local", "local"), ("docker", "inprocess")],
+    [("inprocess", "inprocess"), ("host", "host"), ("docker", "host")],
 )
 def test_backend_selection_follows_the_setting(monkeypatch, setting: str, expected: str) -> None:
-    """`docker` with no reachable daemon must not silently become `local`.
+    """`docker` with no reachable daemon now degrades to `host`, not `inprocess`.
 
-    Asking for a container and getting an unannounced subprocess would be a
-    different isolation guarantee than the one that was requested.
+    This reverses an earlier pin. That one resolved an unreachable Docker to the
+    in-process interpreter so a weaker guarantee could not be substituted
+    silently -- but `inprocess` is the *least* contained runtime there is, so the
+    old rule answered "your container is missing" by removing the isolation that
+    remained. `host` is more contained than `inprocess` on every axis, and the
+    substitution is announced rather than silent: it is logged, and `/settings`
+    renders the setting and the runtime separately so `docker` resolving to
+    something else is visible on screen.
     """
     monkeypatch.setattr("src.config.settings.EXECUTION_BACKEND", setting, raising=False)
     assert runtime_backend.active_backend() == expected
 
 
-def test_auto_falls_back_to_local_when_there_is_no_docker(monkeypatch) -> None:
-    monkeypatch.setattr("src.config.settings.EXECUTION_BACKEND", "auto", raising=False)
-    assert runtime_backend.active_backend() == "local"
+@pytest.mark.parametrize("legacy", ["auto", "local"])
+def test_legacy_backend_names_fold_to_host(legacy: str) -> None:
+    """A pre-w2 .env keeps working: `auto` and `local` both meant this backend."""
+    from src.config import Settings
+
+    assert Settings(EXECUTION_BACKEND=legacy).EXECUTION_BACKEND == "host"
+
+
+def test_host_runtime_memory_limit_accepts_the_old_env_name(monkeypatch) -> None:
+    """`LOCAL_RUNTIME_MEM_LIMIT` still sets the ceiling it always set."""
+    from src.config import Settings
+
+    monkeypatch.setenv("LOCAL_RUNTIME_MEM_LIMIT", "512m")
+    assert Settings().HOST_RUNTIME_MEM_LIMIT == "512m"
 
 
 # --------------------------------------------------------------------------- #
@@ -192,10 +209,10 @@ def test_plotting_rules_do_not_ask_for_a_library_that_is_absent(monkeypatch) -> 
 # --------------------------------------------------------------------------- #
 # The guard has to follow the runtime's workspace
 # --------------------------------------------------------------------------- #
-def test_the_guard_accepts_the_workspace_the_local_runtime_actually_uses() -> None:
+def test_the_guard_accepts_the_workspace_the_host_runtime_actually_uses() -> None:
     """Without this the guard rejects the chart path the prompt itself supplied.
 
-    A container works out of /workspace; a local runtime works out of the
+    A container works out of /workspace; a host runtime works out of the
     session's own directory, which on Windows is a drive-letter path that
     `posixpath.isabs` does not recognise.
     """

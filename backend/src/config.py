@@ -2,7 +2,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Both sit outside `core/` because `Settings` is built at import time and
@@ -287,31 +287,53 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # Where generated code runs
     #
-    # Two supported backends, not one backend and an apology:
+    # Three values, and Docker is no longer one of the defaults:
     #
-    #   docker     one container per session. Real isolation, ~700 MB image.
-    #   local      one *subprocess* per session running the same daemon over a
-    #              loopback socket. No Docker, no image, but still a separate
-    #              process -- so a runaway allocation, an infinite loop or a
-    #              segfault takes down the child and not the API.
+    #   host       one *subprocess* per session running the daemon over a
+    #              loopback socket. No image, no daemon to install, and a
+    #              runaway allocation or a segfault takes down the child rather
+    #              than the API. This is what a fresh clone gets.
+    #   docker     one container per session. Opt-in, and unchanged.
     #   inprocess  guarded `exec` inside the API process. No isolation at all.
     #              Kept for CI and for environments where spawning is blocked.
     #
-    # "auto" prefers docker and falls back to local, which is what someone who
-    # simply has not installed Docker should get.
+    # `auto` and `local` are the previous spellings and are folded to `host` by
+    # `_fold_execution_backend`, so the rest of the codebase only ever sees the
+    # three above.
     # ------------------------------------------------------------------ #
-    EXECUTION_BACKEND: Literal["auto", "docker", "local", "inprocess"] = "auto"
-    #: Seconds to wait for a freshly spawned local runtime to accept connections.
+    EXECUTION_BACKEND: Literal["host", "docker", "inprocess"] = "host"
+    #: Seconds to wait for a freshly spawned host runtime to accept connections.
     #: It imports pandas and matplotlib first, which is seconds on a slow disk.
-    LOCAL_RUNTIME_START_TIMEOUT: float = 60.0
-    #: Address-space ceiling for a local runtime, mirroring SANDBOX_MEM_LIMIT.
-    #: Enforced through RLIMIT_AS on POSIX only -- Windows has no equivalent that
-    #: does not require pywin32, so there the cap is documented, not enforced.
-    LOCAL_RUNTIME_MEM_LIMIT: str = ""
-    #: Whether a local runtime may pip-install a missing package on demand.
+    HOST_RUNTIME_START_TIMEOUT: float = Field(
+        default=60.0, validation_alias=AliasChoices("HOST_RUNTIME_START_TIMEOUT", "LOCAL_RUNTIME_START_TIMEOUT")
+    )
+    #: Address-space ceiling for a host runtime, mirroring SANDBOX_MEM_LIMIT.
+    HOST_RUNTIME_MEM_LIMIT: str = Field(
+        default="", validation_alias=AliasChoices("HOST_RUNTIME_MEM_LIMIT", "LOCAL_RUNTIME_MEM_LIMIT")
+    )
+    #: Whether a host runtime may pip-install a missing package on demand.
     #: Off by default: unlike a container, it would be installing into the
     #: environment the backend itself runs in.
-    LOCAL_RUNTIME_ALLOW_PIP: bool = False
+    HOST_RUNTIME_ALLOW_PIP: bool = Field(
+        default=False, validation_alias=AliasChoices("HOST_RUNTIME_ALLOW_PIP", "LOCAL_RUNTIME_ALLOW_PIP")
+    )
+
+    # ------------------------------------------------------------------ #
+    # OS-level containment for the host runtime
+    #
+    #   off          spawn the child with no OS policy applied.
+    #   best-effort  apply whatever this kernel supports and report the rest.
+    #   require      refuse to start a runtime that cannot be contained.
+    #
+    # Three states rather than a bool because a silent downgrade and a refusal
+    # are both wrong as a universal answer: a 5.10 kernel has no Landlock and
+    # must still be able to run, while someone who chose this setting to get a
+    # boundary should not be given a subprocess that merely looks like one.
+    # ------------------------------------------------------------------ #
+    HOST_SANDBOX: Literal["off", "best-effort", "require"] = "best-effort"
+    #: Outbound network for generated code. Loopback is always permitted -- the
+    #: daemon protocol is a loopback socket -- so this governs everything else.
+    HOST_SANDBOX_NETWORK: Literal["deny", "allow"] = "deny"
 
     # Sandbox
     #
@@ -492,6 +514,19 @@ class Settings(BaseSettings):
     def _strip_origins(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("EXECUTION_BACKEND", mode="before")
+    @classmethod
+    def _fold_execution_backend(cls, value: str) -> str:
+        """Folds the pre-w2 spellings so an existing .env keeps working.
+
+        ``auto`` used to mean "Docker if you have it, subprocess otherwise" and
+        ``local`` named the subprocess. Docker is opt-in now, so both resolve to
+        ``host`` -- and because this runs *before* the Literal, nothing
+        downstream ever has to know the older names existed.
+        """
+        cleaned = (value or "").strip().lower()
+        return "host" if cleaned in ("auto", "local") else cleaned
+
     @field_validator("API_PROVIDER", "MODEL_TYPE")
     @classmethod
     def _validate_provider(cls, value: str) -> str:
@@ -592,10 +627,10 @@ class Settings(BaseSettings):
             per_sandbox = parse_memory(self.SANDBOX_MEM_LIMIT) or (1024**3)
             self.SESSION_MAX_ACTIVE = max(1, min(32, int(budget // per_sandbox)))
 
-        if "LOCAL_RUNTIME_MEM_LIMIT" not in explicit:
-            # The local runtime is bounded like a container, so switching
+        if "HOST_RUNTIME_MEM_LIMIT" not in explicit:
+            # The host runtime is bounded like a container, so switching
             # backends does not silently change how much memory code may take.
-            self.LOCAL_RUNTIME_MEM_LIMIT = self.SANDBOX_MEM_LIMIT
+            self.HOST_RUNTIME_MEM_LIMIT = self.SANDBOX_MEM_LIMIT
 
         # `openai` used to mean "whatever GATEWAY_API_URL says". It now means
         # api.openai.com, so an install that had pointed it at its own gateway
@@ -771,11 +806,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     @property
     def docker_backend_allowed(self) -> bool:
-        return self.SANDBOX_ENABLED and self.EXECUTION_BACKEND in ("auto", "docker")
+        # Named explicitly or not at all: a container is no longer something an
+        # install falls into by having Docker running.
+        return self.SANDBOX_ENABLED and self.EXECUTION_BACKEND == "docker"
 
     @property
-    def local_backend_allowed(self) -> bool:
-        return self.EXECUTION_BACKEND in ("auto", "local")
+    def host_backend_allowed(self) -> bool:
+        # Also true under `docker`, which degrades to a host subprocess when no
+        # daemon is reachable. Only `inprocess` forbids spawning outright.
+        return self.EXECUTION_BACKEND != "inprocess"
 
     @property
     def sandbox_image(self) -> str:
@@ -783,9 +822,9 @@ class Settings(BaseSettings):
         return self.SANDBOX_IMAGE.strip() or f"wizard-sandbox:{self.SANDBOX_TIER}"
 
     @property
-    def local_runtime_mem_bytes(self) -> int:
-        """Address-space ceiling for a local runtime, 0 when uncapped."""
-        return parse_memory(self.LOCAL_RUNTIME_MEM_LIMIT) or 0
+    def host_runtime_mem_bytes(self) -> int:
+        """Memory ceiling for a host runtime, 0 when uncapped."""
+        return parse_memory(self.HOST_RUNTIME_MEM_LIMIT) or 0
 
 
 settings = Settings()

@@ -376,12 +376,45 @@ export interface SessionInfo {
 }
 
 /**
- * Where generated code runs. `docker` is a container per session; `local` is a
- * subprocess per session — isolated from the API process, bounded and
- * interruptible, but sharing the user's filesystem; `inprocess` is the last
- * resort with no isolation at all.
+ * Where generated code runs. `host` is the default — a subprocess per session,
+ * isolated from the API process, bounded and interruptible; `docker` is an
+ * opt-in container per session; `inprocess` is the last resort with no
+ * isolation at all.
  */
-export type ExecutionBackend = "docker" | "local" | "inprocess"
+export type ExecutionBackend = "host" | "docker" | "inprocess"
+
+/**
+ * What is actually containing the code. Distinct from the backend name because
+ * the host backend's containment depends on what this OS could enforce, which
+ * the server reports rather than the client assuming.
+ */
+export type ExecutionIsolation = "container" | "os-sandbox" | "process" | "none"
+
+/**
+ * What the OS can enforce here. Every feature carries a reason, so an
+ * unenforced one is stated rather than rendered as a blank — a gap the user
+ * cannot see is the failure this whole layer exists to avoid.
+ */
+export interface SandboxFeature {
+  key: string
+  supported: boolean
+  detail: string
+}
+
+export interface SandboxCapability {
+  platform: string
+  mechanism: string
+  features: SandboxFeature[]
+}
+
+/** One probe child's attempt to escape, and what stopped it. */
+export interface SandboxSelfTest {
+  ok: boolean
+  detail: string
+  checks: Record<string, { outcome: "blocked" | "allowed" | "inconclusive"; detail: string }>
+  applied: Record<string, { enforced: boolean; detail: string }>
+  capability: SandboxCapability
+}
 
 /**
  * The server's plan for fitting the configured models into this machine's RAM.
@@ -450,8 +483,14 @@ export interface ServerConfig {
 
   /** Where generated code runs, and what the server measured about this host. */
   execution_backend: ExecutionBackend
-  /** The configured preference — "auto" resolves to one of the above. */
+  /** The configured preference. `docker` resolves to `host` when unreachable. */
   execution_backend_setting: string
+  /** What is actually containing the code, which the backend name alone does not say. */
+  execution_isolation: ExecutionIsolation
+  /** `off` | `best-effort` | `require` */
+  host_sandbox: string
+  /** What this machine can enforce. Proving it was enforced is /api/sandbox/selftest. */
+  sandbox_capability: SandboxCapability
   /** The configured default. A session may hold a different one. */
   data_mode: DataMode
   data_schema_only: boolean

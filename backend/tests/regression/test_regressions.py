@@ -270,14 +270,15 @@ def test_cleaning_path_is_guarded(loaded_session: Session) -> None:
     assert not result.ok
 
 
-def test_local_fallback_reports_that_it_is_degraded(loaded_session: Session) -> None:
-    """Without Docker the executor still runs code, but the caller must be able
-    to tell that isolation was not available."""
+def test_inprocess_fallback_reports_that_it_is_degraded(loaded_session: Session) -> None:
+    """The in-process interpreter still runs code, but the caller must be able
+    to tell that no isolation was available."""
     result = CodeExecutor(loaded_session.id).execute("print(df.shape)", loaded_session.df)
 
     assert result.ok
     assert result.sandboxed is False
-    assert any("Docker" in warning for warning in result.warnings)
+    assert result.isolation == "none"
+    assert any("EXECUTION_BACKEND=host" in warning for warning in result.warnings)
 
 
 def test_syntax_errors_are_retryable_not_policy_violations(loaded_session: Session) -> None:
@@ -467,7 +468,7 @@ def test_a_write_target_is_never_a_hardcoded_container_path(monkeypatch, session
     """
     from src.core.tools import runtime as runtime_backend
 
-    monkeypatch.setattr(runtime_backend, "active_backend", lambda: "local")
+    monkeypatch.setattr(runtime_backend, "active_backend", lambda: "host")
 
     target = runtime_backend.workspace_path(session.id, "cleaned.csv")
 
@@ -495,7 +496,7 @@ def test_the_prompt_tells_the_model_the_root_its_runtime_actually_has(monkeypatc
     from src.core.prompts import _related_tables
     from src.core.tools import runtime as runtime_backend
 
-    monkeypatch.setattr(runtime_backend, "active_backend", lambda: "local")
+    monkeypatch.setattr(runtime_backend, "active_backend", lambda: "host")
     session.add_dataset("orders.csv", pd.DataFrame({"id": [1], "region": ["N"]}))
     session.add_dataset("regions.csv", pd.DataFrame({"region": ["N"], "manager": ["x"]}))
 

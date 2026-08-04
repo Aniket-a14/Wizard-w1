@@ -10,6 +10,7 @@ import type {
   PermissionProfile,
   PermissionRuling,
   PermissionsInfo,
+  SandboxSelfTest,
   ServerConfig,
   SessionInfo,
   UsageTotals,
@@ -274,7 +275,7 @@ export function SettingsWorkbench() {
 
       <Section
         title="Execution"
-        description="Where generated code runs. Docker is not required — set EXECUTION_BACKEND in backend/.env."
+        description="Where generated code runs. Docker is opt-in — set EXECUTION_BACKEND in backend/.env."
       >
         <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
           <Fact
@@ -286,12 +287,21 @@ export function SettingsWorkbench() {
             label="Setting"
             value={
               config
-                ? config.execution_backend_setting === "auto"
-                  ? `auto → ${config.execution_backend}`
-                  : config.execution_backend_setting
+                ? config.execution_backend_setting === config.execution_backend
+                  ? config.execution_backend_setting
+                  : `${config.execution_backend_setting} → ${config.execution_backend}`
                 : "—"
             }
             mono
+          />
+          <Fact
+            label="Containment"
+            value={
+              config
+                ? (ISOLATION_LABELS[config.execution_isolation] ?? config.execution_isolation)
+                : "—"
+            }
+            tone={config?.execution_isolation === "none" ? "warn" : undefined}
           />
           <Fact
             label="Toolkit tier"
@@ -302,7 +312,8 @@ export function SettingsWorkbench() {
           <Fact label="Plot format" value={config?.plot_format ?? "—"} />
         </dl>
 
-        {config && <IsolationNote backend={config.execution_backend} />}
+        {config && <IsolationNote isolation={config.execution_isolation} />}
+        {config && <SandboxPanel config={config} />}
       </Section>
 
       <Section
@@ -502,15 +513,22 @@ const MODE_LABELS: Record<string, string> = {
 }
 
 const BACKEND_LABELS: Record<string, string> = {
+  host: "Host subprocess",
   docker: "Docker container",
-  local: "Local subprocess",
   inprocess: "In-process (no isolation)",
 }
 
 const BACKEND_TONE: Record<string, "ok" | "warn" | undefined> = {
+  host: "ok",
   docker: "ok",
-  local: "ok",
   inprocess: "warn",
+}
+
+const ISOLATION_LABELS: Record<string, string> = {
+  container: "Container",
+  "os-sandbox": "OS sandbox",
+  process: "Separate process",
+  none: "None",
 }
 
 const TIER_TOOLKIT_LABELS: Record<string, string> = {
@@ -533,12 +551,14 @@ function EMBEDDING_LABEL(backend: string): string {
 }
 
 /**
- * Says what the isolation actually is, per backend. The local runtime is a
- * supported way to run rather than a failure, so it gets a statement of what it
- * does and does not protect — not a warning banner.
+ * Says what the containment actually is. Keyed on `isolation` rather than on the
+ * backend name, because the two stopped being the same question: the host
+ * backend's containment depends on what this OS could enforce, and only the
+ * server knows that. `process` is a supported way to run rather than a failure,
+ * so it gets a statement of what it does and does not protect — not a warning.
  */
-function IsolationNote({ backend }: { backend: string }) {
-  if (backend === "docker") {
+function IsolationNote({ isolation }: { isolation: string }) {
+  if (isolation === "container") {
     return (
       <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-success/25 bg-success/8 p-3.5 text-[13px] leading-relaxed text-success">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
@@ -550,7 +570,7 @@ function IsolationNote({ backend }: { backend: string }) {
     )
   }
 
-  if (backend === "local") {
+  if (isolation === "process") {
     return (
       <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-border bg-muted/40 p-3.5 text-[13px] leading-relaxed text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
@@ -570,9 +590,112 @@ function IsolationNote({ backend }: { backend: string }) {
       <span>
         Code runs inside the API process itself, with no isolation and no memory ceiling, and its
         variables do not survive between steps. Set{" "}
-        <code className="font-mono text-[11.5px]">EXECUTION_BACKEND=local</code> to run it in a
-        subprocess instead, or start Docker.
+        <code className="font-mono text-[11.5px]">EXECUTION_BACKEND=host</code> to run it in a
+        separate process instead.
       </span>
+    </div>
+  )
+}
+
+const FEATURE_LABELS: Record<string, string> = {
+  filesystem: "Filesystem",
+  network: "Outbound network",
+  memory: "Memory ceiling",
+  processes: "Process count",
+}
+
+const SANDBOX_MODE_LABELS: Record<string, string> = {
+  off: "Off — no OS policy is applied",
+  "best-effort": "Best effort — applies what this OS supports",
+  require: "Required — refuses to run uncontained",
+}
+
+/**
+ * What the OS sandbox enforces, feature by feature, and a button that proves it.
+ *
+ * The capability list renders from `/api/config` and costs nothing, but it only
+ * says what this machine *can* do. The self-test spawns a child that tries to
+ * escape and reports what actually stopped it — which is the difference between
+ * documented containment and verified containment, and the reason it is a
+ * button rather than another row of text.
+ */
+function SandboxPanel({ config }: { config: ServerConfig }) {
+  const [result, setResult] = useState<SandboxSelfTest | null>(null)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const capability = config.sandbox_capability
+  const features = capability?.features ?? []
+
+  const runSelfTest = useCallback(async () => {
+    setRunning(true)
+    setError(null)
+    try {
+      setResult(await api.sandboxSelfTest())
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The self-test could not be run")
+    } finally {
+      setRunning(false)
+    }
+  }, [])
+
+  if (config.execution_backend !== "host" || !features.length) return null
+
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-muted/30 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[13px] font-medium text-foreground">OS sandbox</p>
+          <p className="text-[12.5px] text-muted-foreground">
+            {SANDBOX_MODE_LABELS[config.host_sandbox] ?? config.host_sandbox} · {capability.mechanism}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={runSelfTest}
+          disabled={running || config.host_sandbox === "off"}
+          className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-[12.5px] font-medium transition-colors hover:bg-muted disabled:opacity-50"
+        >
+          {running && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {running ? "Trying to escape…" : "Verify"}
+        </button>
+      </div>
+
+      <ul className="mt-3 space-y-1.5">
+        {features.map((feature) => (
+          <li key={feature.key} className="flex items-start gap-2 text-[12.5px] leading-relaxed">
+            {feature.supported ? (
+              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+            ) : (
+              <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            )}
+            <span className="text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {FEATURE_LABELS[feature.key] ?? feature.key}
+              </span>{" "}
+              — {feature.supported ? "enforced" : "not enforced"}: {feature.detail}
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      {error && <p className="mt-3 text-[12.5px] text-warning">{error}</p>}
+
+      {result && (
+        <div className="mt-3 border-t border-border pt-3">
+          <p className={cn("text-[12.5px] font-medium", result.ok ? "text-success" : "text-warning")}>
+            {result.ok ? "Verified" : "Not verified"} — {result.detail}
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {Object.entries(result.checks).map(([name, check]) => (
+              <li key={name} className="text-[12px] leading-relaxed text-muted-foreground">
+                <code className="font-mono text-[11.5px] text-foreground">{name}</code>: {check.outcome} —{" "}
+                {check.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

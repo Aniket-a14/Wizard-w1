@@ -3,16 +3,17 @@
 Two supported backends and one last resort:
 
 ===========  ====================================================================
-docker       A container per session. Real isolation; needs a daemon and an image.
-local        A subprocess per session. No Docker, still a separate process.
+host         A subprocess per session. The default: no image, no daemon to
+             install, and still a separate process.
+docker       A container per session. Opt-in; needs a daemon and an image.
 inprocess    Guarded ``exec`` in the API process. No isolation; CI and locked-down
              environments only.
 ===========  ====================================================================
 
-``EXECUTION_BACKEND=auto`` prefers Docker and falls back to local, which is what
-someone who simply has not installed Docker should get -- rather than the
-in-process interpreter with a warning banner on every message, which is what
-they used to get.
+Docker is reached only when ``EXECUTION_BACKEND=docker`` names it. Asking for a
+container and not having one degrades to ``host`` rather than failing, because a
+missing daemon is a reason to run somewhere else, not a reason to stop -- but the
+degradation is logged, since the user asked for something they did not get.
 
 The choice is made per call rather than cached, because Docker can appear or
 disappear while the app is running and the answer to "where does code run" has
@@ -28,26 +29,32 @@ from src.config import settings
 from src.core.tools.daemon import PROBE_MODULES, DaemonClient
 
 
-#: Backend names in the order ``auto`` prefers them.
+#: One of ``host`` / ``docker`` / ``inprocess``.
 BackendName = str
 
 
 def active_backend() -> BackendName:
     """Which backend a new session would use right now.
 
-    ``inprocess`` is reported when neither real backend is permitted, which is
+    ``inprocess`` is reported only when spawning is forbidden outright, which is
     an honest answer rather than a fallback hidden behind an availability flag.
     """
     if settings.EXECUTION_BACKEND == "inprocess":
         return "inprocess"
 
-    from src.core.tools.sandbox import sandbox_pool
+    if settings.docker_backend_allowed:
+        from src.core.tools.sandbox import sandbox_pool
 
-    if settings.docker_backend_allowed and sandbox_pool.available:
-        return "docker"
-    if settings.local_backend_allowed:
-        return "local"
-    return "inprocess"
+        if sandbox_pool.available:
+            return "docker"
+        # Asked for by name and not there. `sandbox_pool.available` has already
+        # logged why, so this only records what it fell back to.
+        from src.utils.logging import logger
+
+        logger.warning("Docker was requested but is unreachable; running on the host backend")
+        return "host"
+
+    return "host" if settings.host_backend_allowed else "inprocess"
 
 
 def get_runtime(session_id: str, create: bool = True) -> DaemonClient | None:
@@ -64,10 +71,10 @@ def get_runtime(session_id: str, create: bool = True) -> DaemonClient | None:
 
         return sandbox_pool.get(session_id, create=create)
 
-    if backend == "local":
-        from src.core.tools.local_runtime import local_runtime_pool
+    if backend == "host":
+        from src.core.tools.host_runtime import host_runtime_pool
 
-        runtime = local_runtime_pool.get(session_id, create=create)
+        runtime = host_runtime_pool.get(session_id, create=create)
         if runtime is not None or not create:
             return runtime
         # Spawning failed -- a locked-down host, no interpreter on PATH. The
@@ -75,7 +82,7 @@ def get_runtime(session_id: str, create: bool = True) -> DaemonClient | None:
         # of failing outright.
         from src.utils.logging import logger
 
-        logger.warning("Local runtime unavailable; falling back to in-process execution", session=session_id)
+        logger.warning("Host runtime unavailable; falling back to in-process execution", session=session_id)
         return None
 
     return None
@@ -88,11 +95,11 @@ def release_runtime(session_id: str) -> None:
     while a session is alive, and a container left behind by the previous choice
     would otherwise leak until the process exits.
     """
-    from src.core.tools.local_runtime import local_runtime_pool
+    from src.core.tools.host_runtime import host_runtime_pool
     from src.core.tools.sandbox import sandbox_pool
 
     sandbox_pool.release(session_id)
-    local_runtime_pool.release(session_id)
+    host_runtime_pool.release(session_id)
 
 
 def workspace_for(session_id: str):
@@ -104,10 +111,10 @@ def workspace_for(session_id: str):
 def workspace_path(session_id: str | None, filename: str = "") -> str:
     """A path inside the session workspace **as the running backend sees it**.
 
-    A container is always at ``/workspace``; a local runtime works out of the
+    A container is always at ``/workspace``; a host runtime works out of the
     session's own directory. Any code that builds a path for generated Python to
     write to has to go through here, because the two are not interchangeable:
-    on the local backend ``/workspace/cleaned.csv`` resolves to a directory that
+    on the host backend ``/workspace/cleaned.csv`` resolves to a directory that
     does not exist, and pandas raises rather than writing anywhere useful.
 
     That is not hypothetical -- it silently disabled semantic cleaning and CSV
@@ -120,17 +127,17 @@ def workspace_path(session_id: str | None, filename: str = "") -> str:
 
 
 def active_runtime_count() -> int:
-    from src.core.tools.local_runtime import local_runtime_pool
+    from src.core.tools.host_runtime import host_runtime_pool
     from src.core.tools.sandbox import sandbox_pool
 
-    return sandbox_pool.active_count + local_runtime_pool.active_count
+    return sandbox_pool.active_count + host_runtime_pool.active_count
 
 
 @lru_cache(maxsize=1)
 def _local_modules() -> frozenset[str]:
     """Modules importable in *this* process, probed once.
 
-    Used for the in-process interpreter, and as the answer for a local runtime
+    Used for the in-process interpreter, and as the answer for a host runtime
     that has not been started yet -- it is the same interpreter, so the set is
     the same without paying to spawn a child to be told so.
     """
@@ -191,7 +198,7 @@ def missing_modules(names: frozenset[str], session_id: str | None = None) -> fro
     """Which of ``names`` this runtime would have to install to run the code.
 
     Answered here because only the runtime knows what it is: a container reports
-    its own module set through the daemon, while a local subprocess shares this
+    its own module set through the daemon, while a host subprocess shares this
     process's interpreter, so asking ``find_spec`` here is the accurate test for
     one and the wrong test for the other.
 

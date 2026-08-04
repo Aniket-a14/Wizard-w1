@@ -32,7 +32,7 @@ import pandas as pd
 from src.config import settings
 from src.core.data_mode import DataPolicy, normalize as normalize_data_mode
 from src.core.database import db_mgr
-from src.core.execution import CodeExecutor
+from src.core.execution import CodeExecutor, isolation_for
 from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
 from src.core.llm.usage import usage_ledger
@@ -398,7 +398,7 @@ class Session:
             "data_policy": self.data_policy.to_dict(),
             "permissions": self.permissions.to_dict(),
             "usage": usage_ledger.totals(self.id),
-            "sandboxed": runtime_backend.active_backend() == "docker",
+            "sandboxed": isolation_for(runtime_backend.active_backend()) in ("container", "os-sandbox"),
             "execution_backend": runtime_backend.active_backend(),
         }
 

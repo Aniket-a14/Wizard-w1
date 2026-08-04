@@ -32,6 +32,7 @@ from src.config import settings
 from src.core.credentials import credential_store
 from src.core.data_mode import allowed_providers, check_provider, describe_mode, disabled_tools
 from src.core.embeddings import embedding_service
+from src.core.execution import isolation_for
 from src.core.infra.cache import get_cache
 from src.core.infra.queue import get_queue
 from src.core.ingest.documents import supported_document_extensions
@@ -40,6 +41,7 @@ from src.core.llm import llm_provider, model_registry, usage_ledger
 from src.core.llm.downloader import ProviderNotDownloadable, model_downloader
 from src.core.llm.reasoning import looks_like_reasoning_model
 from src.core.permissions import CATEGORIES, describe_profile, normalize as normalize_profile
+from src.core.security.sandbox import capability as sandbox_capability
 from src.core.session import Session
 from src.core.tools import runtime as runtime_backend
 from src.providers import exists as provider_exists
@@ -149,6 +151,11 @@ async def server_config() -> ServerConfig:
         sandbox_enabled=settings.SANDBOX_ENABLED,
         execution_backend=backend,
         execution_backend_setting=settings.EXECUTION_BACKEND,
+        execution_isolation=isolation_for(backend),
+        host_sandbox=settings.HOST_SANDBOX,
+        # What this machine *can* enforce. Network-free and cheap; proving it
+        # was enforced is `GET /api/sandbox/selftest`, which spawns a probe.
+        sandbox_capability=sandbox_capability.detect().to_dict(),
         sandbox_tier=settings.SANDBOX_TIER,
         system_profile=settings.system_profile,
         host_cores=host.cores,

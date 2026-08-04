@@ -41,10 +41,12 @@ services:
       - API_KEY=${API_KEY:-}
       # Empty by default: the in-process queue and cache need no extra service.
       - REDIS_URL=${REDIS_URL:-}
-      # auto | docker | local | inprocess. In compose the socket is mounted, so
-      # docker is available and auto picks it; `local` runs generated code in a
-      # subprocess of this container instead, which needs no socket at all.
-      - EXECUTION_BACKEND=${EXECUTION_BACKEND:-auto}
+      # host | docker | inprocess. `host` is the default everywhere else, but a
+      # compose deployment mounts the Docker socket on purpose -- that mount is
+      # the opt-in -- and the sandbox image carries the full analysis toolkit
+      # that this backend image deliberately does not. Set `host` to run
+      # generated code in a subprocess of this container instead.
+      - EXECUTION_BACKEND=${EXECUTION_BACKEND:-docker}
       # core | standard | full — how much of the analysis toolkit the sandbox
       # image installs. The runtime reports what it has, so a smaller tier
       # advertises less rather than promising a missing library.

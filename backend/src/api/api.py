@@ -19,7 +19,7 @@ from src.core.embeddings import embedding_service
 from src.core.infra.queue import get_queue
 from src.core.session import session_manager
 from src.core.tools import runtime as runtime_backend
-from src.core.tools.local_runtime import local_runtime_pool
+from src.core.tools.host_runtime import host_runtime_pool
 from src.core.tools.sandbox import sandbox_pool
 from src.utils.hostinfo import host_info
 from src.utils.logging import configure_logger, logger
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await get_queue().shutdown()
         await asyncio.to_thread(session_manager.shutdown)
         await asyncio.to_thread(sandbox_pool.shutdown)
-        await asyncio.to_thread(local_runtime_pool.shutdown)
+        await asyncio.to_thread(host_runtime_pool.shutdown)
         logger.info("Wizard backend stopped")
 
 
