@@ -67,7 +67,7 @@ cd backend && uvicorn src.api.api:app --port 8000
 cd frontend && npm ci && npm run dev
 ```
 
-`EXECUTION_BACKEND` defaults to `auto`: it finds no Docker and runs generated code in a **subprocess** of the backend instead — a separate process with a memory ceiling, a per-step timeout, an interrupt that works, and a namespace that survives between steps. Set `EXECUTION_BACKEND=local` to choose it explicitly even where Docker is available.
+`EXECUTION_BACKEND` defaults to `host`: generated code runs in a **subprocess** of the backend — a separate process with a memory ceiling, a per-step timeout, an interrupt that works, and a namespace that survives between steps. Docker is opt-in; set `EXECUTION_BACKEND=docker` to use a container per session instead.
 
 It is not a security boundary: the subprocess runs as you, with your files. The static code guard still applies. Use Docker for data or questions you did not write yourself.
 
@@ -181,7 +181,7 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything 
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Where Ollama lives |
 | `LMSTUDIO_BASE_URL` | `http://host.docker.internal:1234` | Where LM Studio lives (root, not `/v1`) |
 | `PLOT_FORMAT` | `html` | `html` for interactive Plotly, `png` for static |
-| `EXECUTION_BACKEND` | `auto` | `docker`, `local` (subprocess, no Docker) or `inprocess` |
+| `EXECUTION_BACKEND` | `host` | `host` (subprocess, no Docker), `docker` or `inprocess` |
 | `SANDBOX_TIER` | `standard` | `core`, `standard` or `full` — how much toolkit the image installs |
 | `SYSTEM_PROFILE` | `auto` | `auto` measures the machine; or pin `laptop`/`server`/`hpc` |
 | `SANDBOX_ENABLED` | `True` | `False` disables containers entirely |
@@ -248,7 +248,7 @@ Reasoning and the final answer arrive as separate delta streams, so the client c
 Generated code is untrusted. Three layers apply:
 
 1. **Static analysis** — an AST policy check rejects restricted imports, dynamic execution, interpreter-internals traversal, reflection with computed attribute names, and file access outside the workspace. Malformed code is treated as retryable rather than hostile, so the model gets to fix its own typo.
-2. **Process isolation** — with `EXECUTION_BACKEND=docker`, one container per session with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout; set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor. With `local`, a subprocess per session with an address-space cap (POSIX; Windows has no equivalent without pywin32) and the same timeout — which contains runaway code, but is **not** a security boundary. Use Docker for input you did not write yourself.
+2. **Process isolation** — with `EXECUTION_BACKEND=docker`, one container per session with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout; set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor. With the default `host`, a subprocess per session with an address-space cap (POSIX; Windows has no equivalent without pywin32) and the same timeout — which contains runaway code, but is **not** a security boundary. Use Docker for input you did not write yourself.
 3. **Scoped filesystem** — each session reads and writes only its own workspace directory.
 
 > [!IMPORTANT]
@@ -286,7 +286,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](.
 
 **Settings shows "Local subprocess" instead of "Docker container".** Docker is unreachable, so code is running in a subprocess of the backend. That is a supported mode — bounded, interruptible, and it keeps variables between steps — but it is not isolated from your filesystem. Start Docker Desktop and reload to get a container back.
 
-**Settings shows "In-process (no isolation)".** Neither backend was permitted. Set `EXECUTION_BACKEND=local` (or `auto`) in `backend/.env`. Only this mode has no isolation and no persistent namespace.
+**Settings shows "In-process (no isolation)".** Spawning was forbidden. Set `EXECUTION_BACKEND=host` in `backend/.env`. Only this mode has no isolation and no persistent namespace.
 
 **Retrieval says "Word overlap".** No embedding model is installed on your provider. `ollama pull embeddinggemma` and reload. Nothing breaks without one; matching is just less good at paraphrases.
 

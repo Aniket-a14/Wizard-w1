@@ -95,8 +95,12 @@ class ServerConfig(BaseModel):
     performance_notes: list[str] = Field(default_factory=list)
     # Where generated code runs, and on what machine. `sandbox_available` says
     # only whether Docker answered; these say what is actually in use.
-    execution_backend: Literal["docker", "local", "inprocess"] = "inprocess"
-    execution_backend_setting: str = "auto"
+    execution_backend: Literal["host", "docker", "inprocess"] = "inprocess"
+    execution_backend_setting: str = "host"
+    #: What is actually containing the code — `container`, `os-sandbox`,
+    #: `process` or `none`. Distinct from the backend name, because the host
+    #: backend's containment depends on what this OS could enforce.
+    execution_isolation: str = "none"
     #: The configured default. A session may hold a different one.
     data_mode: str = "local-only"
     data_schema_only: bool = True
@@ -121,8 +125,7 @@ class SessionResponse(BaseModel):
     data_policy: dict[str, Any] = Field(default_factory=dict)
     permissions: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
-    #: True only for a container. A local runtime is isolated from the API
-    #: process but is not a security boundary, so it does not claim to be one.
+    #: True when a real boundary was in force, not merely a separate process.
     sandboxed: bool = False
     execution_backend: str = "inprocess"
 

@@ -2,8 +2,8 @@
 #
 #   pip install -r requirements.txt -r requirements-local.txt
 #
-# With `EXECUTION_BACKEND=local` (or `auto` on a machine with no Docker),
-# generated code runs in a subprocess of *this* interpreter, so it can only
+# With `EXECUTION_BACKEND=host`, which is the default, generated code runs in a
+# subprocess of *this* interpreter, so it can only
 # import what is installed here. Nothing below is needed by the API server, and
 # nothing below is needed at all when code runs in a container -- the sandbox
 # image carries its own copies.

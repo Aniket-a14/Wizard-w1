@@ -376,12 +376,19 @@ export interface SessionInfo {
 }
 
 /**
- * Where generated code runs. `docker` is a container per session; `local` is a
- * subprocess per session — isolated from the API process, bounded and
- * interruptible, but sharing the user's filesystem; `inprocess` is the last
- * resort with no isolation at all.
+ * Where generated code runs. `host` is the default — a subprocess per session,
+ * isolated from the API process, bounded and interruptible; `docker` is an
+ * opt-in container per session; `inprocess` is the last resort with no
+ * isolation at all.
  */
-export type ExecutionBackend = "docker" | "local" | "inprocess"
+export type ExecutionBackend = "host" | "docker" | "inprocess"
+
+/**
+ * What is actually containing the code. Distinct from the backend name because
+ * the host backend's containment depends on what this OS could enforce, which
+ * the server reports rather than the client assuming.
+ */
+export type ExecutionIsolation = "container" | "os-sandbox" | "process" | "none"
 
 /**
  * The server's plan for fitting the configured models into this machine's RAM.
@@ -450,8 +457,10 @@ export interface ServerConfig {
 
   /** Where generated code runs, and what the server measured about this host. */
   execution_backend: ExecutionBackend
-  /** The configured preference — "auto" resolves to one of the above. */
+  /** The configured preference. `docker` resolves to `host` when unreachable. */
   execution_backend_setting: string
+  /** What is actually containing the code, which the backend name alone does not say. */
+  execution_isolation: ExecutionIsolation
   /** The configured default. A session may hold a different one. */
   data_mode: DataMode
   data_schema_only: boolean

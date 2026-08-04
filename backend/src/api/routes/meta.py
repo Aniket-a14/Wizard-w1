@@ -32,6 +32,7 @@ from src.config import settings
 from src.core.credentials import credential_store
 from src.core.data_mode import allowed_providers, check_provider, describe_mode, disabled_tools
 from src.core.embeddings import embedding_service
+from src.core.execution import isolation_for
 from src.core.infra.cache import get_cache
 from src.core.infra.queue import get_queue
 from src.core.ingest.documents import supported_document_extensions
@@ -149,6 +150,7 @@ async def server_config() -> ServerConfig:
         sandbox_enabled=settings.SANDBOX_ENABLED,
         execution_backend=backend,
         execution_backend_setting=settings.EXECUTION_BACKEND,
+        execution_isolation=isolation_for(backend),
         sandbox_tier=settings.SANDBOX_TIER,
         system_profile=settings.system_profile,
         host_cores=host.cores,

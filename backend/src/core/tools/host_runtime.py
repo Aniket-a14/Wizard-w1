@@ -1,9 +1,9 @@
-"""Local execution backend: one subprocess per session, no Docker required.
+"""Host execution backend: one subprocess per session, no Docker required.
 
-Not everyone wants Docker, and on a laptop the daemon plus a per-session image
-can cost more memory than the model does. This runs the *same* daemon as the
-container backend in a child process talking over a loopback socket, which buys
-back most of what a container was providing:
+This is the default. Not everyone wants Docker, and on a laptop the daemon plus
+a per-session image can cost more memory than the model does. This runs the
+*same* daemon as the container backend in a child process talking over a
+loopback socket, which buys back most of what a container was providing:
 
 * a **persistent namespace**, so iteration 3 of an investigation can use what
   iteration 1 computed -- the in-process fallback rebuilt its globals on every
@@ -37,7 +37,7 @@ from src.core.tools.daemon import DaemonClient, find_free_port, render_daemon
 from src.utils.logging import logger
 
 
-class LocalSession(DaemonClient):
+class HostSession(DaemonClient):
     """One subprocess bound to one user session."""
 
     def __init__(self, session_id: str, workspace_dir: Path):
@@ -76,10 +76,10 @@ class LocalSession(DaemonClient):
                 # Runtime pip would install into the *backend's* environment
                 # here, not a throwaway container, so it is off unless the
                 # operator opts in.
-                allow_pip=settings.SANDBOX_ALLOW_RUNTIME_PIP and settings.LOCAL_RUNTIME_ALLOW_PIP,
+                allow_pip=settings.SANDBOX_ALLOW_RUNTIME_PIP and settings.HOST_RUNTIME_ALLOW_PIP,
                 workspace=str(self.workspace_dir),
                 bind_host="127.0.0.1",
-                mem_bytes=settings.local_runtime_mem_bytes,
+                mem_bytes=settings.host_runtime_mem_bytes,
             ),
             encoding="utf-8",
         )
@@ -111,16 +111,16 @@ class LocalSession(DaemonClient):
                 preexec_fn=preexec,  # noqa: PLW1509 - a new session, not an exec hook
             )
         except OSError as exc:
-            logger.error("Could not spawn local runtime", session=self.session_id, error=str(exc))
+            logger.error("Could not spawn host runtime", session=self.session_id, error=str(exc))
             self.process = None
             raise
 
         if not self._wait_ready():
             detail = self._drain_startup_output()
             self.stop()
-            raise RuntimeError(f"Local runtime did not start: {detail or 'no output'}")
+            raise RuntimeError(f"Host runtime did not start: {detail or 'no output'}")
 
-        logger.info("Local runtime started", session=self.session_id, port=self.port, pid=self.process.pid)
+        logger.info("Host runtime started", session=self.session_id, port=self.port, pid=self.process.pid)
 
     def _wait_ready(self) -> bool:
         """Waits for the daemon to listen, giving up early if the child died.
@@ -129,7 +129,7 @@ class LocalSession(DaemonClient):
         cache is seconds -- so the timeout is generous, but a child that has
         already exited is not waited on at all.
         """
-        deadline = time.time() + settings.LOCAL_RUNTIME_START_TIMEOUT
+        deadline = time.time() + settings.HOST_RUNTIME_START_TIMEOUT
         host, port = self.endpoint()
         while time.time() < deadline:
             if self.process is None or self.process.poll() is not None:
@@ -172,10 +172,10 @@ class LocalSession(DaemonClient):
                 self.process.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 os.kill(self.process.pid, signal.SIGINT)
-            logger.info("Local runtime interrupt signalled", session=self.session_id)
+            logger.info("Host runtime interrupt signalled", session=self.session_id)
             return True
         except (OSError, ValueError) as exc:
-            logger.error("Failed to interrupt local runtime", session=self.session_id, error=str(exc))
+            logger.error("Failed to interrupt host runtime", session=self.session_id, error=str(exc))
             return False
 
     def stop(self):
@@ -200,18 +200,18 @@ class LocalSession(DaemonClient):
                     path.unlink(missing_ok=True)
             except OSError:
                 pass
-        logger.info("Local runtime stopped", session=self.session_id)
+        logger.info("Host runtime stopped", session=self.session_id)
 
 
-class LocalRuntimePool:
-    """Creates and reaps one :class:`LocalSession` per user session.
+class HostRuntimePool:
+    """Creates and reaps one :class:`HostSession` per user session.
 
     Mirrors :class:`~src.core.tools.sandbox.SandboxPool` so
     :mod:`src.core.tools.runtime` can treat the two interchangeably.
     """
 
     def __init__(self):
-        self._sessions: dict[str, LocalSession] = {}
+        self._sessions: dict[str, HostSession] = {}
         self._lock = threading.Lock()
         atexit.register(self.shutdown)
 
@@ -222,21 +222,21 @@ class LocalRuntimePool:
         There is nothing to probe -- a Python interpreter is by definition
         present -- so unlike Docker this cannot be usefully checked in advance.
         """
-        return settings.local_backend_allowed
+        return settings.host_backend_allowed
 
     def workspace_for(self, session_id: str) -> Path:
         from src.core.tools.sandbox import sandbox_pool
 
         return sandbox_pool.workspace_for(session_id)
 
-    def get(self, session_id: str, create: bool = True) -> LocalSession | None:
+    def get(self, session_id: str, create: bool = True) -> HostSession | None:
         session = self._sessions.get(session_id)
         if session is not None:
             # A child that died -- OOM-killed, or crashed on a bad extension --
             # must not be handed out as though it were live.
             if session.is_running or not create:
                 return session
-            logger.warning("Local runtime had exited; restarting", session=session_id)
+            logger.warning("Host runtime had exited; restarting", session=session_id)
             with self._lock:
                 self._sessions.pop(session_id, None)
         elif not create:
@@ -249,11 +249,11 @@ class LocalRuntimePool:
             existing = self._sessions.get(session_id)
             if existing is not None and existing.is_running:
                 return existing
-            session = LocalSession(session_id, self.workspace_for(session_id))
+            session = HostSession(session_id, self.workspace_for(session_id))
             try:
                 session.start()
             except Exception as exc:
-                logger.error("Failed to start local runtime", session=session_id, error=str(exc))
+                logger.error("Failed to start host runtime", session=session_id, error=str(exc))
                 session.stop()
                 return None
             self._sessions[session_id] = session
@@ -277,6 +277,6 @@ class LocalRuntimePool:
         return len(self._sessions)
 
 
-local_runtime_pool = LocalRuntimePool()
+host_runtime_pool = HostRuntimePool()
 
-__all__ = ["LocalRuntimePool", "LocalSession", "local_runtime_pool"]
+__all__ = ["HostRuntimePool", "HostSession", "host_runtime_pool"]

@@ -274,7 +274,7 @@ export function SettingsWorkbench() {
 
       <Section
         title="Execution"
-        description="Where generated code runs. Docker is not required — set EXECUTION_BACKEND in backend/.env."
+        description="Where generated code runs. Docker is opt-in — set EXECUTION_BACKEND in backend/.env."
       >
         <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
           <Fact
@@ -286,12 +286,21 @@ export function SettingsWorkbench() {
             label="Setting"
             value={
               config
-                ? config.execution_backend_setting === "auto"
-                  ? `auto → ${config.execution_backend}`
-                  : config.execution_backend_setting
+                ? config.execution_backend_setting === config.execution_backend
+                  ? config.execution_backend_setting
+                  : `${config.execution_backend_setting} → ${config.execution_backend}`
                 : "—"
             }
             mono
+          />
+          <Fact
+            label="Containment"
+            value={
+              config
+                ? (ISOLATION_LABELS[config.execution_isolation] ?? config.execution_isolation)
+                : "—"
+            }
+            tone={config?.execution_isolation === "none" ? "warn" : undefined}
           />
           <Fact
             label="Toolkit tier"
@@ -302,7 +311,7 @@ export function SettingsWorkbench() {
           <Fact label="Plot format" value={config?.plot_format ?? "—"} />
         </dl>
 
-        {config && <IsolationNote backend={config.execution_backend} />}
+        {config && <IsolationNote isolation={config.execution_isolation} />}
       </Section>
 
       <Section
@@ -502,15 +511,22 @@ const MODE_LABELS: Record<string, string> = {
 }
 
 const BACKEND_LABELS: Record<string, string> = {
+  host: "Host subprocess",
   docker: "Docker container",
-  local: "Local subprocess",
   inprocess: "In-process (no isolation)",
 }
 
 const BACKEND_TONE: Record<string, "ok" | "warn" | undefined> = {
+  host: "ok",
   docker: "ok",
-  local: "ok",
   inprocess: "warn",
+}
+
+const ISOLATION_LABELS: Record<string, string> = {
+  container: "Container",
+  "os-sandbox": "OS sandbox",
+  process: "Separate process",
+  none: "None",
 }
 
 const TIER_TOOLKIT_LABELS: Record<string, string> = {
@@ -533,12 +549,14 @@ function EMBEDDING_LABEL(backend: string): string {
 }
 
 /**
- * Says what the isolation actually is, per backend. The local runtime is a
- * supported way to run rather than a failure, so it gets a statement of what it
- * does and does not protect — not a warning banner.
+ * Says what the containment actually is. Keyed on `isolation` rather than on the
+ * backend name, because the two stopped being the same question: the host
+ * backend's containment depends on what this OS could enforce, and only the
+ * server knows that. `process` is a supported way to run rather than a failure,
+ * so it gets a statement of what it does and does not protect — not a warning.
  */
-function IsolationNote({ backend }: { backend: string }) {
-  if (backend === "docker") {
+function IsolationNote({ isolation }: { isolation: string }) {
+  if (isolation === "container") {
     return (
       <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-success/25 bg-success/8 p-3.5 text-[13px] leading-relaxed text-success">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
@@ -550,7 +568,7 @@ function IsolationNote({ backend }: { backend: string }) {
     )
   }
 
-  if (backend === "local") {
+  if (isolation === "process") {
     return (
       <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-border bg-muted/40 p-3.5 text-[13px] leading-relaxed text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
@@ -570,8 +588,8 @@ function IsolationNote({ backend }: { backend: string }) {
       <span>
         Code runs inside the API process itself, with no isolation and no memory ceiling, and its
         variables do not survive between steps. Set{" "}
-        <code className="font-mono text-[11.5px]">EXECUTION_BACKEND=local</code> to run it in a
-        subprocess instead, or start Docker.
+        <code className="font-mono text-[11.5px]">EXECUTION_BACKEND=host</code> to run it in a
+        separate process instead.
       </span>
     </div>
   )

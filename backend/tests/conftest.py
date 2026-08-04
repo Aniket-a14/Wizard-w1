@@ -25,10 +25,9 @@ os.environ.update(
         "ENV": "test",
         "SANDBOX_ENABLED": "false",
         # Pin the backend explicitly. `SANDBOX_ENABLED=false` alone now means
-        # "no Docker", and `auto` would fall through to the local *subprocess*
-        # runtime — which spawns a child that imports pandas for every session
-        # the suite creates. The in-process interpreter is what these tests
-        # exercise and assert on.
+        # "no Docker", and the default `host` would spawn a *subprocess* that
+        # imports pandas for every session the suite creates. The in-process
+        # interpreter is what these tests exercise and assert on.
         "EXECUTION_BACKEND": "inprocess",
         "API_PROVIDER": "ollama",
         "DATA_DIR": str(TEST_DATA_DIR),

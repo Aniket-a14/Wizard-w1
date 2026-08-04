@@ -26,7 +26,7 @@ Two rules that are easy to violate by accident:
 
 ## Setup
 
-**Prerequisites:** Python 3.11+, Node.js 20+, Ollama. Docker Desktop is recommended but optional — without it, `EXECUTION_BACKEND=auto` runs generated code in a subprocess instead.
+**Prerequisites:** Python 3.11+, Node.js 20+, Ollama. Docker is optional and opt-in — the default `EXECUTION_BACKEND=host` runs generated code in a subprocess of the backend.
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/Wizard-w1.git
@@ -98,7 +98,7 @@ Four layers under `backend/tests/`:
 
 **The suite must never need Docker, a model server, the network, or a spawned process.** `backend/tests/conftest.py` pins `EXECUTION_BACKEND=inprocess`, `SANDBOX_ENABLED=false` and `EMBEDDINGS_FORCE_FALLBACK=true` *before* importing `src`, because `Settings` is built at import time. If you add a test that needs a real service, mark it `@pytest.mark.requires_docker` or `@pytest.mark.requires_llm`.
 
-`EXECUTION_BACKEND=inprocess` matters: `SANDBOX_ENABLED=false` alone now means only "no Docker", and `auto` would fall through to the local subprocess runtime — spawning a child that imports pandas for every session the suite creates.
+`EXECUTION_BACKEND=inprocess` matters: `SANDBOX_ENABLED=false` alone now means only "no Docker", and the default `host` would spawn a child that imports pandas for every session the suite creates.
 
 When you fix a bug, add a regression test whose docstring explains the original failure. Anyone can write `assert x == y`; the value is in recording why it was ever `z`.
 

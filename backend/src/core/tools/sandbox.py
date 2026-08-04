@@ -20,8 +20,8 @@ Changes from the previous implementation
 * **Execution timeout.** A socket deadline bounds any single execution.
 
 The wire protocol and the daemon source itself live in :mod:`daemon`, because the
-local subprocess backend runs exactly the same daemon -- see
-:mod:`src.core.tools.local_runtime`.
+host subprocess backend runs exactly the same daemon -- see
+:mod:`src.core.tools.host_runtime`.
 """
 
 from __future__ import annotations
