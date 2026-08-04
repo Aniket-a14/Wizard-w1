@@ -25,15 +25,12 @@ because Milestone 4's connection strings belong in the same store.
 from __future__ import annotations
 
 import json
-import os
-import stat
-import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Any
 
 from src.utils.appdirs import config_dir
+from src.utils.fileperms import restrict
 from src.utils.logging import logger
 
 
@@ -43,63 +40,13 @@ CREDENTIALS_FILENAME = "credentials.json"
 HINT_CHARS = 4
 
 
-def _icacls(*args: str) -> bool:
-    try:
-        subprocess.run(  # noqa: S603 - fixed executable, arguments are not user input
-            ["icacls", *args], check=True, capture_output=True, timeout=15
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return True
-
-
-def _current_user_sid() -> str:
-    """The SID of the account this process is actually running as.
-
-    Read from the process token via ``whoami`` rather than from ``%USERNAME%``,
-    which is an ordinary environment variable and can name someone else entirely
-    — on the machine this was written on it read ``Wizard``. Granting to a name
-    that is not the running user locks the owner out of their own file.
-    """
-    try:
-        result = subprocess.run(  # noqa: S603 - fixed executable, no user input
-            ["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, timeout=15, check=True
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    fields = result.stdout.decode(errors="replace").strip().strip('"').split('","')
-    return fields[-1].strip() if len(fields) >= 2 and fields[-1].startswith("S-1-") else ""
-
-
-def _restrict_windows(path: Path) -> None:
-    """Grants the running account sole access. ``os.chmod`` does not touch the ACL here.
-
-    Verified afterwards, and rolled back if it went wrong: a credentials file
-    nobody can write is a worse outcome than one with inherited permissions, and
-    it fails at exactly the moment someone is trying to save a key.
-    """
-    sid = _current_user_sid()
-    if not sid:
-        logger.warning("Could not identify the running account; credentials file keeps inherited permissions")
-        return
-
-    if not _icacls(str(path), "/inheritance:r", "/grant:r", f"*{sid}:F"):
-        logger.warning("Could not restrict permissions on the credentials file", path=str(path))
-        return
-
-    if not os.access(path, os.W_OK):
-        _icacls(str(path), "/reset")
-        logger.warning("Restricting the credentials file made it unwritable; inherited permissions restored")
-
-
 def _restrict(path: Path) -> None:
-    if str(sys.platform) == "win32":
-        _restrict_windows(path)
-        return
-    try:
-        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError as exc:
-        logger.warning("Could not restrict permissions on the credentials file", path=str(path), error=str(exc))
+    """Shared with ``connections.json``, which needs the identical treatment.
+
+    See ``utils/fileperms.py`` for why the Windows half reads the SID from the
+    process token rather than from ``%USERNAME%``.
+    """
+    restrict(path, "credentials file")
 
 
 class CredentialStore:
@@ -202,7 +149,18 @@ class CredentialStore:
         return True
 
     def providers_with_keys(self) -> list[str]:
-        return sorted(self._load())
+        """Provider ids with a stored key -- and *only* provider ids.
+
+        The keyspace is shared: Milestone 4's connections store their secrets
+        here too, namespaced ``connection:<id>``. A provider id never contains a
+        colon, so filtering on one keeps a saved database password from being
+        reported as a configured model provider.
+        """
+        return sorted(name for name in self._load() if ":" not in name)
+
+    def names(self, prefix: str) -> list[str]:
+        """Every stored key under ``prefix``, for a namespaced caller."""
+        return sorted(name for name in self._load() if name.startswith(prefix))
 
     def reload(self) -> None:
         """Drops the cache so the next read goes back to disk."""

@@ -267,7 +267,16 @@ class AnalysisOrchestrator:
         provider = settings.resolve_provider(session.models.provider_for(role))
         # The active dataset, so a table marked more sensitive than the session
         # default is treated that way rather than averaged with the others.
-        return should_redact(session.data_mode, session.data_policy, provider, dataset=session.active_dataset)
+        handle = session.active_handle
+        return should_redact(
+            session.data_mode,
+            session.data_policy,
+            provider,
+            dataset=session.active_dataset,
+            # So a policy set once on a connection covers every table imported
+            # from it, including ones imported after the decision was made.
+            origin=handle.origin if handle else "",
+        )
 
     async def _budget_for(self, session: Session, mode: str) -> TierBudget:
         """Sizes this turn to the model actually behind the manager role.

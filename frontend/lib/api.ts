@@ -7,8 +7,12 @@
  */
 
 import type {
+  ConnectionSummary,
+  ConnectionTarget,
+  ConnectorKind,
   DataMode,
   DataModeInfo,
+  DatasetSummary,
   DocumentSummary,
   ModelDownloadState,
   ModelDownloadsResponse,
@@ -248,6 +252,65 @@ export const api = {
     request<{ message: string }>(`/api/datasets/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+
+  /**
+   * Connections are ingest sources parallel to file upload — a table imported
+   * from one lands in `datasets` exactly as an uploaded CSV does. Listing is
+   * network-free: it reports what is configured and which drivers are present,
+   * and probes nothing, because it renders on every page load.
+   */
+  connections: () =>
+    request<{ connections: ConnectionSummary[]; kinds: ConnectorKind[] }>(
+      "/api/connections",
+    ),
+
+  createConnection: (body: {
+    name: string
+    kind: string
+    options: Record<string, string>
+    secret?: string
+  }) =>
+    request<ConnectionSummary>("/api/connections", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  deleteConnection: (id: string) =>
+    request<{ message: string }>(`/api/connections/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+
+  testConnection: (id: string) =>
+    request<{ ok: boolean; detail: string }>(
+      `/api/connections/${encodeURIComponent(id)}/test`,
+      { method: "POST" },
+    ),
+
+  connectionSchema: (id: string) =>
+    request<{ targets: ConnectionTarget[] }>(
+      `/api/connections/${encodeURIComponent(id)}/schema`,
+    ),
+
+  importFromConnection: (id: string, target: string, makeActive = true) =>
+    request<{
+      message: string
+      dataset: DatasetSummary
+      truncated: boolean
+      session_id: string
+    }>(`/api/connections/${encodeURIComponent(id)}/import`, {
+      method: "POST",
+      body: JSON.stringify({ target, make_active: makeActive }),
+    }),
+
+  /**
+   * Enabling requires the connection's own name typed back. Write-back is the
+   * one decision here whose consequences land outside this machine.
+   */
+  setWriteBack: (id: string, enable: boolean, confirm: string) =>
+    request<ConnectionSummary>(
+      `/api/connections/${encodeURIComponent(id)}/write-back`,
+      { method: "POST", body: JSON.stringify({ enable, confirm }) },
+    ),
 
   preview: (params: {
     page?: number

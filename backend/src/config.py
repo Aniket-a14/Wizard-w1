@@ -473,6 +473,17 @@ class Settings(BaseSettings):
     PROFILE_SAMPLE_ROWS: int = 200_000  # rows used for profiling/catalog on big data
     PROMPT_MAX_COLUMNS: int = 60  # wide-frame guard for prompt context
 
+    # Connections (Milestone 4). An upload is bounded by MAX_UPLOAD_BYTES before
+    # anything reads it; a table is not, and `Session._materialize` writes each
+    # frame up to three times. Without a ceiling the first honest question asked
+    # of a real warehouse is an OOM in the API process -- which is not sandboxed.
+    # Truncation is reported through the dataset profile, never silent.
+    CONNECTOR_MAX_ROWS: int = 1_000_000
+    # How long a connector may spend reaching a source. The drivers default to
+    # 30s or more, which is long enough that an unreachable host reads as a hang
+    # rather than as a wrong hostname.
+    CONNECTOR_TIMEOUT: int = 10
+
     # Sessions
     SESSION_TTL_SECONDS: int = 60 * 60 * 6
     SESSION_MAX_ACTIVE: int = 32

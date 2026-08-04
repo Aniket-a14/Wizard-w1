@@ -355,8 +355,46 @@ export interface DatasetSummary {
     original_rows?: number | null
     renamed_columns?: Record<string, string>
     dropped_columns?: string[]
+    connection?: string
+    target?: string
   }
   loaded_at: number
+  /** The connection this table came from, or `""` for an uploaded file. */
+  origin: string
+}
+
+/** One kind of data source this install knows how to reach. */
+export interface ConnectorKind {
+  kind: string
+  label: string
+  fields: string[]
+  requires_secret: boolean
+  description: string
+  /** False means the driver is not installed — show `install_hint`, not a button. */
+  available: boolean
+  install_hint: string
+}
+
+export interface ConnectionSummary {
+  id: string
+  name: string
+  kind: string
+  options: Record<string, string>
+  /** Every connection starts read-only. Flipping this is its own opt-in. */
+  read_only: boolean
+  created_at: number
+  /** Whether a secret is stored. Never the secret itself. */
+  has_secret: boolean
+  available: boolean
+  install_hint: string
+}
+
+export interface ConnectionTarget {
+  name: string
+  namespace: string
+  qualified: string
+  columns: { name: string; type: string }[]
+  row_estimate: number | null
 }
 
 export interface SessionInfo {

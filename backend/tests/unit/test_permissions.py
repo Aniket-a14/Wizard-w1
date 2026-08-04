@@ -147,14 +147,19 @@ def test_allow_root_records_each_directory_once() -> None:
 
 
 # ------------------------------------------------------------- the catalog --
-def test_the_connector_categories_are_declared_but_not_live() -> None:
-    """They exist so a profile set today still holds when Milestone 4 lands.
+def test_only_tool_use_is_still_reserved() -> None:
+    """Milestone 4 landed, so the two connector categories are live.
 
-    Nothing reaches them yet, and the UI has to be able to say that rather than
-    imply a connector already exists.
+    `db_connect` and `db_write` now have real call sites -- the connections
+    routes and the orchestrator's write gate -- so they no longer belong in the
+    reserved set. `tool_use` still does: nothing reaches it until the skills
+    system, and a category reported live with nothing behind it is the same
+    class of untruth as a toolkit entry advertising a library that is not there.
     """
     reserved = {category.key for category in reserved_categories()}
-    assert reserved == {"db_connect", "db_write", "tool_use"}
+    assert reserved == {"tool_use"}
+    assert category_by_key("db_connect").live  # type: ignore[union-attr]
+    assert category_by_key("db_write").live  # type: ignore[union-attr]
     for key in LIVE_KEYS:
         assert category_by_key(key) is not None
         assert category_by_key(key).live  # type: ignore[union-attr]

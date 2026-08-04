@@ -752,12 +752,14 @@ def test_the_permission_profile_is_reported_on_the_session(client) -> None:
     assert body["permissions"]["profile"] == "ask-always"
 
 
-def test_the_connector_categories_are_reported_as_not_yet_reachable(client) -> None:
-    """They are declared so a profile set today still holds when connectors land.
+def test_liveness_tracks_what_actually_has_a_call_site(client) -> None:
+    """A category is reported live only once something reaches it.
 
-    Reporting them as live would imply a capability that has not shipped, which
-    is the same class of mistake as a toolkit entry advertising a library the
-    runtime does not have.
+    Reporting one as live before it ships would imply a capability that does not
+    exist -- the same class of mistake as a toolkit entry advertising a library
+    the runtime does not have. Milestone 4 gave `db_connect` and `db_write` real
+    call sites, so they flipped in the same change that added them. `tool_use`
+    has none yet and must stay false, or this assertion stops testing anything.
     """
     session_id = client.post("/api/session").json()["session_id"]
     headers = {"X-Session-Id": session_id}
@@ -766,5 +768,6 @@ def test_the_connector_categories_are_reported_as_not_yet_reachable(client) -> N
     live = {row["key"]: row["live"] for row in body["categories"]}
 
     assert live["library_install"] is True
-    assert live["db_connect"] is False
-    assert live["db_write"] is False
+    assert live["db_connect"] is True
+    assert live["db_write"] is True
+    assert live["tool_use"] is False

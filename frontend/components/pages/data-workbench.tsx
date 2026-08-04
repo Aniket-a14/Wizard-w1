@@ -3,6 +3,7 @@
 import { Check, Database, FileText, Loader2, Paperclip, Trash2, UploadCloud } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
+import { ConnectionsPanel } from "@/components/connections-panel"
 import { DataGrid } from "@/components/data-grid"
 import { PageHeader } from "@/components/page-header"
 import { api } from "@/lib/api"
@@ -335,6 +336,13 @@ export function DataWorkbench() {
           )}
         </>
       )}
+
+      {/*
+        Outside the ternary above deliberately. That branch renders only the drop
+        zone when no file is loaded — and an install with no file is exactly the
+        one that wants to connect to a database instead.
+      */}
+      <ConnectionsPanel onImported={refresh} />
     </div>
   )
 }
