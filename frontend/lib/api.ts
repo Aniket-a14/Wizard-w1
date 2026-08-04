@@ -17,6 +17,7 @@ import type {
   PermissionRuling,
   PermissionsInfo,
   ProvidersResponse,
+  SandboxSelfTest,
   ServerConfig,
   SessionInfo,
   UsageTotals,
@@ -282,6 +283,9 @@ export const api = {
     ),
 
   interrupt: () => request<{ status: string }>("/api/sandbox/interrupt", { method: "POST" }),
+
+  /** Spawns a probe that tries to escape. Seconds, not milliseconds — it starts a process. */
+  sandboxSelfTest: () => request<SandboxSelfTest>("/api/sandbox/selftest"),
 
   report: (hours = 24) => request<{ report: string; interaction_count: number }>(`/api/report?hours=${hours}`),
 }

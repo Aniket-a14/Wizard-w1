@@ -101,6 +101,12 @@ class ServerConfig(BaseModel):
     #: `process` or `none`. Distinct from the backend name, because the host
     #: backend's containment depends on what this OS could enforce.
     execution_isolation: str = "none"
+    #: `off` / `best-effort` / `require`.
+    host_sandbox: str = "off"
+    #: Per-feature support on this machine, each with a reason when it is absent.
+    #: Renders without running anything; `GET /api/sandbox/selftest` is what
+    #: actually proves it.
+    sandbox_capability: dict = Field(default_factory=dict)
     #: The configured default. A session may hold a different one.
     data_mode: str = "local-only"
     data_schema_only: bool = True
@@ -424,3 +430,17 @@ class ReportResponse(BaseModel):
 class VariablesResponse(BaseModel):
     variables: dict[str, Any] = Field(default_factory=dict)
     sandbox_available: bool = False
+
+
+class SandboxSelfTestResponse(BaseModel):
+    """What a probe child was actually prevented from doing."""
+
+    ok: bool = False
+    detail: str = ""
+    #: One entry per attempt: `blocked` / `allowed` / `inconclusive`, with a
+    #: reason. Three outcomes rather than two — "nothing stopped it" is not the
+    #: same claim as "it would have worked".
+    checks: dict[str, Any] = Field(default_factory=dict)
+    #: What the child reported applying to itself, read back from the runtime.
+    applied: dict[str, Any] = Field(default_factory=dict)
+    capability: dict[str, Any] = Field(default_factory=dict)

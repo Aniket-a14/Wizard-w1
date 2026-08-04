@@ -184,6 +184,8 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything 
 | `EXECUTION_BACKEND` | `host` | `host` (subprocess, no Docker), `docker` or `inprocess` |
 | `SANDBOX_TIER` | `standard` | `core`, `standard` or `full` — how much toolkit the image installs |
 | `SYSTEM_PROFILE` | `auto` | `auto` measures the machine; or pin `laptop`/`server`/`hpc` |
+| `HOST_SANDBOX` | `best-effort` | `off`, `best-effort` or `require` — OS containment for the host runtime |
+| `HOST_SANDBOX_NETWORK` | `deny` | `deny` blocks outbound traffic from generated code (loopback still allowed) |
 | `SANDBOX_ENABLED` | `True` | `False` disables containers entirely |
 | `SANDBOX_NETWORK_DISABLED` | `False` | `True` is safer, but blocks on-demand package installs |
 | `SANDBOX_DOCKER_RUNTIME` | `""` | Set `runsc` for gVisor kernel isolation |
@@ -248,8 +250,11 @@ Reasoning and the final answer arrive as separate delta streams, so the client c
 Generated code is untrusted. Three layers apply:
 
 1. **Static analysis** — an AST policy check rejects restricted imports, dynamic execution, interpreter-internals traversal, reflection with computed attribute names, and file access outside the workspace. Malformed code is treated as retryable rather than hostile, so the model gets to fix its own typo.
-2. **Process isolation** — with `EXECUTION_BACKEND=docker`, one container per session with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout; set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor. With the default `host`, a subprocess per session with an address-space cap (POSIX; Windows has no equivalent without pywin32) and the same timeout — which contains runaway code, but is **not** a security boundary. Use Docker for input you did not write yourself.
-3. **Scoped filesystem** — each session reads and writes only its own workspace directory.
+2. **OS-level containment** — with the default `EXECUTION_BACKEND=host`, each session's subprocess is restricted by the operating system: Landlock plus a seccomp filter on Linux, a deny-by-default `sandbox-exec` profile on macOS, a job object and a Low integrity level on Windows. Writes are confined to the session workspace, outbound network is denied (loopback aside), and memory and process counts are capped. What your machine can actually enforce is listed on `/settings`, with a reason for anything it cannot — outbound network is **not** enforced on Windows, and it says so.
+3. **Process isolation** — with `EXECUTION_BACKEND=docker`, one container per session with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout; set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor.
+4. **Scoped filesystem** — each session reads and writes only its own workspace directory.
+
+**Verify it rather than trust it.** `/settings` has a Verify button — it spawns a probe that tries to write outside the workspace, open an outbound connection and allocate past the ceiling, and reports what stopped each one. `GET /api/sandbox/selftest` is the same thing from the command line.
 
 > [!IMPORTANT]
 > The backend mounts the host Docker socket so it can create sandbox containers. That is host-root-equivalent access. Run Wizard on a trusted machine, and set `API_KEY` and a narrow `CORS_ALLOW_ORIGINS` before exposing it beyond localhost.

@@ -287,6 +287,100 @@ def test_the_distribution_map_is_shared_with_the_daemon() -> None:
     assert '"sklearn": "scikit-learn"' in source
 
 
+# --------------------------------------------------------------------------- #
+# The self-test's own judgement
+# --------------------------------------------------------------------------- #
+def _capability(**supported) -> object:
+    return capability.SandboxCapability(
+        platform="test",
+        mechanism="test",
+        features=tuple(capability.Feature(name, supported.get(name, True), "test") for name in capability.FEATURES),
+    )
+
+
+def test_the_probe_script_is_valid_python() -> None:
+    """It is a string literal rendered with %, so a syntax error in it would
+    only ever surface as a child that produced no report.
+    """
+    from src.core.security.sandbox.selftest import PROBE_SCRIPT
+
+    source = PROBE_SCRIPT % {"workspace": "/w", "outside": "/home/u/x", "mem_bytes": 1 << 30}
+
+    ast.parse(source)
+    assert "%(" not in source
+
+
+def test_an_unblocked_escape_fails_the_verdict() -> None:
+    from src.core.security.sandbox.selftest import _judge
+
+    ok, detail = _judge(
+        {
+            "workspace_write": {"outcome": "allowed", "detail": ""},
+            "outside_write": {"outcome": "allowed", "detail": ""},
+        },
+        _capability(),
+    )
+
+    assert ok is False
+    assert "outside the workspace" in detail
+
+
+def test_a_feature_the_platform_cannot_enforce_does_not_fail_the_verdict() -> None:
+    """Windows cannot block outbound network and says so. Failing the whole
+    self-test for it would train the reader to ignore a red result on exactly
+    the machines that have a real one.
+    """
+    from src.core.security.sandbox.selftest import _judge
+
+    ok, _ = _judge(
+        {
+            "workspace_write": {"outcome": "allowed", "detail": ""},
+            "outside_write": {"outcome": "blocked", "detail": ""},
+            "outbound_network": {"outcome": "allowed", "detail": ""},
+        },
+        _capability(network=False),
+    )
+
+    assert ok is True
+
+
+def test_a_workspace_the_sandbox_denies_is_a_failure() -> None:
+    """Containment that blocks the session's own directory is broken, not strict —
+    the runtime could not write a chart or export a CSV.
+    """
+    from src.core.security.sandbox.selftest import _judge
+
+    ok, detail = _judge(
+        {
+            "workspace_write": {"outcome": "blocked", "detail": ""},
+            "outside_write": {"outcome": "blocked", "detail": ""},
+        },
+        _capability(),
+    )
+
+    assert ok is False
+    assert "not writable" in detail
+
+
+def test_an_inconclusive_network_check_is_not_reported_as_blocked() -> None:
+    """The probe dials a TEST-NET address, so a timeout proves nothing either
+    way. Counting it as a pass would be the invented claim this layer exists to
+    avoid — but it is not a failure either.
+    """
+    from src.core.security.sandbox.selftest import _judge
+
+    ok, _ = _judge(
+        {
+            "workspace_write": {"outcome": "allowed", "detail": ""},
+            "outside_write": {"outcome": "blocked", "detail": ""},
+            "outbound_network": {"outcome": "inconclusive", "detail": ""},
+        },
+        _capability(),
+    )
+
+    assert ok is True
+
+
 def test_the_child_module_imports_nothing_from_src() -> None:
     """It is loaded by file path from a process that has no `src` on its path,
     and a sandbox that has denied the repository cannot import its own bootstrap.

@@ -7,9 +7,10 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_session, require_api_key
-from src.api.schemas import JobResponse, VariablesResponse
+from src.api.schemas import JobResponse, SandboxSelfTestResponse, VariablesResponse
 from src.core.infra.queue import get_queue
 from src.core.security.code_guard import is_safe_identifier
+from src.core.security.sandbox import capability as sandbox_capability, selftest
 from src.core.session import Session
 from src.core.tools import runtime as runtime_backend
 
@@ -27,6 +28,20 @@ async def list_variables(session: Session = Depends(get_session)) -> VariablesRe
         variables=variables,
         sandbox_available=runtime_backend.active_backend() == "docker",
     )
+
+
+@router.get("/selftest", response_model=SandboxSelfTestResponse)
+async def sandbox_selftest() -> SandboxSelfTestResponse:
+    """Spawns a probe that tries to escape, and reports what stopped it.
+
+    Deliberately an action rather than a reading. Everything else on this
+    subject reports what was *configured*; this is the only thing that reports
+    what the kernel actually did, which is the difference the milestone turns on.
+
+    Off the event loop: it spawns a process and waits for it.
+    """
+    result = await asyncio.to_thread(selftest.run)
+    return SandboxSelfTestResponse(**result.to_dict(), capability=sandbox_capability.detect().to_dict())
 
 
 @router.post("/interrupt", dependencies=[Depends(require_api_key)])

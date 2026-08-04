@@ -330,7 +330,7 @@ class Settings(BaseSettings):
     # must still be able to run, while someone who chose this setting to get a
     # boundary should not be given a subprocess that merely looks like one.
     # ------------------------------------------------------------------ #
-    HOST_SANDBOX: Literal["off", "best-effort", "require"] = "off"
+    HOST_SANDBOX: Literal["off", "best-effort", "require"] = "best-effort"
     #: Outbound network for generated code. Loopback is always permitted -- the
     #: daemon protocol is a loopback socket -- so this governs everything else.
     HOST_SANDBOX_NETWORK: Literal["deny", "allow"] = "deny"

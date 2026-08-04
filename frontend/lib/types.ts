@@ -391,6 +391,32 @@ export type ExecutionBackend = "host" | "docker" | "inprocess"
 export type ExecutionIsolation = "container" | "os-sandbox" | "process" | "none"
 
 /**
+ * What the OS can enforce here. Every feature carries a reason, so an
+ * unenforced one is stated rather than rendered as a blank — a gap the user
+ * cannot see is the failure this whole layer exists to avoid.
+ */
+export interface SandboxFeature {
+  key: string
+  supported: boolean
+  detail: string
+}
+
+export interface SandboxCapability {
+  platform: string
+  mechanism: string
+  features: SandboxFeature[]
+}
+
+/** One probe child's attempt to escape, and what stopped it. */
+export interface SandboxSelfTest {
+  ok: boolean
+  detail: string
+  checks: Record<string, { outcome: "blocked" | "allowed" | "inconclusive"; detail: string }>
+  applied: Record<string, { enforced: boolean; detail: string }>
+  capability: SandboxCapability
+}
+
+/**
  * The server's plan for fitting the configured models into this machine's RAM.
  * Two 7B models want ~14 GB; a 16 GB laptop running a browser and a sandbox does
  * not have that, and the alternative to planning is the OS paging a model
@@ -461,6 +487,10 @@ export interface ServerConfig {
   execution_backend_setting: string
   /** What is actually containing the code, which the backend name alone does not say. */
   execution_isolation: ExecutionIsolation
+  /** `off` | `best-effort` | `require` */
+  host_sandbox: string
+  /** What this machine can enforce. Proving it was enforced is /api/sandbox/selftest. */
+  sandbox_capability: SandboxCapability
   /** The configured default. A session may hold a different one. */
   data_mode: DataMode
   data_schema_only: boolean
