@@ -17,6 +17,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.config import settings
+
 from .base import DEFAULT_SAMPLE_ROWS, refuse_write
 from .registry import ConnectorKind, register
 from .spec import ConnectionSchema, ConnectionSpec, ConnectorError, DriverMissing, TargetInfo
@@ -65,8 +67,19 @@ class ObjectStoreConnector:
             options = self.spec.options
             endpoint = str(options.get("endpoint_url") or "").strip()
             try:
+                from botocore.config import Config
+
+                # botocore's own defaults are 60s with retries on top, so an
+                # unreachable endpoint would sit for minutes. One retry, because
+                # this is a user waiting on a page rather than a batch job.
+                timeout = int(settings.CONNECTOR_TIMEOUT)
                 self._client = boto3.client(
                     "s3",
+                    config=Config(
+                        connect_timeout=timeout,
+                        read_timeout=timeout,
+                        retries={"max_attempts": 1},
+                    ),
                     # Empty means "the AWS default chain" -- environment, profile,
                     # instance role. A user on EC2 or with `aws configure` already
                     # done should not have to paste a key Wizard would then store.

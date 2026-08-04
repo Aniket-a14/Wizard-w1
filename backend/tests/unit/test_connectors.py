@@ -162,7 +162,11 @@ def test_deleting_a_connection_takes_its_secret_with_it(tmp_path) -> None:
     spec = ConnectionSpec(name="W", kind="relational")
     store.save(spec, secret="s3cret")
 
-    assert store.delete(spec.id) is True
+    # Called outside the assert: under `python -O` assertions are stripped, and
+    # the deletion this test is about would never happen.
+    deleted = store.delete(spec.id)
+
+    assert deleted is True
     assert store.secret_for(spec) == ""
     assert store.get(spec.id) is None
 
@@ -262,6 +266,31 @@ def test_an_unreachable_database_reports_rather_than_hangs(tmp_path) -> None:
 
     with pytest.raises(ConnectorError):
         connector.test()
+
+
+@pytest.mark.parametrize(
+    ("driver", "expected"),
+    [
+        ("postgresql+psycopg", {"connect_timeout": 2}),
+        ("mysql+pymysql", {"connect_timeout": 2}),
+        ("mssql+pyodbc", {"timeout": 2}),
+        # A local file has nothing to dial, and passing an argument the driver
+        # does not accept fails the connect outright.
+        ("sqlite", {}),
+    ],
+)
+def test_the_connect_timeout_reaches_the_driver(driver: str, expected: dict) -> None:
+    """`CONNECTOR_TIMEOUT` must actually be read, not merely defined.
+
+    It was defined and consulted by nothing once already, which is how an
+    unreachable host waits out a driver's 30-second default and reads as a hang.
+    SQLAlchemy has no dialect-agnostic connect timeout -- the spelling belongs to
+    the DBAPI driver -- so it is applied where known and skipped where not.
+    """
+    pytest.importorskip("sqlalchemy")
+    connector = build(ConnectionSpec(name="T", kind="relational", options={"driver": driver}))
+
+    assert connector._connect_args(f"{driver}://host/db") == expected
 
 
 def test_a_spec_with_no_driver_or_dsn_says_so() -> None:

@@ -18,9 +18,26 @@ from urllib.parse import quote_plus
 
 import pandas as pd
 
+from src.config import settings
+
 from .base import DEFAULT_SAMPLE_ROWS, refuse_write
 from .registry import ConnectorKind, register
 from .spec import ColumnInfo, ConnectionSchema, ConnectionSpec, ConnectorError, DriverMissing, TargetInfo
+
+
+#: Which ``connect_args`` key each dialect family spells its connect timeout with.
+#: SQLAlchemy has no dialect-agnostic one -- the timeout belongs to the DBAPI
+#: driver, not to the engine -- so it is applied where it is known and honestly
+#: skipped where it is not, rather than passed blindly and rejected at connect.
+#: SQLite is deliberately absent: it opens a local file and has nothing to dial.
+CONNECT_TIMEOUT_ARG: tuple[tuple[str, str], ...] = (
+    ("postgresql", "connect_timeout"),
+    ("mysql", "connect_timeout"),
+    ("mariadb", "connect_timeout"),
+    ("mssql", "timeout"),
+    ("oracle", "tcp_connect_timeout"),
+    ("snowflake", "login_timeout"),
+)
 
 
 def _sqlalchemy() -> Any:
@@ -86,6 +103,19 @@ class RelationalConnector:
         location = f"{host}:{port}" if port else host
         return f"{driver}://{auth}{location}/{database}"
 
+    def _connect_args(self, url: str) -> dict[str, Any]:
+        """A connect timeout for the dialects that accept one.
+
+        Without it an unreachable host waits out the driver's own default --
+        30 seconds or more for several of them -- which reads as a hang rather
+        than as a wrong hostname.
+        """
+        scheme = url.split("://", 1)[0].split("+", 1)[0].lower()
+        for family, argument in CONNECT_TIMEOUT_ARG:
+            if scheme == family:
+                return {argument: int(settings.CONNECTOR_TIMEOUT)}
+        return {}
+
     def _connect(self) -> Any:
         if self._engine is None:
             sqlalchemy = _sqlalchemy()
@@ -94,7 +124,7 @@ class RelationalConnector:
             # connection", which names neither the cause nor the fix.
             url = self._url()
             try:
-                self._engine = sqlalchemy.create_engine(url, pool_pre_ping=True)
+                self._engine = sqlalchemy.create_engine(url, pool_pre_ping=True, connect_args=self._connect_args(url))
             except Exception as exc:
                 raise ConnectorError("Could not open the connection.", detail=str(exc)) from exc
         return self._engine

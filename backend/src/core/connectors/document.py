@@ -12,6 +12,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.config import settings
+
 from .base import DEFAULT_SAMPLE_ROWS, refuse_write
 from .registry import ConnectorKind, register
 from .spec import ColumnInfo, ConnectionSchema, ConnectionSpec, ConnectorError, DriverMissing, TargetInfo
@@ -77,7 +79,8 @@ class DocumentConnector:
                     self._uri(),
                     username=user or None,
                     password=self._secret or None,
-                    serverSelectionTimeoutMS=5000,
+                    serverSelectionTimeoutMS=int(settings.CONNECTOR_TIMEOUT) * 1000,
+                    connectTimeoutMS=int(settings.CONNECTOR_TIMEOUT) * 1000,
                 )
             except Exception as exc:
                 raise ConnectorError("Could not open the connection.", detail=str(exc)) from exc

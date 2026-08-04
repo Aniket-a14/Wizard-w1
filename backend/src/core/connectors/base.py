@@ -41,11 +41,9 @@ class Connector(Protocol):
         question the user asks while typing a host name, and on a large warehouse
         enumerating every table to answer it is both slow and beside the point.
         """
-        ...
 
     def discover(self) -> ConnectionSchema:
         """Lists what can be read, without reading it."""
-        ...
 
     def sample(self, target: str, limit: int = DEFAULT_SAMPLE_ROWS) -> pd.DataFrame:
         """Reads at most ``limit`` rows from one target.
@@ -54,7 +52,6 @@ class Connector(Protocol):
         and slicing it in pandas gives the same answer having already paid for
         the whole table, which is the thing this signature exists to avoid.
         """
-        ...
 
     def fetch(self, query: str) -> pd.DataFrame:
         """Runs an engine-native query and returns the result.
@@ -64,7 +61,6 @@ class Connector(Protocol):
         connector that cannot express "the rows matching this" forces the whole
         table through memory to answer a question about part of it.
         """
-        ...
 
     def write(self, target: str, df: pd.DataFrame) -> None:
         """Writes a frame back to the source.
@@ -74,11 +70,9 @@ class Connector(Protocol):
         operation whose blast radius is outside this machine, so it is guarded
         at every layer that could reach it.
         """
-        ...
 
     def close(self) -> None:
         """Releases whatever the driver is holding. Must be safe to call twice."""
-        ...
 
 
 def refuse_write(spec: ConnectionSpec) -> None:
