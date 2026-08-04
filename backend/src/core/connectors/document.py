@@ -16,7 +16,15 @@ from src.config import settings
 
 from .base import DEFAULT_SAMPLE_ROWS, refuse_write
 from .registry import ConnectorKind, register
-from .spec import ColumnInfo, ConnectionSchema, ConnectionSpec, ConnectorError, DriverMissing, TargetInfo
+from .spec import (
+    ColumnInfo,
+    ConnectionSchema,
+    ConnectionSpec,
+    ConnectorError,
+    DriverMissing,
+    TargetInfo,
+    inject_secret_into_dsn,
+)
 
 
 #: How many documents to look at when inferring a collection's fields. A schema
@@ -47,7 +55,8 @@ class DocumentConnector:
         options = self.spec.options
         dsn = str(options.get("dsn") or "").strip()
         if dsn:
-            return dsn
+            # The password was lifted out on save; put it back. See `spec.py`.
+            return inject_secret_into_dsn(dsn, self._secret)
         host = str(options.get("host") or "").strip()
         if not host:
             raise ConnectorError(

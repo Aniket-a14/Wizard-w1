@@ -23,10 +23,12 @@ from src.core.connectors import (
     ConnectorKind,
     available_kinds,
     build,
+    inject_secret_into_dsn,
     kind_by_name,
     refuse_write,
     register,
     sanitize_identifier,
+    split_secret_from_dsn,
 )
 from src.core.connectors.store import ConnectionStore
 from src.core.credentials import CredentialStore
@@ -91,6 +93,69 @@ def test_a_spec_missing_fields_falls_back_rather_than_raising() -> None:
 )
 def test_identifiers_are_folded_to_a_safe_key(raw: str, expected: str) -> None:
     assert sanitize_identifier(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("dsn", "expected_dsn", "expected_secret"),
+    [
+        (
+            "postgresql://admin:hunter2@db.internal:5432/prod",
+            "postgresql://admin@db.internal:5432/prod",
+            "hunter2",
+        ),
+        # No password: returned untouched rather than rearranged.
+        ("postgresql://admin@db.internal/prod", "postgresql://admin@db.internal/prod", ""),
+        ("sqlite:///local.db", "sqlite:///local.db", ""),
+        # Percent-encoded, because a real password contains punctuation.
+        ("mongodb://u:p%40ss%3Aword@host:27017", "mongodb://u@host:27017", "p@ss:word"),
+        ("", "", ""),
+    ],
+)
+def test_a_pasted_dsn_gives_up_its_password(dsn: str, expected_dsn: str, expected_secret: str) -> None:
+    """Pasting a DSN is the most common way anyone configures a database.
+
+    Left whole, the password inside it lands in `spec.options` -- and therefore
+    in `connections.json`, in every API response and in anything that logs a
+    spec, making this module's central claim false in exactly the case people
+    use most.
+    """
+    assert split_secret_from_dsn(dsn) == (expected_dsn, expected_secret)
+
+
+def test_the_password_goes_back_in_when_the_connection_opens() -> None:
+    """Round-trips, or the split would just break every DSN connection."""
+    original = "postgresql://admin:hunter2@db.internal:5432/prod"
+    stripped, secret = split_secret_from_dsn(original)
+
+    assert inject_secret_into_dsn(stripped, secret) == original
+
+
+def test_injecting_into_a_dsn_that_already_has_one_changes_nothing() -> None:
+    dsn = "postgresql://admin:already@host/db"
+
+    assert inject_secret_into_dsn(dsn, "other") == dsn
+
+
+@pytest.mark.parametrize(
+    ("options", "remote"),
+    [
+        ({"driver": "sqlite", "database": "/tmp/x.db"}, False),
+        ({"driver": "postgresql", "host": "localhost"}, False),
+        ({"driver": "postgresql", "host": "127.0.0.1"}, False),
+        ({"driver": "postgresql", "host": "warehouse.example.com"}, True),
+        ({"dsn": "postgresql://u@db.example.com/p"}, True),
+        ({"dsn": "postgresql://u@localhost/p"}, False),
+        ({"bucket": "my-bucket"}, True),
+        ({"endpoint_url": "http://127.0.0.1:9000", "bucket": "b"}, False),
+    ],
+)
+def test_a_connection_knows_whether_it_leaves_the_machine(options: dict, remote: bool) -> None:
+    """`local-only` says "Nothing is sent anywhere" and has to mean it.
+
+    Judged from the endpoint rather than the kind: the same driver is local or
+    remote depending only on where it points.
+    """
+    assert ConnectionSpec(name="X", kind="relational", options=options).reaches_network() is remote
 
 
 # --------------------------------------------------------------- registry --

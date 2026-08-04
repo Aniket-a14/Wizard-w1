@@ -275,6 +275,20 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  /**
+   * Edits in place rather than delete-and-recreate: recreating would drop the
+   * stored secret, every table imported from it, the per-source data policy and
+   * the write-back opt-in. Omitting `secret` leaves the stored one alone.
+   */
+  updateConnection: (
+    id: string,
+    body: { name: string; kind: string; options: Record<string, string>; secret?: string },
+  ) =>
+    request<ConnectionSummary>(`/api/connections/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
   deleteConnection: (id: string) =>
     request<{ message: string }>(`/api/connections/${encodeURIComponent(id)}`, {
       method: "DELETE",

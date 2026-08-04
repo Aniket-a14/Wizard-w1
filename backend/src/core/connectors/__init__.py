@@ -15,7 +15,9 @@ from .spec import (
     ConnectorError,
     DriverMissing,
     TargetInfo,
+    inject_secret_into_dsn,
     sanitize_identifier,
+    split_secret_from_dsn,
 )
 from .store import ConnectionStore, connection_store
 
@@ -39,8 +41,10 @@ __all__ = [
     "available_kinds",
     "build",
     "connection_store",
+    "inject_secret_into_dsn",
     "kind_by_name",
     "refuse_write",
     "register",
     "sanitize_identifier",
+    "split_secret_from_dsn",
 ]

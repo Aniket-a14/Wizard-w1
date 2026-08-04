@@ -148,6 +148,22 @@ class ObjectStoreConnector:
     # ------------------------------------------------------------------ #
     def _read_object(self, key: str) -> pd.DataFrame:
         client = self._connect()
+        # Size-checked before the read, not after. `CONNECTOR_MAX_ROWS` cannot
+        # protect this path: the smallest unit an object store returns is the
+        # whole object, so by the time rows could be counted the bytes are
+        # already resident -- in the API process, which is the one that is not
+        # sandboxed and has no memory ceiling.
+        ceiling = int(settings.CONNECTOR_MAX_OBJECT_BYTES)
+        try:
+            size = int(client.head_object(Bucket=self._bucket(), Key=key).get("ContentLength") or 0)
+        except Exception as exc:
+            raise ConnectorError(f"Could not read '{key}'.", detail=str(exc)) from exc
+        if size > ceiling:
+            raise ConnectorError(
+                f"'{key}' is {size / 1024 / 1024:,.0f} MB, over the {ceiling / 1024 / 1024:,.0f} MB limit.",
+                detail="Raise CONNECTOR_MAX_OBJECT_BYTES, or point this connection at a smaller object.",
+            )
+
         try:
             response = client.get_object(Bucket=self._bucket(), Key=key)
             payload = response["Body"].read()

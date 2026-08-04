@@ -20,12 +20,18 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 
 #: Prefix for the key a connection's secret is stored under in `credential_store`.
 #: Namespaced so a connection can never collide with a provider API key, which
 #: shares that flat keyspace.
 CREDENTIAL_PREFIX = "connection:"
+
+#: Hosts that do not leave the machine. `host.docker.internal` is deliberately
+#: absent: it names the *host* from inside a container, which is a different
+#: machine's loopback as far as this promise is concerned.
+LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"})
 
 
 class ConnectorError(Exception):
@@ -61,6 +67,66 @@ class DriverMissing(ConnectorError):
     @property
     def install_hint(self) -> str:
         return f"pip install {self.distribution}"
+
+
+def split_secret_from_dsn(dsn: str) -> tuple[str, str]:
+    """Separates a pasted connection string into its safe half and its password.
+
+    Pasting a DSN is the most common way anyone configures a database, and the
+    canonical form of one carries the password inline::
+
+        postgresql://admin:hunter2@db.internal:5432/prod
+
+    Left whole that string goes into ``spec.options``, and therefore into
+    ``connections.json``, into every ``ConnectionSummary`` the API returns, and
+    into anything that logs a spec -- which would make this module's central
+    claim, that a spec holds no secret, false in exactly the case people use
+    most. So the password is lifted out here, at the boundary, and stored where
+    every other secret goes; the connector puts it back when it builds the URL.
+
+    Returns ``(dsn_without_password, password)``. A DSN with no password comes
+    back unchanged with an empty secret, and a string that does not parse is
+    returned untouched rather than mangled -- the driver's own error message
+    about a malformed DSN is more useful than anything invented here.
+    """
+    raw = (dsn or "").strip()
+    if not raw or "@" not in raw:
+        return raw, ""
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return raw, ""
+    if not parsed.password:
+        return raw, ""
+
+    userinfo = quote(unquote(parsed.username or ""), safe="")
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    netloc = f"{userinfo}@{host}" if userinfo else host
+    stripped = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return stripped, unquote(parsed.password)
+
+
+def inject_secret_into_dsn(dsn: str, secret: str) -> str:
+    """Puts a stored password back into a DSN, undoing ``split_secret_from_dsn``."""
+    raw = (dsn or "").strip()
+    if not raw or not secret:
+        return raw
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return raw
+    if parsed.password or not parsed.username:
+        # Already carries one, or there is no user to attach it to -- either way
+        # rewriting would be guessing at what the user meant.
+        return raw
+
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    userinfo = f"{quote(unquote(parsed.username), safe='')}:{quote(secret, safe='')}"
+    return urlunsplit((parsed.scheme, f"{userinfo}@{host}", parsed.path, parsed.query, parsed.fragment))
 
 
 def sanitize_identifier(value: str) -> str:
@@ -167,6 +233,34 @@ class ConnectionSpec:
         holds for all of them.
         """
         return f"{self.slug}_{sanitize_identifier(target)}"
+
+    def reaches_network(self) -> bool:
+        """Whether opening this connection would leave the machine.
+
+        `local-only` promises "nothing is sent anywhere", and a connection to a
+        hosted warehouse or a public bucket would break that promise just as a
+        web search would -- so the mode has to be able to tell the two apart.
+        Judged from the endpoint, not from the kind: a SQLite file and a Postgres
+        on loopback are local, the same driver pointed at a remote host is not.
+
+        Unknown resolves to **True**. The safe direction, for the same reason
+        `providers.is_cloud` treats an unrecognised provider as cloud: calling
+        something unrecognised local would open the hole the check exists to close.
+        """
+        host = str(self.options.get("host") or "").strip().lower()
+        endpoint = str(self.options.get("endpoint_url") or "").strip().lower()
+        dsn = str(self.options.get("dsn") or "").strip().lower()
+
+        if endpoint:
+            return not any(marker in endpoint for marker in LOOPBACK_HOSTS)
+        if dsn:
+            return not any(f"@{marker}" in dsn or f"//{marker}" in dsn for marker in LOOPBACK_HOSTS)
+        if host:
+            return host not in LOOPBACK_HOSTS
+        # No host, no endpoint, no DSN: a file-backed engine such as SQLite, or a
+        # bucket reached through the AWS default chain. The bucket case is the
+        # reason `bucket` alone counts as remote.
+        return bool(str(self.options.get("bucket") or "").strip())
 
     def to_dict(self) -> dict[str, Any]:
         """The whole object. Safe to persist, return and log -- there is no secret in it."""

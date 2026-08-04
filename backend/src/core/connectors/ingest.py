@@ -119,9 +119,12 @@ def _profile(frame: pd.DataFrame, spec: ConnectionSpec, target: str, truncated: 
         "rows": int(len(frame)),
         "columns": int(len(frame.columns)),
         "truncated": truncated,
-        # The honest answer when the source was not counted: it is at least this,
-        # and claiming a total nobody asked the database for would be inventing one.
-        "original_rows": int(limit) + 1 if truncated else int(len(frame)),
+        # `None` when the read was bounded, not `limit + 1`. The source's real
+        # size was never queried, and the trust layer renders this figure as an
+        # exact total ("down-sampled to N of M"), so a plausible number here
+        # becomes an invented one on screen -- the precise thing `grounding.py`
+        # exists to prevent. Not knowing is reported as not knowing.
+        "original_rows": None if truncated else int(len(frame)),
         "connection": spec.name,
         "target": target,
     }

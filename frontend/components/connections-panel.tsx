@@ -24,6 +24,7 @@ export function ConnectionsPanel({ onImported }: { onImported: () => void }) {
   const [connections, setConnections] = useState<ConnectionSummary[]>([])
   const [kinds, setKinds] = useState<ConnectorKind[]>([])
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<ConnectionSummary | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [status, setStatus] = useState<Record<string, string>>({})
   const [targets, setTargets] = useState<Record<string, ConnectionTarget[]>>({})
@@ -127,12 +128,17 @@ export function ConnectionsPanel({ onImported }: { onImported: () => void }) {
         </p>
       )}
 
-      {adding && (
+      {(adding || editing) && (
         <ConnectionForm
           kinds={kinds}
-          onCancel={() => setAdding(false)}
+          existing={editing}
+          onCancel={() => {
+            setAdding(false)
+            setEditing(null)
+          }}
           onCreated={async () => {
             setAdding(false)
+            setEditing(null)
             await refresh()
           }}
         />
@@ -181,6 +187,15 @@ export function ConnectionsPanel({ onImported }: { onImported: () => void }) {
                 <div className="flex shrink-0 items-center gap-1.5">
                   <SmallButton onClick={() => test(connection)} disabled={busy === connection.id}>
                     Test
+                  </SmallButton>
+                  <SmallButton
+                    onClick={() => {
+                      setAdding(false)
+                      setEditing(connection)
+                    }}
+                    disabled={busy === connection.id}
+                  >
+                    Edit
                   </SmallButton>
                   <SmallButton onClick={() => browse(connection)} disabled={busy === connection.id}>
                     {busy === connection.id ? (
@@ -347,16 +362,20 @@ function WriteBackControl({
 
 function ConnectionForm({
   kinds,
+  existing,
   onCancel,
   onCreated,
 }: {
   kinds: ConnectorKind[]
+  /** Present when editing. The same form both ways — an edit screen that drifts
+   *  from the create screen is two places to add a field to. */
+  existing?: ConnectionSummary | null
   onCancel: () => void
   onCreated: () => Promise<void>
 }) {
-  const [name, setName] = useState("")
-  const [kind, setKind] = useState(kinds[0]?.kind ?? "")
-  const [options, setOptions] = useState<Record<string, string>>({})
+  const [name, setName] = useState(existing?.name ?? "")
+  const [kind, setKind] = useState(existing?.kind ?? kinds[0]?.kind ?? "")
+  const [options, setOptions] = useState<Record<string, string>>(existing?.options ?? {})
   const [secret, setSecret] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -367,14 +386,17 @@ function ConnectionForm({
     setBusy(true)
     setError(null)
     try {
-      await api.createConnection({
+      const body = {
         name,
         kind,
         // Empty fields are dropped rather than stored as "": a blank host and an
         // unset host mean the same thing, and the driver reads them differently.
         options: Object.fromEntries(Object.entries(options).filter(([, value]) => value.trim())),
+        // Left out when blank on an edit, which means "keep the stored secret" —
+        // not "there is no secret".
         secret: secret || undefined,
-      })
+      }
+      await (existing ? api.updateConnection(existing.id, body) : api.createConnection(body))
       await onCreated()
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not save the connection.")
@@ -455,6 +477,8 @@ function ConnectionForm({
       <p className="text-[11.5px] leading-relaxed text-muted-foreground">
         The secret is stored on this machine only, in your Wizard config directory, and is never sent
         anywhere but the data source itself.
+        {existing?.has_secret && " Leave it blank to keep the one already stored."}
+        {" A password inside a pasted connection string is moved into that store too, so it is never written to the connections file."}
       </p>
 
       {error && <p className="text-[12px] text-destructive">{error}</p>}
@@ -470,7 +494,7 @@ function ConnectionForm({
           )}
         >
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Save connection
+          {existing ? "Save changes" : "Save connection"}
         </button>
         <SmallButton onClick={onCancel} disabled={busy}>
           Cancel

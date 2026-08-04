@@ -22,7 +22,15 @@ from src.config import settings
 
 from .base import DEFAULT_SAMPLE_ROWS, refuse_write
 from .registry import ConnectorKind, register
-from .spec import ColumnInfo, ConnectionSchema, ConnectionSpec, ConnectorError, DriverMissing, TargetInfo
+from .spec import (
+    ColumnInfo,
+    ConnectionSchema,
+    ConnectionSpec,
+    ConnectorError,
+    DriverMissing,
+    TargetInfo,
+    inject_secret_into_dsn,
+)
 
 
 #: Which ``connect_args`` key each dialect family spells its connect timeout with.
@@ -73,10 +81,10 @@ class RelationalConnector:
         options = self.spec.options
         dsn = str(options.get("dsn") or "").strip()
         if dsn:
-            # A full DSN is taken as given. Somebody who pasted one has already
-            # made every decision this function would otherwise make, and
-            # second-guessing it is how a working connection string gets broken.
-            return dsn
+            # A full DSN is taken as given, except for the password: it was lifted
+            # out on save so the spec holds no secret, and is put back here. A DSN
+            # that never carried one is returned untouched.
+            return inject_secret_into_dsn(dsn, self._secret)
 
         driver = str(options.get("driver") or "").strip()
         if not driver:

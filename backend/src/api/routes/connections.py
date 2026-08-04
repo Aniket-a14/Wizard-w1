@@ -20,10 +20,19 @@ from src.api.schemas import (
     DatasetSummary,
     WriteBackRequest,
 )
-from src.core.connectors import ConnectionSpec, ConnectorError, DriverMissing, available_kinds, build, kind_by_name
+from src.core.connectors import (
+    ConnectionSpec,
+    ConnectorError,
+    DriverMissing,
+    available_kinds,
+    build,
+    kind_by_name,
+    split_secret_from_dsn,
+)
 from src.core.connectors.gate import authorize, require_writable
 from src.core.connectors.ingest import import_target
 from src.core.connectors.store import connection_store
+from src.core.data_mode import normalize
 from src.core.session import Session
 from src.utils.logging import logger
 
@@ -44,6 +53,24 @@ def _summary(spec: ConnectionSpec) -> ConnectionSummary:
         available=entry.available() if entry else False,
         install_hint=entry.install_hint if entry else "",
     )
+
+
+def _split_options(options: dict, secret: str | None) -> tuple[dict, str | None]:
+    """Lifts an inline password out of a pasted DSN before the spec is built.
+
+    Done at the edge so that no spec ever *holds* a credential, rather than
+    relying on every later reader to remember to strip one. An explicitly
+    supplied ``secret`` wins: someone who filled in both fields meant the one
+    they typed into the password box.
+    """
+    dsn = str(options.get("dsn") or "").strip()
+    if not dsn:
+        return options, secret
+    cleaned, embedded = split_secret_from_dsn(dsn)
+    if not embedded:
+        return options, secret
+    options["dsn"] = cleaned
+    return options, secret or embedded
 
 
 def _require_spec(connection_id: str) -> ConnectionSpec:
@@ -73,6 +100,28 @@ def _permit(session: Session, category: str, subject: str) -> None:
     ruling = authorize(session.permissions, category, subject)
     if not ruling.allowed:
         raise HTTPException(status_code=403, detail=ruling.reason)
+
+
+def _check_data_mode(session: Session, spec: ConnectionSpec) -> None:
+    """Refuses a connection that would leave the machine under `local-only`.
+
+    **The mode outranks the profile**, so this is checked before `_permit`, the
+    same ordering `_orient` uses for web search: the mode decides what is
+    possible at all, the profile decides what is asked about among what already
+    is. There is no consent that would make this allowed, so it is a refusal
+    rather than a prompt.
+
+    Without it `local-only` -- whose own description reads "Nothing is sent
+    anywhere" -- would happily pull rows from a hosted warehouse.
+    """
+    if normalize(session.data_mode) == "local-only" and spec.reaches_network():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"This session is set to local-only, so '{spec.name}' is unavailable — "
+                "it would reach a data source off this machine. Change the data mode to allow it."
+            ),
+        )
 
 
 # ------------------------------------------------------------------ #
@@ -105,10 +154,51 @@ async def create_connection(request: ConnectionRequest, session: Session = Depen
     if connection_store.by_name(name) is not None:
         raise HTTPException(status_code=409, detail=f"A connection named {name!r} already exists.")
 
-    spec = ConnectionSpec(name=name, kind=request.kind, options=dict(request.options))
-    if not connection_store.save(spec, secret=request.secret or ""):
+    options, secret = _split_options(dict(request.options), request.secret or "")
+    spec = ConnectionSpec(name=name, kind=request.kind, options=options)
+    if not connection_store.save(spec, secret=secret):
         raise HTTPException(status_code=500, detail="Could not save the connection.")
     return _summary(spec)
+
+
+@router.put("/connections/{connection_id}", response_model=ConnectionSummary, dependencies=[Depends(require_api_key)])
+async def update_connection(
+    connection_id: str, request: ConnectionRequest, session: Session = Depends(get_session)
+) -> ConnectionSummary:
+    """Edits a saved connection in place.
+
+    In place rather than delete-and-recreate, which is what correcting a typo'd
+    port would otherwise cost: recreating drops the stored secret, every table
+    imported from it, the per-source data policy set on it, and the write-back
+    opt-in. Editing keeps the id, so none of those are orphaned.
+
+    ``secret`` omitted means "leave the stored one alone" -- an edit that did not
+    retype the password must not erase it. ``read_only`` is deliberately *not*
+    editable here: it has its own route with its own confirmation.
+    """
+    spec = _require_spec(connection_id)
+    name = (request.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="A connection needs a name.")
+    if kind_by_name(request.kind) is None:
+        raise HTTPException(status_code=400, detail=f"Unknown connection kind {request.kind!r}.")
+
+    clash = connection_store.by_name(name)
+    if clash is not None and clash.id != connection_id:
+        raise HTTPException(status_code=409, detail=f"A connection named {name!r} already exists.")
+
+    options, secret = _split_options(dict(request.options), request.secret)
+    updated = ConnectionSpec(
+        name=name,
+        kind=request.kind,
+        options=options,
+        id=spec.id,
+        read_only=spec.read_only,
+        created_at=spec.created_at,
+    )
+    if not connection_store.save(updated, secret=secret):
+        raise HTTPException(status_code=500, detail="Could not save the connection.")
+    return _summary(updated)
 
 
 @router.delete("/connections/{connection_id}", dependencies=[Depends(require_api_key)])
@@ -127,7 +217,11 @@ async def delete_connection(connection_id: str, session: Session = Depends(get_s
     return {"message": f"Removed the connection {spec.name!r}."}
 
 
-@router.post("/connections/{connection_id}/test", response_model=ConnectionTestResponse)
+@router.post(
+    "/connections/{connection_id}/test",
+    response_model=ConnectionTestResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def test_connection(connection_id: str, session: Session = Depends(get_session)) -> ConnectionTestResponse:
     """Reaches the source and reports what happened.
 
@@ -136,6 +230,7 @@ async def test_connection(connection_id: str, session: Session = Depends(get_ses
     fails instead of reporting is useless at exactly the moment it is needed.
     """
     spec = _require_spec(connection_id)
+    _check_data_mode(session, spec)
     connector = _open(spec)
     try:
         await asyncio.to_thread(connector.test)
@@ -149,10 +244,15 @@ async def test_connection(connection_id: str, session: Session = Depends(get_ses
     return ConnectionTestResponse(ok=True, detail="Reached the source.")
 
 
-@router.get("/connections/{connection_id}/schema", response_model=ConnectionSchemaResponse)
+@router.get(
+    "/connections/{connection_id}/schema",
+    response_model=ConnectionSchemaResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def discover_connection(connection_id: str, session: Session = Depends(get_session)) -> ConnectionSchemaResponse:
     """Lists what the source contains. Gated: metadata leaves the source."""
     spec = _require_spec(connection_id)
+    _check_data_mode(session, spec)
     _permit(session, "db_connect", spec.id)
     connector = _open(spec)
     try:
@@ -181,6 +281,7 @@ async def import_from_connection(
     generated code and by a cloud-bound prompt.
     """
     spec = _require_spec(connection_id)
+    _check_data_mode(session, spec)
     _permit(session, "db_connect", spec.id)
     target = (request.target or "").strip()
     if not target:
@@ -228,6 +329,7 @@ async def write_to_connection(
        ``prod.orders``.
     """
     spec = _require_spec(connection_id)
+    _check_data_mode(session, spec)
     writable = require_writable(spec)
     if not writable.allowed:
         raise HTTPException(status_code=403, detail=writable.reason)
