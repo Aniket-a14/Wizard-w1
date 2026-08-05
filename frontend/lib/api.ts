@@ -324,6 +324,17 @@ export const api = {
     }),
 
   /**
+   * Writes a session table back to the source. Separate from `setWriteBack`:
+   * that one says this connection *may* be written to at all, this one is a
+   * write. Every session is still asked the first time.
+   */
+  writeToConnection: (id: string, dataset: string, target: string) =>
+    request<{ ok: boolean; detail: string }>(
+      `/api/connections/${encodeURIComponent(id)}/write`,
+      { method: "POST", body: JSON.stringify({ dataset, target }) },
+    ),
+
+  /**
    * Enabling requires the connection's own name typed back. Write-back is the
    * one decision here whose consequences land outside this machine.
    */

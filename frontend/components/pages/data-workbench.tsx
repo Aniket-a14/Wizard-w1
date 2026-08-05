@@ -342,7 +342,7 @@ export function DataWorkbench() {
         zone when no file is loaded — and an install with no file is exactly the
         one that wants to connect to a database instead.
       */}
-      <ConnectionsPanel onImported={refresh} />
+      <ConnectionsPanel datasets={datasets} onImported={refresh} />
     </div>
   )
 }

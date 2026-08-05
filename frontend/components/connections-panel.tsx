@@ -17,10 +17,23 @@ import { useCallback, useEffect, useState } from "react"
 import { Database, Loader2, PlugZap, Trash2, TriangleAlert } from "lucide-react"
 
 import { api, ApiError } from "@/lib/api"
-import type { ConnectionSummary, ConnectionTarget, ConnectorKind } from "@/lib/types"
+import type {
+  ConnectionSummary,
+  ConnectionTarget,
+  ConnectorKind,
+  DatasetSummary,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-export function ConnectionsPanel({ onImported }: { onImported: () => void }) {
+export function ConnectionsPanel({
+  datasets,
+  onImported,
+}: {
+  /** Session tables, so a write can offer one. Passed in rather than fetched
+   *  again: the page already holds them and a second copy would go stale. */
+  datasets: DatasetSummary[]
+  onImported: () => void
+}) {
   const [connections, setConnections] = useState<ConnectionSummary[]>([])
   const [kinds, setKinds] = useState<ConnectorKind[]>([])
   const [adding, setAdding] = useState(false)
@@ -256,6 +269,9 @@ export function ConnectionsPanel({ onImported }: { onImported: () => void }) {
                 </ul>
               )}
 
+              {!connection.read_only && (
+                <WriteBackForm connection={connection} datasets={datasets} />
+              )}
               <WriteBackControl connection={connection} onChanged={refresh} />
             </li>
           ))}
@@ -372,6 +388,71 @@ function WriteBackControl({
           {error && <p className="text-[12px] text-destructive">{error}</p>}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Writing a session table back to the source.
+ *
+ * Only rendered once write-back is enabled for the connection, because until
+ * then the backend refuses without asking anything — offering a control whose
+ * only outcome is a refusal is worse than not offering it.
+ */
+function WriteBackForm({
+  connection,
+  datasets,
+}: {
+  connection: ConnectionSummary
+  datasets: DatasetSummary[]
+}) {
+  const [dataset, setDataset] = useState("")
+  const [target, setTarget] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  const send = async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const body = await api.writeToConnection(connection.id, dataset, target)
+      setResult(body.detail)
+    } catch (cause) {
+      setResult(cause instanceof ApiError ? cause.message : "The write failed.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 grid gap-2 border-t border-border pt-3">
+      <p className="text-[12px] text-muted-foreground">Write a table back to this source.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={dataset}
+          onChange={(event) => setDataset(event.target.value)}
+          aria-label="Table to write"
+          className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-[12.5px]"
+        >
+          <option value="">Choose a table…</option>
+          {datasets.map((entry) => (
+            <option key={entry.name} value={entry.name}>
+              {entry.name}
+            </option>
+          ))}
+        </select>
+        <input
+          value={target}
+          onChange={(event) => setTarget(event.target.value)}
+          placeholder="destination table"
+          aria-label="Destination table"
+          className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-[12.5px]"
+        />
+        <SmallButton onClick={send} disabled={busy || !dataset || !target.trim()}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Write"}
+        </SmallButton>
+      </div>
+      {result && <p className="text-[12px] text-muted-foreground">{result}</p>}
     </div>
   )
 }
