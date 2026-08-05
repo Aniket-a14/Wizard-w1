@@ -381,12 +381,14 @@ def test_deleting_removes_the_empty_directory_but_not_a_used_one(tmp_path: Path,
     registry = _registry(monkeypatch, builtin, user, project)
 
     registry.write("bare", "d", "b")
-    assert registry.delete("bare") is True
+    removed = registry.delete("bare")
+    assert removed is True
     assert not (user / "bare").exists()
 
     registry.write("kept", "d", "b")
     (user / "kept" / "notes.md").write_text("mine\n", encoding="utf-8")
-    assert registry.delete("kept") is True
+    removed = registry.delete("kept")
+    assert removed is True
     # The extra file was put there by the user; only a bare directory is removed.
     assert (user / "kept" / "notes.md").exists()
 
