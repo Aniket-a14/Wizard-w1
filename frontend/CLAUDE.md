@@ -4,12 +4,13 @@ Moved out of the root `CLAUDE.md` so it loads only when work touches
 `frontend/`. The root file is the always-loaded one, and these are
 frontend-only conventions — nothing here changes how the backend behaves.
 
-Four routes, no landing page — `/` **is** the workspace:
+Five routes, no landing page — `/` **is** the workspace:
 
 | Route | Component |
 |-------|-----------|
 | `/` | [chat-shell.tsx](frontend/components/chat-shell.tsx) |
 | `/data` | [pages/data-workbench.tsx](frontend/components/pages/data-workbench.tsx) |
+| `/skills` | [pages/skills-workbench.tsx](frontend/components/pages/skills-workbench.tsx) |
 | `/models` | [pages/models-workbench.tsx](frontend/components/pages/models-workbench.tsx) |
 | `/settings` | [pages/settings-workbench.tsx](frontend/components/pages/settings-workbench.tsx) |
 
@@ -20,6 +21,11 @@ Four routes, no landing page — `/` **is** the workspace:
 - The composer holds **two independent dials**: the Auto / Fast / Deep segmented control (analysis *depth*) and [chat/permission-control.tsx](frontend/components/chat/permission-control.tsx) (how much it asks first). A popover rather than a third segmented group — three of those across one row does not fit, and unlike depth this is changed rarely. The full per-category matrix is on `/settings`; this is the profile switch.
 - **A permission prompt does not end the turn.** `use-chat-stream.ts` keeps `isRunning` true and keeps `activeIdRef` when the frame carries an `id`, and `respondToApproval` replies in place instead of rebuilding the turn — the paused run on the server is still holding its investigation.
 - [chat/investigation-trail.tsx](frontend/components/chat/investigation-trail.tsx) renders what the agent chose to do, move by move; [chat/answer-trust.tsx](frontend/components/chat/answer-trust.tsx) renders how far the answer can be trusted. Both are collapsed by default — the answer is the headline.
+- **[chat/skill-credit.tsx](frontend/components/chat/skill-credit.tsx) sits with the trust surfaces, not in the trail.** Where the answer's reasoning came from is the same kind of question as how far it can be trusted. One quiet line, each name linking to `/skills`, so "which skill?" and "what does it say?" are one click apart — this is Milestone 5's first acceptance criterion made visible, which without it would be true only inside a prompt nobody sees. `skill` frames are deduped by name in the hook: a skill can match at planning and again through a `consult`, and "informed by X, X" says nothing extra. The `final` frame's `skills_used` is *merged* into those frames rather than replacing them, because the frames carry the layer and the score and the terminal list is names only.
+- [chat/skill-promotion.tsx](frontend/components/chat/skill-promotion.tsx) renders the `skill_candidate` offer, **after** the answer and its caveats: it is an offer to save work already done, not something the turn waits on. The draft is fetched, not composed here — the backend builds it from the plan and code that actually ran, which makes promotion a confirmation rather than a writing task. Declining is persisted server-side, so it is not asked again next turn.
+- **The same component serves both routes into promotion.** With a `candidate` it is the agent's offer; with only an `instruction` it is the user's "Save as skill", a quiet action beside Copy on any finished answer. They differ in what fetches the draft and in whether backing out is worth recording — declining an offer is a decision about the analysis, closing a form you opened yourself is not — so they are one component rather than two that drift. `ChatMessage.instruction` is set when the turn is sent rather than found by walking backwards through the list, so the button cannot attach itself to the wrong turn.
+- `/skills` shows **how many analyses each skill informed**, and names the recent ones on the detail pane. That is the browser half of the milestone's bullet, and it cannot come from the `skill` frame: that frame is live and gone by the time the page is open, so it is read back from `skill_usage`.
+- `/skills` shows the three layer roots **by path**, and the built-in layer renders read-only *with the reason*. A disabled control with no explanation is exactly what it avoids: the answer to "why can't I edit this" belongs on the screen. A shadowed skill says which layer overrode it. There is a reload button because skills are plain files and a text editor is a supported way to change one — the page must not contradict that.
 - Grounding and verification arrive **twice**: as a warning string (for REST clients with no richer surface) and as structured fields. `message.tsx` filters the two known prefixes out of the plain warning list so nothing is said twice. Those prefixes are coupled to `GroundingReport.warning()` and `orchestrator._verify`.
 - `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
 - The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.

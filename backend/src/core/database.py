@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -63,6 +64,44 @@ SCHEMA_STATEMENTS = (
         meta TEXT
     )
     """,
+    # Recurring analyses, offered to the user for promotion into a named skill.
+    #
+    # There is deliberately no `session_id`. "You keep doing this" is a claim
+    # about many sessions, so a candidate must outlive the one that last bumped
+    # it -- which is also why `delete_session_data` does not touch this table and
+    # why the test teardown has to clear it explicitly.
+    """
+    CREATE TABLE IF NOT EXISTS skill_candidates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        instruction TEXT,
+        columns TEXT,
+        occurrences INTEGER DEFAULT 1,
+        first_seen REAL,
+        last_seen REAL,
+        plan TEXT,
+        code TEXT,
+        promoted_to TEXT,
+        dismissed INTEGER DEFAULT 0,
+        embedding BLOB
+    )
+    """,
+    # Which analyses used which skill -- the half of the milestone's skills
+    # browser that the `skill` frame alone cannot answer, since that frame is
+    # live and a browser is opened later.
+    #
+    # No `session_id`, for the same reason `skill_candidates` has none: "this
+    # skill has informed eleven analyses" is a claim about the install, not about
+    # one browser tab, and a TTL reap would otherwise reset a skill's history to
+    # nothing while the skill itself remained.
+    """
+    CREATE TABLE IF NOT EXISTS skill_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        skill TEXT NOT NULL,
+        instruction TEXT,
+        timestamp REAL
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS chat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +121,8 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_working_memory_ts ON working_memory(timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_schema_registry_session ON schema_registry(session_id)",
     "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_candidates_kind ON skill_candidates(kind, dismissed)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_usage_skill ON skill_usage(skill, timestamp)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -303,6 +344,202 @@ class DatabaseManager:
                 )
         except Exception as e:
             logger.error("Failed to save trajectory memory", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Skill candidates (recurring analyses, offered for promotion)
+    # ------------------------------------------------------------------ #
+    def get_skill_candidates(self, kind: str | None = None, include_settled: bool = False) -> list[dict[str, Any]]:
+        """Candidates, newest activity first.
+
+        ``include_settled`` brings back the ones already promoted or dismissed,
+        which only the clustering path wants: a dismissed candidate must still be
+        *matched* against, or the next occurrence inserts a fresh row and the
+        offer the user just declined comes straight back.
+        """
+        try:
+            with self._read() as conn:
+                clauses: list[str] = []
+                params: list[Any] = []
+                if kind:
+                    clauses.append("kind = ?")
+                    params.append(kind)
+                if not include_settled:
+                    clauses.append("dismissed = 0 AND promoted_to IS NULL")
+                where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+                rows = conn.execute(
+                    "SELECT id, kind, instruction, columns, occurrences, first_seen, last_seen,"
+                    f" plan, code, promoted_to, dismissed, embedding FROM skill_candidates{where}"
+                    " ORDER BY last_seen DESC",
+                    tuple(params),
+                ).fetchall()
+
+                return [
+                    {
+                        "id": row["id"],
+                        "kind": row["kind"],
+                        "instruction": row["instruction"],
+                        "columns": json.loads(row["columns"] or "[]"),
+                        "occurrences": row["occurrences"],
+                        "first_seen": row["first_seen"],
+                        "last_seen": row["last_seen"],
+                        "plan": row["plan"] or "",
+                        "code": row["code"] or "",
+                        "promoted_to": row["promoted_to"],
+                        "dismissed": bool(row["dismissed"]),
+                        "embedding": self._deserialize_vector(row["embedding"]),
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error("Failed to fetch skill candidates", error=str(e))
+            return []
+
+    def add_skill_candidate(
+        self,
+        kind: str,
+        instruction: str,
+        columns: list[str],
+        plan: str,
+        code: str,
+        embedding: np.ndarray | None,
+    ) -> int:
+        """Records a first occurrence. Returns the new row id, or 0 on failure."""
+        now = time.time()
+        try:
+            with self._write() as conn:
+                cursor = conn.execute(
+                    "INSERT INTO skill_candidates"
+                    " (kind, instruction, columns, occurrences, first_seen, last_seen, plan, code, embedding)"
+                    " VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
+                    (
+                        kind,
+                        instruction.strip(),
+                        json.dumps(columns),
+                        now,
+                        now,
+                        plan,
+                        code,
+                        self._serialize_vector(embedding) if embedding is not None else None,
+                    ),
+                )
+                return int(cursor.lastrowid or 0)
+        except Exception as e:
+            logger.error("Failed to record a skill candidate", error=str(e))
+            return 0
+
+    def bump_skill_candidate(self, candidate_id: int, plan: str = "", code: str = "") -> int:
+        """Counts another occurrence. Returns the new count, or 0 on failure.
+
+        The plan and code are refreshed rather than appended: what the user would
+        promote is how they do this *now*, and the first attempt at a recurring
+        analysis is usually the worst one.
+        """
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "UPDATE skill_candidates SET occurrences = occurrences + 1, last_seen = ?,"
+                    " plan = COALESCE(NULLIF(?, ''), plan), code = COALESCE(NULLIF(?, ''), code)"
+                    " WHERE id = ?",
+                    (time.time(), plan, code, candidate_id),
+                )
+                row = conn.execute("SELECT occurrences FROM skill_candidates WHERE id = ?", (candidate_id,)).fetchone()
+                return int(row["occurrences"]) if row else 0
+        except Exception as e:
+            logger.error("Failed to bump a skill candidate", error=str(e))
+            return 0
+
+    def settle_skill_candidate(self, candidate_id: int, promoted_to: str | None = None) -> bool:
+        """Marks a candidate promoted (with the skill's name) or dismissed."""
+        try:
+            with self._write() as conn:
+                if promoted_to:
+                    cursor = conn.execute(
+                        "UPDATE skill_candidates SET promoted_to = ? WHERE id = ?", (promoted_to, candidate_id)
+                    )
+                else:
+                    cursor = conn.execute("UPDATE skill_candidates SET dismissed = 1 WHERE id = ?", (candidate_id,))
+                # Zero rows matched means the id is unknown. Returning True there
+                # made the dismiss route answer 200 for a candidate that never
+                # existed -- `promotion.dismiss` hands this straight to the 404.
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("Failed to settle a skill candidate", error=str(e))
+            return False
+
+    def clear_skill_candidates(self):
+        """Removes every candidate. For the test suite's teardown.
+
+        These rows outlive a session on purpose, which without this means they
+        outlive a *test* -- and an occurrence count carried into the next test
+        makes a promotion threshold fire in a test that never asked a question
+        twice. Order-dependent and invisible when the file is run alone.
+        """
+        try:
+            with self._write() as conn:
+                conn.execute("DELETE FROM skill_candidates")
+        except Exception as e:
+            logger.error("Failed to clear skill candidates", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Skill usage ("which analyses used which skill")
+    # ------------------------------------------------------------------ #
+    def record_skill_usage(self, skills: list[str], instruction: str):
+        """Notes that these skills informed this question.
+
+        Written once per turn rather than once per retrieval: a skill can match
+        at planning and again through ``consult``, and the browser's claim is
+        "this skill informed that analysis", not "it was read twice".
+        """
+        rows = [(name, (instruction or "").strip()[:500], time.time()) for name in skills if name]
+        if not rows:
+            return
+        try:
+            with self._write() as conn:
+                conn.executemany("INSERT INTO skill_usage (skill, instruction, timestamp) VALUES (?, ?, ?)", rows)
+        except Exception as e:
+            logger.error("Failed to record skill usage", error=str(e))
+
+    def skill_usage_summary(self) -> dict[str, dict]:
+        """Per skill: how many analyses it informed, and when it last did.
+
+        One aggregate query for every skill rather than one per skill, because
+        this renders on a page that lists all of them.
+        """
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    "SELECT skill, COUNT(*) AS uses, MAX(timestamp) AS last_used FROM skill_usage GROUP BY skill"
+                ).fetchall()
+            return {row["skill"]: {"uses": int(row["uses"]), "last_used": row["last_used"]} for row in rows}
+        except Exception as e:
+            logger.error("Failed to read skill usage", error=str(e))
+            return {}
+
+    def get_skill_usage(self, skill: str, limit: int = 10) -> list[dict]:
+        """The most recent questions this skill informed, newest first."""
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    "SELECT instruction, timestamp FROM skill_usage WHERE skill = ? ORDER BY timestamp DESC LIMIT ?",
+                    (skill, limit),
+                ).fetchall()
+            return [{"instruction": row["instruction"] or "", "timestamp": row["timestamp"]} for row in rows]
+        except Exception as e:
+            logger.error("Failed to read skill usage", error=str(e))
+            return []
+
+    def clear_skill_usage(self):
+        """Removes every usage row. For the test suite's teardown.
+
+        Same reasoning as ``clear_skill_candidates``: no ``session_id`` means
+        nothing else clears these, and a count carried into the next test makes a
+        freshly written skill look like one that has been used for months.
+        """
+        try:
+            with self._write() as conn:
+                conn.execute("DELETE FROM skill_usage")
+        except Exception as e:
+            logger.error("Failed to clear skill usage", error=str(e))
 
     # ------------------------------------------------------------------ #
     # Feedbacks (few-shot successes)

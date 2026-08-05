@@ -467,6 +467,42 @@ class Settings(BaseSettings):
     CONTEXT_CHUNK_OVERLAP: int = 150
     CONTEXT_TOP_K: int = 5
 
+    # ------------------------------------------------------------------ #
+    # Skills (Milestone 5)
+    #
+    # Reusable know-how in the SKILL.md convention, layered built-in /
+    # user-global / project-local. Retrieved through the same path context
+    # documents use, so it degrades to lexical matching with no encoder loaded.
+    #
+    # Both directory settings are empty by default, meaning "derive it": the
+    # built-in root is found relative to this checkout, and the project root is
+    # `.wizard/skills` under the working directory. The user root has no setting
+    # at all -- `registry.user_root()` derives it from `utils.appdirs.config_dir()`,
+    # so one machine's layout cannot be copied onto every machine through
+    # `.env.example`. The test suite pins both of these, so no test reads a
+    # developer's own skills or the shipped ones by accident.
+    # ------------------------------------------------------------------ #
+    SKILLS_ENABLED: bool = True
+    SKILLS_BUILTIN_DIR: str = ""
+    SKILLS_PROJECT_DIR: str = ""
+    # How many skills may inform one plan. Two, because a third is nearly always
+    # a worse match than the first two and it competes for the same budget.
+    SKILLS_TOP_K: int = 2
+    # The whole `<skills>` block's ceiling, not per skill. This is the only place
+    # a skill costs prompt budget, and it is spent on the planning prompt alone --
+    # the worker prompt is rebuilt per iteration *and* per correction retry, so a
+    # block there would be paid for N times per turn.
+    SKILLS_MAX_CHARS: int = 1800
+    # One floor for both scorers, which is only possible because the fallback is
+    # question-coverage rather than the hashing encoder's cosine -- see
+    # `SkillRegistry.search` for why that substitution is made.
+    SKILLS_MIN_SIMILARITY: float = 0.35
+    # How many times an analysis must recur before it is offered for promotion
+    # into a named skill. Two is noise -- asking the same question twice in a
+    # session is ordinary -- and four means a week of work before the offer
+    # appears. Nothing is written until the user confirms.
+    SKILL_PROMOTION_THRESHOLD: int = 3
+
     # Ingestion limits
     MAX_UPLOAD_BYTES: int = 512 * 1024 * 1024  # 512MB on disk
     MAX_INMEMORY_ROWS: int = 2_000_000

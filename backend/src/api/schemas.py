@@ -483,6 +483,85 @@ class ChatResponse(BaseModel):
     verification: str = ""
     grounding: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
+    #: Which skills informed this turn. Empty is the ordinary case and means
+    #: nothing matched, not that the feature is off.
+    skills_used: list[str] = Field(default_factory=list)
+
+
+class SkillSummary(BaseModel):
+    name: str
+    description: str
+    layer: str
+    layer_label: str
+    path: str
+    tags: list[str] = Field(default_factory=list)
+    version: str = ""
+    chars: int = 0
+    chunks: int = 0
+    #: False for built-in skills, which live in the checkout and would lose an
+    #: edit on the next update. The UI renders the reason rather than a disabled
+    #: control with no explanation.
+    writable: bool = True
+    source_url: str | None = None
+    pinned_sha: str | None = None
+    #: Which layer overrides this one, when a more specific layer defines the
+    #: same name. Without it, editing the shadowed copy appears to do nothing.
+    shadowed_by: str | None = None
+    #: How many analyses this skill has informed, and when it last did. The
+    #: milestone's browser is asked to show "which analyses used which skill",
+    #: and the live `skill` frame cannot answer that — it is gone by the time
+    #: anyone opens this page.
+    uses: int = 0
+    last_used: float | None = None
+
+
+class SkillDetail(SkillSummary):
+    body: str = ""
+    #: The recent questions this skill informed, newest first. On the detail view
+    #: rather than the list, because it is the answer to "used for what?" and the
+    #: list only has room for "how often".
+    recent_uses: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SkillRoot(BaseModel):
+    layer: str
+    label: str
+    path: str
+    writable: bool
+
+
+class SkillListResponse(BaseModel):
+    skills: list[SkillSummary] = Field(default_factory=list)
+    roots: list[SkillRoot] = Field(default_factory=list)
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class SkillWriteRequest(BaseModel):
+    name: str
+    description: str
+    body: str
+    tags: list[str] = Field(default_factory=list)
+    #: Set when this skill is being promoted from a recurring analysis, so the
+    #: candidate can be marked and stop being offered.
+    candidate_id: int | None = None
+
+
+class SkillDraftRequest(BaseModel):
+    """Asks for a skill draft for an analysis the user is looking at.
+
+    The other promotion path. `GET /candidates/{id}/draft` serves an offer the
+    backend made after a threshold; this serves one the *user* initiated about a
+    completed analysis, which the milestone lists separately and which does not
+    wait for a count.
+    """
+
+    instruction: str = Field(min_length=1, max_length=4000)
+
+
+class SkillCandidateListResponse(BaseModel):
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    threshold: int = 3
 
 
 class DocumentSummary(BaseModel):

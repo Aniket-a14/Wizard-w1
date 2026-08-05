@@ -24,6 +24,8 @@ import type {
   Phase,
   RunStep,
   ServerEvent,
+  SkillCandidate,
+  SkillUse,
   TrailEntry,
   Verification,
 } from "./types"
@@ -72,6 +74,7 @@ function blankAssistant(): ChatMessage {
     trail: [],
     findings: [],
     assumptions: [],
+    skillsUsed: [],
     streaming: true,
     phase: "planning",
   }
@@ -90,7 +93,24 @@ function blankUser(content: string): ChatMessage {
     trail: [],
     findings: [],
     assumptions: [],
+    skillsUsed: [],
   }
+}
+
+/**
+ * Folds the terminal frame's plain name list into the richer per-skill frames.
+ *
+ * The `skill` frames carry the layer and the match score; `final` carries names
+ * only. Replacing one with the other would throw away whichever half arrived
+ * second, so names already present keep their frame and the rest are added
+ * with what is known about them.
+ */
+function mergeSkills(existing: SkillUse[], names: string[]): SkillUse[] {
+  const seen = new Set(existing.map((skill) => skill.name))
+  const extra = names
+    .filter((name) => name && !seen.has(name))
+    .map((name): SkillUse => ({ name, layer: "user" }))
+  return extra.length ? [...existing, ...extra] : existing
 }
 
 export type ConnectionState = "connecting" | "open" | "closed" | "error"
@@ -320,6 +340,41 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
           break
         }
 
+        case "skill": {
+          // Deduped by name: a skill can be matched at planning and again by a
+          // `consult`, and "informed by X, X" says nothing extra.
+          const use: SkillUse = {
+            name: String(event.name ?? ""),
+            description: event.description as string | undefined,
+            layer: (event.layer as SkillUse["layer"]) ?? "user",
+            score: typeof event.score === "number" ? event.score : undefined,
+            phase: event.phase as string | undefined,
+          }
+          patchActive((message) =>
+            message.skillsUsed.some((existing) => existing.name === use.name)
+              ? message
+              : { ...message, skillsUsed: [...message.skillsUsed, use] },
+          )
+          break
+        }
+
+        case "skill_candidate":
+          patchActive((message) => ({
+            ...message,
+            skillCandidate: {
+              id: Number(event.id ?? 0),
+              kind: (event.kind as SkillCandidate["kind"]) ?? "recurring",
+              label: String(event.label ?? ""),
+              instruction: String(event.instruction ?? ""),
+              occurrences: Number(event.occurrences ?? 0),
+              threshold: Number(event.threshold ?? 0),
+              suggested_name: String(event.suggested_name ?? ""),
+              plan: event.plan as string | undefined,
+              code: event.code as string | undefined,
+            },
+          }))
+          break
+
         case "verification": {
           const verification: Verification = {
             status: (event.status as Verification["status"]) ?? "inconclusive",
@@ -401,6 +456,11 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
               new Set([...message.assumptions, ...(((event.assumptions as string[]) ?? []) || [])]),
             ),
             grounding: (event.grounding as Grounding) ?? message.grounding,
+            // Reconciled against the per-skill frames rather than replacing
+            // them: the frames carry the layer and the score, and this list is
+            // only names. Anything named here that never arrived as a frame is
+            // added with what is known.
+            skillsUsed: mergeSkills(message.skillsUsed, (event.skills_used as string[]) ?? []),
             iteration: Number(event.iterations ?? message.iteration ?? 0),
             tier: (event.tier as string) ?? message.tier,
             elapsedMs: Number(event.elapsed_ms ?? 0),
@@ -559,7 +619,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       if (!trimmed || isRunning) return
 
       const userMessage = blankUser(trimmed)
-      const assistant = { ...blankAssistant(), mode }
+      const assistant = { ...blankAssistant(), mode, instruction: trimmed }
       activeIdRef.current = assistant.id
 
       setMessages((previous) => [...previous, userMessage, assistant])
@@ -610,7 +670,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       const instruction =
         [...messages.slice(0, index)].reverse().find((item) => item.role === "user")?.content ?? ""
 
-      const assistant = blankAssistant()
+      const assistant = { ...blankAssistant(), instruction }
       activeIdRef.current = assistant.id
       setMessages((previous) => [...previous, assistant])
       setIsRunning(true)
@@ -643,6 +703,18 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     activeIdRef.current = null
   }, [])
 
+  /**
+   * Takes the promotion offer off a message once it has been acted on.
+   *
+   * Local only — whether it was promoted or dismissed is recorded server-side by
+   * the call the card already made, and this just stops the card rendering.
+   */
+  const clearSkillCandidate = useCallback((messageId: string) => {
+    setMessages((previous) =>
+      previous.map((item) => (item.id === messageId ? { ...item, skillCandidate: null } : item)),
+    )
+  }, [])
+
   return {
     messages,
     connection,
@@ -650,6 +722,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     phase,
     sendMessage,
     respondToApproval,
+    clearSkillCandidate,
     cancel,
     clear,
     reconnect: connect,

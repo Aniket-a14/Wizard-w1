@@ -1,6 +1,14 @@
 "use client"
 
-import { Database, Menu, MessagesSquare, Settings2, SlidersHorizontal, X } from "lucide-react"
+import {
+  Database,
+  Lightbulb,
+  Menu,
+  MessagesSquare,
+  Settings2,
+  SlidersHorizontal,
+  X,
+} from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
@@ -16,6 +24,7 @@ import { cn } from "@/lib/utils"
 const NAV = [
   { href: "/", label: "Chat", hint: "Ask, watch, verify", icon: MessagesSquare },
   { href: "/data", label: "Data", hint: "Datasets and preview", icon: Database },
+  { href: "/skills", label: "Skills", hint: "Reusable know-how", icon: Lightbulb },
   { href: "/models", label: "Models", hint: "Providers and roles", icon: SlidersHorizontal },
   { href: "/settings", label: "Settings", hint: "Session and diagnostics", icon: Settings2 },
 ] as const

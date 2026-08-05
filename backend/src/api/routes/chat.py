@@ -68,6 +68,7 @@ async def chat(
         mode=payload["mode"],
         verification=payload["verification"],
         grounding=payload["grounding"],
+        skills_used=payload["skills_used"],
     )
 
 
