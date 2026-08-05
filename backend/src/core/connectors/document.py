@@ -66,6 +66,20 @@ class DocumentConnector:
         port = str(options.get("port") or "").strip()
         return f"mongodb://{host}:{port}" if port else f"mongodb://{host}"
 
+    def _collection_name(self, target: str) -> str:
+        """The collection a target names, stripping only a leading ``database.``.
+
+        MongoDB permits dots in a collection name, and ``discover`` already
+        returns the bare name with the database in ``namespace`` -- so splitting
+        on the *last* dot never removed a prefix that was there and did truncate
+        a legitimate name: ``logs.2024`` became ``2024``, which reads an empty
+        collection rather than failing. One helper, used by every method that
+        resolves a target, so the two cannot drift.
+        """
+        name = (target or "").strip()
+        prefix = f"{self._database_name()}."
+        return name[len(prefix) :] if name.startswith(prefix) else name
+
     def _database_name(self) -> str:
         name = str(self.spec.options.get("database") or "").strip()
         if not name:
@@ -129,7 +143,7 @@ class DocumentConnector:
     def sample(self, target: str, limit: int = DEFAULT_SAMPLE_ROWS) -> pd.DataFrame:
         client = self._connect()
         database = self._database_name()
-        _, _, collection_name = target.rpartition(".")
+        collection_name = self._collection_name(target)
         try:
             documents = list(client[database][collection_name].find(limit=int(limit)))
         except Exception as exc:
@@ -170,7 +184,7 @@ class DocumentConnector:
         refuse_write(self.spec)
         client = self._connect()
         database = self._database_name()
-        _, _, collection_name = target.rpartition(".")
+        collection_name = self._collection_name(target)
         records = df.to_dict(orient="records")
         if not records:
             return

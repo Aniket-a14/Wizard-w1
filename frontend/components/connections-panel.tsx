@@ -87,6 +87,22 @@ export function ConnectionsPanel({ onImported }: { onImported: () => void }) {
   }
 
   const remove = async (connection: ConnectionSummary) => {
+    // Deleting a connection also drops every table imported from it and the
+    // per-source data policy set on it, and none of that comes back. Enabling
+    // write-back — which is reversible — asks for the name typed out, so a
+    // silent one-click destructive action here was the odd one out.
+    const imported = connection.name
+    if (
+      !window.confirm(
+        `Remove the connection "${imported}"?
+
+` +
+          "Any tables imported from it are removed from this session too, along with " +
+          "the cloud-data policy set for it. The saved credential is deleted.",
+      )
+    ) {
+      return
+    }
     setBusy(connection.id)
     try {
       await api.deleteConnection(connection.id)
@@ -374,12 +390,18 @@ function ConnectionForm({
   onCreated: () => Promise<void>
 }) {
   const [name, setName] = useState(existing?.name ?? "")
-  const [kind, setKind] = useState(existing?.kind ?? kinds[0]?.kind ?? "")
+  // Not seeded from `kinds[0]` at mount: `kinds` arrives asynchronously, so a
+  // form opened first would snapshot "" and never recover — the select would
+  // display the first option while state held nothing, rendering no fields and
+  // leaving Save disabled. `null` means "not chosen yet"; the effective kind is
+  // derived below, so it follows `kinds` until the user actually picks one.
+  const [chosenKind, setChosenKind] = useState<string | null>(existing?.kind ?? null)
   const [options, setOptions] = useState<Record<string, string>>(existing?.options ?? {})
   const [secret, setSecret] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const kind = chosenKind ?? kinds[0]?.kind ?? ""
   const selected = kinds.find((entry) => entry.kind === kind)
 
   const submit = async () => {
@@ -422,7 +444,7 @@ function ConnectionForm({
           <select
             value={kind}
             onChange={(event) => {
-              setKind(event.target.value)
+              setChosenKind(event.target.value)
               setOptions({})
             }}
             className="h-8 rounded-md border border-border bg-background px-2 text-[12.5px]"

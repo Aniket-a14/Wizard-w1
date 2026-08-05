@@ -300,9 +300,16 @@ export const api = {
       { method: "POST" },
     ),
 
+  /**
+   * A POST because it opens a connection to the source. As a GET it slipped past
+   * the rate limiter, which only covers mutating methods — and the reason that
+   * limiter covers connections at all is that the cost lands on someone else's
+   * database.
+   */
   connectionSchema: (id: string) =>
     request<{ targets: ConnectionTarget[] }>(
       `/api/connections/${encodeURIComponent(id)}/schema`,
+      { method: "POST" },
     ),
 
   importFromConnection: (id: string, target: string, makeActive = true) =>

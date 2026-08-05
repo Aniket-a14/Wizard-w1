@@ -21,6 +21,7 @@ from src.core.connectors import (
     ConnectionSpec,
     ConnectorError,
     ConnectorKind,
+    DriverMissing,
     available_kinds,
     build,
     inject_secret_into_dsn,
@@ -200,6 +201,66 @@ def test_a_missing_driver_is_reported_with_the_command_that_fixes_it() -> None:
     assert entry.install_hint == "pip install x"
 
 
+def test_build_refuses_a_known_kind_whose_driver_is_absent() -> None:
+    """`build` has to be where the driver is checked, or the 501 path is dead.
+
+    The reference connectors import lazily, inside `_connect`, so without a check
+    here `build` succeeded and `DriverMissing` surfaced later from `test` or
+    `discover` -- where the route catches `ConnectorError` and reports a generic
+    400, so the "install this package" answer never reached the user.
+    """
+    register(
+        ConnectorKind(
+            kind="absent-driver",
+            label="Absent",
+            factory=lambda spec, secret: None,  # type: ignore[arg-type,return-value]
+            module="no_such_module_xyz",
+            distribution="ghost",
+        )
+    )
+    try:
+        with pytest.raises(DriverMissing) as caught:
+            build(ConnectionSpec(name="x", kind="absent-driver"))
+        assert caught.value.install_hint == "pip install ghost"
+    finally:
+        from src.core.connectors.registry import _FACTORIES
+
+        _FACTORIES.pop("absent-driver", None)
+
+
+def test_a_dotted_collection_name_is_not_truncated() -> None:
+    """MongoDB allows dots in a collection name.
+
+    Splitting on the last dot never removed a database prefix that was there --
+    `discover` returns the bare name -- but it did turn `logs.2024` into `2024`,
+    which silently reads a different (empty) collection.
+    """
+    from src.core.connectors.document import DocumentConnector
+
+    connector = DocumentConnector(ConnectionSpec(name="M", kind="document", options={"database": "app"}))
+
+    assert connector._collection_name("logs.2024") == "logs.2024"
+    assert connector._collection_name("app.logs.2024") == "logs.2024"
+    assert connector._collection_name("orders") == "orders"
+
+
+def test_an_object_store_refuses_a_cleartext_remote_endpoint() -> None:
+    """An http:// endpoint sends the request signature -- derived from the secret -- in the clear.
+
+    Loopback still works, because MinIO on 127.0.0.1 is the ordinary development
+    setup and nothing leaves the machine there.
+    """
+    from src.core.connectors.objectstore import ObjectStoreConnector
+
+    remote = ObjectStoreConnector(ConnectionSpec(name="S", kind="objectstore", options={"bucket": "b"}))
+    with pytest.raises(ConnectorError, match="cleartext"):
+        remote._require_safe_endpoint("http://minio.internal:9000")
+
+    # No exception for either of these.
+    remote._require_safe_endpoint("http://127.0.0.1:9000")
+    remote._require_safe_endpoint("https://s3.amazonaws.com")
+
+
 def test_every_reference_kind_is_registered() -> None:
     assert {entry.kind for entry in available_kinds()} >= {"relational", "document", "objectstore"}
 
@@ -299,18 +360,30 @@ def test_a_real_sqlite_connection_reads_end_to_end(sqlite_spec) -> None:
 
 
 def test_the_row_limit_is_pushed_down_not_sliced_afterwards(sqlite_spec) -> None:
-    """`sample` must bound the read in the engine, not fetch everything and slice.
+    """`sample` must bound the read in the *engine*, not fetch everything and slice.
 
-    Asserted through the result rather than the SQL because the limit clause is
-    spelled differently by dialect -- which is exactly why it is built with
-    `select().limit()` and not by string assembly.
+    Asserted against the SQL actually issued, not just the row count: a connector
+    that selected all 25 rows and then took the first 3 in pandas would return an
+    identical frame while having paid for the whole table -- which is the entire
+    thing this signature exists to avoid.
     """
-    pytest.importorskip("sqlalchemy")
+    sqlalchemy = pytest.importorskip("sqlalchemy")
     connector = build(sqlite_spec)
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001, ARG001
+        statements.append(statement)
+
     try:
-        assert len(connector.sample("orders", limit=3)) == 3
+        sqlalchemy.event.listen(connector._connect(), "before_cursor_execute", record)
+        frame = connector.sample("orders", limit=3)
     finally:
         connector.close()
+
+    assert len(frame) == 3
+    selects = [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
+    assert selects, "no SELECT was issued"
+    assert any("LIMIT" in statement.upper() for statement in selects), selects
 
 
 def test_a_read_only_connection_refuses_to_write(sqlite_spec) -> None:

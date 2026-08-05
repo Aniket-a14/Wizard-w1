@@ -115,7 +115,8 @@ def test_two_tables_from_one_connection_stay_distinct(connected, client) -> None
     headers, connection_id = connected
 
     for target in ("orders", "customers"):
-        client.post(f"/api/connections/{connection_id}/import", json={"target": target}, headers=headers)
+        imported = client.post(f"/api/connections/{connection_id}/import", json={"target": target}, headers=headers)
+        assert imported.status_code == 200, imported.text
     session = client.get("/api/datasets", headers=headers).json()
 
     keys = {dataset["table_key"] for dataset in session["datasets"]}
@@ -125,7 +126,7 @@ def test_two_tables_from_one_connection_stay_distinct(connected, client) -> None
 def test_discovery_lists_what_can_be_read(connected, client) -> None:
     headers, connection_id = connected
 
-    body = client.get(f"/api/connections/{connection_id}/schema", headers=headers).json()
+    body = client.post(f"/api/connections/{connection_id}/schema", headers=headers).json()
 
     assert {"orders", "customers"} <= {target["name"] for target in body["targets"]}
 
@@ -142,7 +143,8 @@ def test_a_connection_test_reports_instead_of_failing(connected, client) -> None
 def test_deleting_a_connection_drops_what_it_imported(connected, client) -> None:
     """Rows from a disconnected source must not stay queryable by generated code."""
     headers, connection_id = connected
-    client.post(f"/api/connections/{connection_id}/import", json={"target": "orders"}, headers=headers)
+    imported = client.post(f"/api/connections/{connection_id}/import", json={"target": "orders"}, headers=headers)
+    assert imported.status_code == 200, imported.text
 
     client.delete(f"/api/connections/{connection_id}", headers=headers)
     session = client.get("/api/datasets", headers=headers).json()
@@ -169,7 +171,8 @@ def test_write_back_needs_the_name_typed_back(connected, client) -> None:
 def test_a_per_source_policy_can_be_set_on_an_imported_table(connected, client) -> None:
     """Connection-sourced tables reuse the per-source data policy unchanged."""
     headers, connection_id = connected
-    client.post(f"/api/connections/{connection_id}/import", json={"target": "orders"}, headers=headers)
+    imported = client.post(f"/api/connections/{connection_id}/import", json={"target": "orders"}, headers=headers)
+    assert imported.status_code == 200, imported.text
 
     response = client.put("/api/data-mode/dataset/shop_orders", json={"schema_only": True}, headers=headers)
 

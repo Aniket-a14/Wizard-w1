@@ -21,7 +21,7 @@ from src.config import settings
 
 from .base import DEFAULT_SAMPLE_ROWS, refuse_write
 from .registry import ConnectorKind, register
-from .spec import ConnectionSchema, ConnectionSpec, ConnectorError, DriverMissing, TargetInfo
+from .spec import LOOPBACK_HOSTS, ConnectionSchema, ConnectionSpec, ConnectorError, DriverMissing, TargetInfo
 
 
 #: Objects the connector will try to read. Anything else in the bucket is listed
@@ -61,11 +61,37 @@ class ObjectStoreConnector:
             )
         return bucket
 
+    def _require_safe_endpoint(self, endpoint: str) -> None:
+        """Refuses a cleartext endpoint that is not on this machine.
+
+        boto3 honours the scheme it is given, so an ``http://`` endpoint sends
+        the SigV4 authorization header -- derived from the secret key -- over the
+        wire in the clear. On loopback that is nobody else's business; to a
+        remote host it hands the credential to anything on the path.
+
+        MinIO on ``http://127.0.0.1:9000`` is the common development setup and
+        keeps working, which is why this checks the *host* rather than banning
+        plaintext outright.
+        """
+        lowered = endpoint.lower()
+        if not lowered.startswith("http://"):
+            return
+        host = lowered[len("http://") :].split("/", 1)[0].split(":", 1)[0]
+        if host not in LOOPBACK_HOSTS:
+            raise ConnectorError(
+                f"Refusing a cleartext endpoint for a remote host: {endpoint}",
+                detail=(
+                    "An http:// endpoint sends the request signature, which is derived from your "
+                    "secret key, unencrypted. Use https://, or point this connection at localhost."
+                ),
+            )
+
     def _connect(self) -> Any:
         if self._client is None:
             boto3 = _boto3()
             options = self.spec.options
             endpoint = str(options.get("endpoint_url") or "").strip()
+            self._require_safe_endpoint(endpoint)
             try:
                 from botocore.config import Config
 
@@ -132,11 +158,32 @@ class ObjectStoreConnector:
     def write(self, target: str, df: pd.DataFrame) -> None:
         refuse_write(self.spec)
         client = self._connect()
+        # Dispatched by suffix, the same way `_read_object` dispatches the read.
+        # Writing CSV bytes under every non-Parquet key looked harmless and was
+        # not: `READABLE_SUFFIXES` advertises .json and .feather as readable, so
+        # the reader would then call `read_json` on CSV and a write-then-read
+        # round trip through this connector failed.
+        lowered = target.lower()
         buffer = io.BytesIO()
-        if target.lower().endswith(".parquet"):
+        if lowered.endswith(".parquet"):
             df.to_parquet(buffer, index=False)
-        else:
+        elif lowered.endswith(".feather"):
+            df.to_feather(buffer)
+        elif lowered.endswith((".jsonl", ".ndjson")):
+            buffer.write(df.to_json(orient="records", lines=True).encode("utf-8"))
+        elif lowered.endswith(".json"):
+            buffer.write(df.to_json(orient="records").encode("utf-8"))
+        elif lowered.endswith(".tsv"):
+            buffer.write(df.to_csv(index=False, sep="\t").encode("utf-8"))
+        elif lowered.endswith(".csv"):
             buffer.write(df.to_csv(index=False).encode("utf-8"))
+        else:
+            # Refused rather than guessed. A key this connector cannot read back
+            # is a write it should not have made.
+            raise ConnectorError(
+                f"Cannot write '{target}': unsupported object type.",
+                detail=f"Use one of: {', '.join(READABLE_SUFFIXES)}.",
+            )
         try:
             client.put_object(Bucket=self._bucket(), Key=target, Body=buffer.getvalue())
         except Exception as exc:

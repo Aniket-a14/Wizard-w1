@@ -344,7 +344,9 @@ Consent used to be three unrelated special cases (a process-wide plan gate, a ha
 | `library_install` | yes | `imported_modules(code) - runtime.missing_modules(...)`, checked **before** execution |
 | `network` | yes | the plan's `SEARCH:` directive |
 | `workspace_write` | yes | a literal path the guard rejected, defaulting to `deny` — exactly what the guard already did |
-| `db_connect` / `db_write` / `tool_use` | **no** | declared for Milestone 4; the UI says nothing reaches them yet |
+| `db_connect` | yes | opening a saved connection — `/schema`, `/import`, `/test`. Saving one is not gated; it reaches nothing |
+| `db_write` | yes | writing a session table back to a source, `always_ask`, subject `connection:table` |
+| `tool_use` | **no** | declared for a later milestone; the UI says nothing reaches it yet |
 
 - `db_write` carries `always_ask=True`: it never resolves to `allow` from a profile, and `set_ruling` **raises** rather than silently clamping, so the API can 400 with the reason. Write-back is enabled per connection, once, deliberately.
 - **Default is `ask-always`, not `auto-approve`.** Under it every category is at least as consultative as it was before the profile existed. Defaulting to `auto-approve` would have made an upgrade silently stop asking about web search — a trust regression shipped by a milestone about trust.

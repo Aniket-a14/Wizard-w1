@@ -213,7 +213,10 @@ async def delete_connection(connection_id: str, session: Session = Depends(get_s
     for name in [handle.name for handle in session.datasets.values() if handle.origin == spec.name]:
         session.remove_dataset(name)
     session.data_policy.forget(spec.name)
-    connection_store.delete(connection_id)
+    if not connection_store.delete(connection_id):
+        # The datasets are already gone, so reporting success here would leave the
+        # user believing a connection they can still see was removed.
+        raise HTTPException(status_code=500, detail="Could not remove the connection.")
     return {"message": f"Removed the connection {spec.name!r}."}
 
 
@@ -231,6 +234,9 @@ async def test_connection(connection_id: str, session: Session = Depends(get_ses
     """
     spec = _require_spec(connection_id)
     _check_data_mode(session, spec)
+    # A test *is* a connect -- it opens a socket to the source -- so the profile
+    # binds here too. A `deny` ruling stops it; an `ask` is answered by the click.
+    _permit(session, "db_connect", spec.id)
     connector = _open(spec)
     try:
         await asyncio.to_thread(connector.test)
@@ -244,7 +250,7 @@ async def test_connection(connection_id: str, session: Session = Depends(get_ses
     return ConnectionTestResponse(ok=True, detail="Reached the source.")
 
 
-@router.get(
+@router.post(
     "/connections/{connection_id}/schema",
     response_model=ConnectionSchemaResponse,
     dependencies=[Depends(require_api_key)],

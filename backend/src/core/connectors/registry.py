@@ -22,7 +22,7 @@ from importlib.util import find_spec
 from src.utils.logging import logger
 
 from .base import Connector
-from .spec import ConnectionSpec, ConnectorError
+from .spec import ConnectionSpec, ConnectorError, DriverMissing
 
 
 #: kind -> how to build one. Populated by `register`, read by `build`.
@@ -103,6 +103,13 @@ def build(spec: ConnectionSpec, secret: str = "") -> Connector:
     Raises ``ConnectorError`` for an unknown kind and ``DriverMissing`` when the
     kind is known but its driver is not installed -- two different problems with
     two different remedies, so they are not collapsed into one message.
+
+    The driver check happens **here**, not wherever the factory first imports it.
+    The reference connectors import lazily, inside ``_connect``, so without this
+    ``build`` succeeded for a known kind with an absent driver and ``DriverMissing``
+    surfaced later from ``test`` or ``discover`` -- where callers catch
+    ``ConnectorError`` and report a generic 400, leaving the 501-with-the-pip-command
+    path unreachable. Probing is a ``find_spec`` path search, not an import.
     """
     entry = kind_by_name(spec.kind)
     if entry is None:
@@ -111,6 +118,8 @@ def build(spec: ConnectionSpec, secret: str = "") -> Connector:
             f"Unknown connection kind: {spec.kind or '(empty)'}.",
             detail=f"Registered kinds: {known}.",
         )
+    if not entry.available():
+        raise DriverMissing(entry.kind, entry.distribution)
     return entry.factory(spec, secret)
 
 

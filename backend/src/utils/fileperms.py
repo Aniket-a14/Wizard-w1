@@ -14,7 +14,6 @@ exactly the moment someone is trying to save something.
 
 from __future__ import annotations
 
-import os
 import stat
 import subprocess
 import sys
@@ -65,9 +64,24 @@ def _restrict_windows(path: Path, description: str) -> None:
         logger.warning(f"Could not restrict permissions on the {description}", path=str(path))
         return
 
-    if not os.access(path, os.W_OK):
+    if not _is_writable(path):
         _icacls(str(path), "/reset")
         logger.warning(f"Restricting the {description} made it unwritable; inherited permissions restored")
+
+
+def _is_writable(path: Path) -> bool:
+    """Whether the running account can actually write ``path``.
+
+    An actual open, not ``os.access``: on Windows ``os.access(..., os.W_OK)``
+    reports the read-only *attribute* and does not consult the ACL, which is the
+    only thing that just changed. It would answer "writable" for exactly the
+    denied-ACL case this check exists to catch, so the rollback would never fire.
+    """
+    try:
+        with path.open("a"):
+            return True
+    except OSError:
+        return False
 
 
 def restrict(path: Path, description: str = "config file") -> None:

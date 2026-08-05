@@ -56,7 +56,8 @@ def test_generated_code_is_never_given_a_connection_string(client, tmp_path) -> 
         },
         headers=headers,
     ).json()
-    client.post(f"/api/connections/{created['id']}/import", json={"target": "t"}, headers=headers)
+    imported = client.post(f"/api/connections/{created['id']}/import", json={"target": "t"}, headers=headers)
+    assert imported.status_code == 200, imported.text
 
     session = session_manager.get_or_create(headers["X-Session-Id"])
     workspace_text = "".join(
