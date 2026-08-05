@@ -393,7 +393,8 @@ def test_deleting_removes_the_empty_directory_but_not_a_used_one(tmp_path: Path,
 
 def test_deleting_something_absent_is_false_not_an_error(tmp_path: Path, monkeypatch) -> None:
     registry = _registry(monkeypatch, tmp_path / "b", tmp_path / "u", tmp_path / "p")
-    assert registry.delete("never-existed") is False
+    removed = registry.delete("never-existed")
+    assert removed is False
 
 
 @pytest.mark.parametrize("name", ["", "Bad Name", "with/slash", "..", "-leading", "x" * 65])
@@ -404,3 +405,45 @@ def test_unusable_names_are_refused(name: str) -> None:
 @pytest.mark.parametrize("name", ["a", "fee-rules", "cohort_analysis", "v1.2", "abc123"])
 def test_usable_names_are_accepted(name: str) -> None:
     assert is_valid_skill_name(name) is True
+
+
+# --------------------------------------------------------------------------- #
+# Defects found in review of the milestone-5 PR
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("opening", ["----", "-----", "---title"])
+def test_a_markdown_rule_at_the_top_does_not_abort_the_scan(opening: str, tmp_path: Path, monkeypatch) -> None:
+    """`split` tested a prefix in one place and exact equality in another.
+
+    A bare `<name>.md` opening with `----` passed the prefix test and matched no
+    line equal to `---`, so `next()` raised `StopIteration` — which `load_skill`
+    does not catch and `_scan` does not either. One such file in any layer took
+    every skill with it.
+    """
+    builtin, user, project = tmp_path / "b", tmp_path / "u", tmp_path / "p"
+    registry = _registry(monkeypatch, builtin, user, project)
+
+    user.mkdir(parents=True)
+    (user / "rule.md").write_text(f"{opening}\nnot frontmatter\n", encoding="utf-8")
+    registry.write("survivor", "Still here", "Instructions.")
+
+    # The malformed file is skipped for the reason it is actually wrong — no
+    # required fields — and the valid skill beside it still loads.
+    assert [skill.name for skill in registry.list()] == ["survivor"]
+
+
+def test_clearing_user_skills_reaches_a_shadowed_one(tmp_path: Path, monkeypatch) -> None:
+    """`list()` returns only resolved skills, so a user skill hidden behind a
+    project one of the same name survived teardown and leaked into the next
+    test. Removal goes by path, since `delete(name)` would resolve that name to
+    the project copy and take the wrong file."""
+    builtin, user, project = tmp_path / "b", tmp_path / "u", tmp_path / "p"
+    registry = _registry(monkeypatch, builtin, user, project)
+
+    registry.write("shared", "The user copy", "User instructions.")
+    registry.write("shared", "The project copy", "Project instructions.", layer=SkillLayer.PROJECT)
+    assert registry.get("shared").layer is SkillLayer.PROJECT
+
+    registry.clear_user_skills()
+
+    assert not (user / "shared").exists()
+    assert (project / "shared" / "SKILL.md").exists()

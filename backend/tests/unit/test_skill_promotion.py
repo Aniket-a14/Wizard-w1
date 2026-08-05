@@ -36,7 +36,11 @@ def run(kind: str = KIND_RECURRING, question: str = QUESTION, times: int = 1):
 # The threshold
 # --------------------------------------------------------------------------- #
 def test_nothing_is_offered_below_the_threshold() -> None:
-    assert run(times=settings.SKILL_PROMOTION_THRESHOLD - 1) == [None, None]
+    # Derived from the setting rather than spelled `[None, None]`: the rest of
+    # this file already follows the configured threshold, and a literal here
+    # fails for the right behaviour the moment someone changes it.
+    below = settings.SKILL_PROMOTION_THRESHOLD - 1
+    assert run(times=below) == [None] * below
 
 
 def test_the_offer_arrives_exactly_at_the_threshold() -> None:
@@ -166,8 +170,11 @@ def test_a_promoted_candidate_stops_being_offered() -> None:
     assert db_mgr.get_skill_candidates(include_settled=True)[0]["promoted_to"] == "revenue-by-region"
 
 
-def test_dismissing_something_absent_is_survivable() -> None:
-    assert promotion.dismiss(9999) is True
+def test_dismissing_something_absent_reports_it_rather_than_succeeding() -> None:
+    """This asserted `is True` and was pinning a defect: `settle_skill_candidate`
+    returned unconditionally, so an UPDATE matching no row read as success and
+    the dismiss route answered 200 for an id that never existed."""
+    assert promotion.dismiss(9999) is False
     assert promotion.pending() == []
 
 

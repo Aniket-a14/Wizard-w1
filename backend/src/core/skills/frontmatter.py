@@ -72,7 +72,15 @@ def split(text: str) -> tuple[str, str]:
         return "", normalised
 
     lines = normalised.split("\n")
-    start = next(index for index, line in enumerate(lines) if line.strip() == FENCE)
+    # The prefix test above and this exact-match test have to agree, or a file
+    # opening with `----`, `-----` or `---title` passes the first and matches
+    # nothing here. That raised `StopIteration`, which `load_skill` does not
+    # catch and `_scan` does not either -- so one markdown rule at the top of a
+    # bare `<name>.md` aborted the whole scan and every skill disappeared.
+    start = next((index for index, line in enumerate(lines) if line.strip() == FENCE), None)
+    if start is None:
+        return "", normalised
+
     for index in range(start + 1, len(lines)):
         if lines[index].strip() == FENCE:
             return "\n".join(lines[start + 1 : index]), "\n".join(lines[index + 1 :]).strip("\n")

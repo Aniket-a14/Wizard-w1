@@ -474,11 +474,13 @@ class Settings(BaseSettings):
     # user-global / project-local. Retrieved through the same path context
     # documents use, so it degrades to lexical matching with no encoder loaded.
     #
-    # The three directory settings are empty by default, meaning "derive it":
-    # the built-in root is found relative to this checkout, the user root comes
-    # from `utils.appdirs.config_dir()`, and the project root is `.wizard/skills`
-    # under the working directory. The test suite pins the first and third, so no
-    # test reads a developer's own skills or the shipped ones by accident.
+    # Both directory settings are empty by default, meaning "derive it": the
+    # built-in root is found relative to this checkout, and the project root is
+    # `.wizard/skills` under the working directory. The user root has no setting
+    # at all -- `registry.user_root()` derives it from `utils.appdirs.config_dir()`,
+    # so one machine's layout cannot be copied onto every machine through
+    # `.env.example`. The test suite pins both of these, so no test reads a
+    # developer's own skills or the shipped ones by accident.
     # ------------------------------------------------------------------ #
     SKILLS_ENABLED: bool = True
     SKILLS_BUILTIN_DIR: str = ""

@@ -26,7 +26,15 @@ const LAYER_BLURB: Record<SkillLayer, string> = {
   builtin: "Ships with Wizard. Read-only — an edit here would be lost on update.",
 }
 
-const EMPTY_DRAFT = { name: "", description: "", body: "" }
+/** `candidate_id` rides along in the draft so a promotion started from the
+ *  candidate list still settles the row on save. Without it the file is written,
+ *  the candidate stays pending, and the card comes straight back. */
+const EMPTY_DRAFT: { name: string; description: string; body: string; candidate_id: number | null } = {
+  name: "",
+  description: "",
+  body: "",
+  candidate_id: null,
+}
 
 /**
  * Browse, read and edit the agent's know-how.
@@ -75,7 +83,8 @@ export function SkillsWorkbench() {
     try {
       const detail = await api.skill(name)
       setSelected(detail)
-      setDraft({ name: detail.name, description: detail.description, body: detail.body })
+      // No candidate: opening an existing skill is an edit, not a promotion.
+      setDraft({ name: detail.name, description: detail.description, body: detail.body, candidate_id: null })
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not open that skill.")
     }
@@ -93,7 +102,12 @@ export function SkillsWorkbench() {
     setError(null)
     try {
       const saved = creating
-        ? await api.createSkill({ name: draft.name, description: draft.description, body: draft.body })
+        ? await api.createSkill({
+            name: draft.name,
+            description: draft.description,
+            body: draft.body,
+            candidate_id: draft.candidate_id,
+          })
         : await api.updateSkill(draft.name, { description: draft.description, body: draft.body })
       setSelected(saved)
       setCreating(false)
@@ -156,7 +170,12 @@ export function SkillsWorkbench() {
         const drafted = await api.skillDraft(candidate.id)
         setSelected(null)
         setCreating(true)
-        setDraft({ name: drafted.name, description: drafted.description, body: drafted.body })
+        setDraft({
+          name: drafted.name,
+          description: drafted.description,
+          body: drafted.body,
+          candidate_id: candidate.id,
+        })
       } catch (cause) {
         setError(cause instanceof ApiError ? cause.message : "Could not build a draft.")
       }

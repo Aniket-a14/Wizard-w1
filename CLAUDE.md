@@ -270,7 +270,7 @@ The offer is emitted **exactly once**, at the threshold — re-offering every tu
 
 `skill_candidates` deliberately has **no `session_id`** — "you keep doing this" is a claim about many sessions — so `delete_session_data` does not touch it and the test teardown has to clear it explicitly.
 
-Nothing here writes a skill. Crossing the threshold produces a frame; a file appears only when the user confirms. The draft body is built from the plan and code that actually ran, never asked of a model — the grounding layer's rule applied to promotion.
+Nothing here writes a skill. Crossing the threshold produces a frame; a file appears only when the user confirms. **A draft is never asked of a model** — the grounding layer's rule applied to promotion. Where its content comes from depends on what was recorded: a candidate-backed draft is built from the plan and code that actually ran, and a draft for a question with no candidate row is built from the question alone, since there is nothing else true to say about it.
 
 **Two routes into promotion, one form.** The threshold offer is the agent's; `POST /api/skills/draft` is the user's — "save *this* one" about an answer already on screen, with no threshold, which the milestone lists as its own bullet. It needs no new bookkeeping because every successful turn already records a candidate, so `promotion.find` resolves the question to the row holding the plan and code that ran. A question with nothing recorded still drafts, from itself: whether the button works must not depend on state the user cannot see. `candidate_id` comes back null there, and `POST /api/skills` settles a candidate only when given one.
 

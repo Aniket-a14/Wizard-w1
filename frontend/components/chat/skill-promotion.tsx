@@ -77,16 +77,25 @@ export function SkillPromotion({
   }
 
   async function dismiss() {
-    setBusy(true)
-    try {
-      // Only an offer the agent made is worth recording a refusal to. Backing
-      // out of a form you opened yourself is not a decision about the analysis.
-      if (candidate) await api.dismissSkillCandidate(candidate.id)
-    } catch {
-      // Dismissing is a convenience; failing to record it must not trap the card
-      // on screen, and the worst case is being offered once more.
-    } finally {
+    // Only an offer the agent made is worth recording a refusal to. Backing out
+    // of a form you opened yourself is not a decision about the analysis.
+    if (!candidate) {
       onSettled()
+      return
+    }
+
+    setBusy(true)
+    setError(null)
+    try {
+      await api.dismissSkillCandidate(candidate.id)
+      onSettled()
+    } catch (cause) {
+      // The decline is persisted server-side, so a failed call means it was not
+      // recorded. Closing the card anyway would report a decision that did not
+      // happen — and since the offer is emitted once, at the threshold, it would
+      // not come back in chat to correct the impression.
+      setError(cause instanceof ApiError ? cause.message : "Could not record that. Try again.")
+      setBusy(false)
     }
   }
 

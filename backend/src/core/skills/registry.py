@@ -369,13 +369,24 @@ class SkillRegistry:
         Skills persist on purpose, which without this means they persist *between
         tests* too -- the same cross-test leak ``ConnectionStore.clear`` exists
         for, surfacing as a name conflict in whichever test happens to run second.
+
+        Shadowed skills are included, and removal goes by **path rather than
+        name**: a user skill hidden behind a project one of the same name is not
+        in the resolved map at all, and ``delete(name)`` would resolve that name
+        to the project copy -- missing the file it was asked to remove and taking
+        a different one instead.
         """
-        for skill in self.list():
-            if skill.layer is SkillLayer.USER:
-                try:
-                    self.delete(skill.name)
-                except SkillError:  # pragma: no cover - teardown must not raise
-                    pass
+        for skill in self.list(include_shadowed=True):
+            if skill.layer is not SkillLayer.USER:
+                continue
+            source = Path(skill.path)
+            try:
+                source.unlink(missing_ok=True)
+                parent = source.parent
+                if source.name == SKILL_FILENAME and parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+            except OSError:  # pragma: no cover - teardown must not raise
+                pass
         self.reload()
 
 

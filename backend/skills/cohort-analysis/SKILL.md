@@ -11,6 +11,10 @@ Any question about retention, churn, activation or how one group of users behave
 differently over time from another. "Which cohorts are driving churn", "does the
 January signup group behave differently", "is retention improving".
 
+The snippets below name their columns `"entity_id"`, `"event_date"` and
+`"activity_date"`. Those are placeholders — substitute the real column names from
+the data in front of you.
+
 ## Define the cohort before computing anything
 
 A cohort is fixed by an event that happens **once** per entity — first purchase,
@@ -23,8 +27,8 @@ signup, activation. Two mistakes account for most wrong cohort analyses:
   is a property of the entity, not of the row being looked at.
 
 ```python
-cohort = df.groupby(entity_id)[event_date].min().dt.to_period("M").rename("cohort")
-df = df.merge(cohort, left_on=entity_id, right_index=True)
+cohort = df.groupby("entity_id")["event_date"].min().dt.to_period("M").rename("cohort")
+df = df.merge(cohort, left_on="entity_id", right_index=True)
 ```
 
 Deriving it with `transform("min")` is the same thing in one step and avoids a
@@ -38,7 +42,7 @@ Plotting both against the calendar compares a mature cohort to a new one and
 concludes retention collapsed.
 
 ```python
-df["period"] = (df[activity_date].dt.to_period("M") - df["cohort"]).apply(lambda x: x.n)
+df["period"] = (df["activity_date"].dt.to_period("M") - df["cohort"]).apply(lambda x: x.n)
 ```
 
 ## The denominator is the cohort's own size
@@ -49,8 +53,8 @@ population. Dividing by the previous period gives period-over-period survival,
 which is a different and usually smaller-looking number.
 
 ```python
-sizes = df[df["period"] == 0].groupby("cohort")[entity_id].nunique()
-active = df.groupby(["cohort", "period"])[entity_id].nunique()
+sizes = df[df["period"] == 0].groupby("cohort")["entity_id"].nunique()
+active = df.groupby(["cohort", "period"])["entity_id"].nunique()
 retention = (active / sizes).unstack("period")
 ```
 

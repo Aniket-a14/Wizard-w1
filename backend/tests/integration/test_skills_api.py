@@ -104,7 +104,8 @@ def test_create_read_update_delete(client) -> None:
     )
     assert updated.json()["body"] == "Charge at authorisation."
 
-    assert client.delete("/api/skills/fee-rules").status_code == 200
+    deleted = client.delete("/api/skills/fee-rules")
+    assert deleted.status_code == 200
     assert client.get("/api/skills/fee-rules").status_code == 404
 
 
@@ -326,3 +327,10 @@ def test_the_draft_route_is_not_shadowed_by_the_name_route(client) -> None:
     """`POST /api/skills/draft` sits under the same prefix as `/{name}`, which
     only accepts GET/PUT/DELETE -- but declaration order is still what decides."""
     assert client.post("/api/skills/draft", json={"instruction": "anything"}).status_code == 200
+
+
+def test_dismissing_an_unknown_candidate_is_a_404(client) -> None:
+    """`settle_skill_candidate` returned True unconditionally, so an UPDATE that
+    matched no row reported success and this route answered 200 for a candidate
+    that never existed."""
+    assert client.post("/api/skills/candidates/999/dismiss").status_code == 404

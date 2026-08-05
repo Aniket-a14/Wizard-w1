@@ -453,12 +453,15 @@ class DatabaseManager:
         try:
             with self._write() as conn:
                 if promoted_to:
-                    conn.execute(
+                    cursor = conn.execute(
                         "UPDATE skill_candidates SET promoted_to = ? WHERE id = ?", (promoted_to, candidate_id)
                     )
                 else:
-                    conn.execute("UPDATE skill_candidates SET dismissed = 1 WHERE id = ?", (candidate_id,))
-                return True
+                    cursor = conn.execute("UPDATE skill_candidates SET dismissed = 1 WHERE id = ?", (candidate_id,))
+                # Zero rows matched means the id is unknown. Returning True there
+                # made the dismiss route answer 200 for a candidate that never
+                # existed -- `promotion.dismiss` hands this straight to the 404.
+                return cursor.rowcount > 0
         except Exception as e:
             logger.error("Failed to settle a skill candidate", error=str(e))
             return False
