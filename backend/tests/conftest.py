@@ -19,6 +19,9 @@ TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-data-"))
 TEST_WORKSPACE_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-ws-"))
 # Nothing in the suite may read or write the developer's real credentials file.
 TEST_CONFIG_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-config-"))
+# Both skill roots the suite could otherwise pick up from the machine it runs on.
+TEST_SKILLS_BUILTIN_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-skills-builtin-"))
+TEST_SKILLS_PROJECT_DIR = Path(tempfile.mkdtemp(prefix="wizard-test-skills-project-"))
 
 os.environ.update(
     {
@@ -68,9 +71,19 @@ os.environ.update(
         # a run should ever wait here is a bug. Two seconds fails it visibly
         # instead of stalling the run for two minutes.
         "AGENT_CONSENT_TIMEOUT": "2",
-        # Also where `connections.json` lands, so no test can read or write a
-        # developer's real saved connections either.
+        # Also where `connections.json` and the user-global skills directory
+        # land, so no test can read or write a developer's real saved connections
+        # or their own skills either.
         "WIZARD_CONFIG_DIR": str(TEST_CONFIG_DIR),
+        # The other two skill roots, which `WIZARD_CONFIG_DIR` does not cover.
+        # Empty means "derive it", and the derived answers are the shipped
+        # `backend/skills/` and `.wizard/skills` under the working directory --
+        # so without these the suite's behaviour would depend on what Wizard
+        # happens to ship and on what the developer left in their checkout. Both
+        # are pinned empty; a test wanting a skill writes one into a root it
+        # points the registry at itself.
+        "SKILLS_BUILTIN_DIR": str(TEST_SKILLS_BUILTIN_DIR),
+        "SKILLS_PROJECT_DIR": str(TEST_SKILLS_PROJECT_DIR),
         # Bounds every connector import in the suite. Small, because no test
         # needs a large frame to prove a read happened, and a ceiling nobody
         # crosses is a ceiling nobody has tested.
@@ -105,9 +118,11 @@ import pytest  # noqa: E402
 from src.core.agent.consent import consent_broker  # noqa: E402
 from src.core.connectors.store import connection_store  # noqa: E402
 from src.core.credentials import credential_store  # noqa: E402
+from src.core.database import db_mgr  # noqa: E402
 from src.core.llm.usage import usage_ledger  # noqa: E402
 from src.core.semantic_cache import semantic_cache  # noqa: E402
 from src.core.session import Session, session_manager  # noqa: E402
+from src.core.skills.registry import skill_registry  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -211,6 +226,12 @@ def _clean_database():
     The usage ledger is cleared for the same reason: it accumulates per session
     id, and a test asserting on a turn's cost must not inherit another's tokens.
 
+    Skill candidates get the same treatment for a sharper version of the same
+    reason: they deliberately have no ``session_id`` — "you keep doing this" is a
+    claim about many sessions — so nothing else clears them, and an occurrence
+    count carried forward makes the promotion threshold fire in a test that never
+    asked a question twice.
+
     Outstanding consent requests are released last. A test that ends while a run
     is parked on one would otherwise leave a future nobody resolves, and the next
     test to touch that session id would inherit it.
@@ -219,6 +240,9 @@ def _clean_database():
     semantic_cache.clear()
     usage_ledger.clear()
     credential_store.reload()
+    db_mgr.clear_skill_candidates()
+    db_mgr.clear_skill_usage()
+    skill_registry.clear_user_skills()
     # Cleared, not merely reloaded. Connections persist to disk on purpose --
     # they are configuration, not session data -- so without this a connection
     # saved by one test is still there for the next, which sees a name conflict

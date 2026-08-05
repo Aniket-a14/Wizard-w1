@@ -24,6 +24,10 @@ import type {
   SandboxSelfTest,
   ServerConfig,
   SessionInfo,
+  SkillCandidate,
+  SkillDetail,
+  SkillDraft,
+  SkillListResponse,
   UsageTotals,
   WorkspaceFileEntry,
 } from "./types"
@@ -383,6 +387,62 @@ export const api = {
   sandboxSelfTest: () => request<SandboxSelfTest>("/api/sandbox/selftest"),
 
   report: (hours = 24) => request<{ report: string; interaction_count: number }>(`/api/report?hours=${hours}`),
+
+  // ------------------------------------------------------------------ //
+  // Skills
+  // ------------------------------------------------------------------ //
+  skills: () => request<SkillListResponse>("/api/skills"),
+
+  skill: (name: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
+
+  createSkill: (body: {
+    name: string
+    description: string
+    body: string
+    tags?: string[]
+    /** Null when this is a hand-written skill or an analysis with nothing
+     *  recorded — the backend settles a candidate only when given one. */
+    candidate_id?: number | null
+  }) => request<SkillDetail>("/api/skills", { method: "POST", body: JSON.stringify(body) }),
+
+  updateSkill: (name: string, body: { description: string; body: string; tags?: string[] }) =>
+    request<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name, ...body }),
+    }),
+
+  deleteSkill: (name: string) =>
+    request<{ message: string }>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  /**
+   * Re-scans the skill directories. The point of skills being plain files is
+   * that a text editor is a valid way to change one, and the backend caches —
+   * without this the answer to "I edited the file" would be "restart".
+   */
+  reloadSkills: () => request<{ message: string; count: number }>("/api/skills/reload", { method: "POST" }),
+
+  skillCandidates: () =>
+    request<{ candidates: SkillCandidate[]; threshold: number }>("/api/skills/candidates"),
+
+  /**
+   * A draft built from the plan and code that actually ran, so promotion is a
+   * confirmation rather than a writing task.
+   */
+  skillDraft: (id: number) => request<SkillDraft>(`/api/skills/candidates/${id}/draft`),
+
+  /**
+   * The other way into promotion: a draft for an analysis the user picked,
+   * rather than one that recurred enough for the agent to offer. No threshold —
+   * the answer is on screen and they want it saved.
+   */
+  skillDraftFor: (instruction: string) =>
+    request<SkillDraft>("/api/skills/draft", {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
+
+  dismissSkillCandidate: (id: number) =>
+    request<{ message: string }>(`/api/skills/candidates/${id}/dismiss`, { method: "POST" }),
 }
 
 /** Absolute URL for a file in the current session's workspace. */

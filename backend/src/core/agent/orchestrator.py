@@ -83,6 +83,8 @@ from src.core.prompts import (
 from src.core.rag.retriever import context_retriever
 from src.core.security.code_guard import imported_modules
 from src.core.semantic_cache import semantic_cache
+from src.core.skills import promotion
+from src.core.skills.registry import skill_registry
 from src.core.tools import packages, runtime as runtime_backend
 from src.core.tools.evaluator import Evaluator
 from src.utils.logging import logger
@@ -173,6 +175,9 @@ class RunState:
     verification: str = ""
     grounding: GroundingReport = field(default_factory=GroundingReport)
     usage: dict[str, Any] = field(default_factory=dict)
+    #: Names of the skills that reached this turn, in the order they were used.
+    #: Reported on the final frame so an answer can say what informed it.
+    skills_used: list[str] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
 
     @property
@@ -201,6 +206,7 @@ class RunResult:
     verification: str = ""
     grounding: dict[str, Any] = field(default_factory=dict)
     usage: dict[str, Any] = field(default_factory=dict)
+    skills_used: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -223,6 +229,7 @@ class RunResult:
             "verification": self.verification,
             "grounding": self.grounding,
             "usage": self.usage,
+            "skills_used": self.skills_used,
         }
 
 
@@ -579,6 +586,11 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STEP_START, id="plan", label="Planning the analysis", kind="plan")
         await emit(emitter, EventType.STATUS, content="Planning the analysis", phase=Phase.PLANNING.value)
 
+        # Retrieved, not asked for: this is a ranking over local files and costs
+        # no round-trip. It is reached only past the cache and fast-path returns
+        # above, so a turn that never plans never pays for it either.
+        skills_block = await self._consult_skills(state, emitter)
+
         prompt = create_planning_prompt(
             state.instruction,
             session.df,
@@ -594,6 +606,7 @@ class AnalysisOrchestrator:
             history=session.history_prompt(),
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "manager"),
+            skills=skills_block,
         )
 
         raw = await self._stream_plan(prompt, session, emitter)
@@ -816,14 +829,21 @@ class AnalysisOrchestrator:
     def _allowed_actions(self, session: Session, budget: TierBudget) -> tuple[ActionKind, ...]:
         """The menu offered this turn.
 
-        Options are removed when they cannot succeed: a session with no attached
-        documents has nothing to consult, and a compact-tier model reliably
+        Options are removed when they cannot succeed: a session with nothing to
+        consult has no use for ``consult``, and a compact-tier model reliably
         wastes a reflection iteration restating the question.
+
+        ``consult`` now has two possible corpora, so it survives either one being
+        empty -- a session with no uploaded documents can still reach the
+        installed skills, which on a fresh install is the usual case.
         """
         allowed = [ActionKind.INSPECT, ActionKind.CODE, ActionKind.ANSWER]
         if budget.allow_reflection:
             allowed.insert(2, ActionKind.REFLECT)
-        if settings.CONTEXT_DOCS_ENABLED and session.has_documents:
+
+        has_documents = settings.CONTEXT_DOCS_ENABLED and session.has_documents
+        has_skills = settings.SKILLS_ENABLED and skill_registry.any_installed
+        if has_documents or has_skills:
             allowed.insert(2, ActionKind.CONSULT)
         return tuple(allowed)
 
@@ -970,6 +990,39 @@ class AnalysisOrchestrator:
             chars=len(summary),
         )
 
+    async def _consult_skills(self, state: RunState, emitter: Emitter | None, query: str = "") -> str:
+        """Ranks the installed skills against the question and reports what matched.
+
+        Returns the rendered prompt block, and records every match on
+        ``state.skills_used`` so the answer can name what informed it. Retrieval
+        is deterministic and local -- no LLM call, no network -- so this is safe
+        to do on the critical path of a turn.
+        """
+        if not settings.SKILLS_ENABLED:
+            return ""
+
+        try:
+            matches = await asyncio.to_thread(skill_registry.search, query or state.instruction)
+        except Exception as exc:
+            # Retrieval failing must degrade the turn, not end it. Same rule the
+            # embeddings service and every other retrieval path here follow.
+            logger.warning("Skill retrieval failed", error=str(exc))
+            return ""
+
+        for match in matches:
+            if match.skill.name not in state.skills_used:
+                state.skills_used.append(match.skill.name)
+            await emit(
+                emitter,
+                EventType.SKILL,
+                name=match.skill.name,
+                description=match.skill.description,
+                layer=match.skill.layer.value,
+                score=round(match.score, 4),
+                phase=state.phase.value,
+            )
+        return skill_registry.render_block(matches)
+
     async def _act_consult(
         self,
         state: RunState,
@@ -978,19 +1031,49 @@ class AnalysisOrchestrator:
         decision: Decision,
         budget: TierBudget,
     ):
-        """Retrieves from the session's attached reference documents."""
+        """Retrieves from the session's reference documents and the installed skills.
+
+        Both, because they answer the same kind of question from different
+        places: a data dictionary says what this column means here, a skill says
+        how this kind of analysis is done anywhere. The passages are labelled by
+        source so the model can attribute what it read rather than treating a
+        general practice as a fact about the user's data.
+        """
         state.phase = Phase.CONSULTING
-        await emit(emitter, EventType.STATUS, content="Consulting reference documents", phase=Phase.CONSULTING.value)
+        await emit(emitter, EventType.STATUS, content="Consulting reference material", phase=Phase.CONSULTING.value)
 
         query = decision.goal or state.instruction
         passages = await asyncio.to_thread(session.search_documents, query, budget.doc_chunks)
 
-        if passages:
-            body = "\n\n".join(f"From `{name}`:\n{text}" for name, text in passages)
-            for _, text in passages:
-                state.investigation.note_finding(text.strip().splitlines()[0][:200])
+        sections = [f"From `{name}`:\n{text}" for name, text in passages]
+        for _, text in passages:
+            state.investigation.note_finding(text.strip().splitlines()[0][:200])
+
+        skill_matches = []
+        if settings.SKILLS_ENABLED:
+            try:
+                skill_matches = await asyncio.to_thread(skill_registry.search, query)
+            except Exception as exc:
+                logger.warning("Skill retrieval failed", error=str(exc))
+
+        for match in skill_matches:
+            if match.skill.name not in state.skills_used:
+                state.skills_used.append(match.skill.name)
+            sections.append(f"From skill `{match.skill.name}`:\n{match.text}")
+            await emit(
+                emitter,
+                EventType.SKILL,
+                name=match.skill.name,
+                description=match.skill.description,
+                layer=match.skill.layer.value,
+                score=round(match.score, 4),
+                phase=Phase.CONSULTING.value,
+            )
+
+        if sections:
+            body = "\n\n".join(sections)
         else:
-            body = "No relevant passage was found in the attached documents."
+            body = "No relevant passage was found in the attached documents or the installed skills."
 
         state.investigation.record(
             Step(
@@ -998,7 +1081,7 @@ class AnalysisOrchestrator:
                 kind=ActionKind.CONSULT,
                 goal=query,
                 observation=body,
-                ok=bool(passages),
+                ok=bool(sections),
             )
         )
         await emit(
@@ -1553,6 +1636,50 @@ class AnalysisOrchestrator:
             )
 
     # ------------------------------------------------------------------ #
+    async def _note_promotion(self, state: RunState, columns: list[str], emitter: Emitter | None):
+        """Counts this turn toward a skill, and offers one if it has recurred enough.
+
+        Two kinds are counted, and separately -- see
+        :mod:`src.core.skills.promotion`. A turn that self-healed is both: it is a
+        successful analysis *and* a trap that was recovered from, and merging the
+        counters would lose whichever claim the user would actually want written
+        down.
+
+        **A turn answered from the semantic cache is counted too**, which is the
+        opposite of the obvious rule and is the only way this works. The cache
+        short-circuits the same question against the same schema, so the second
+        and third times somebody asks something are exactly the times nothing is
+        re-derived -- skipping them left the recurring counter permanently at
+        one. A cache hit is not weak evidence of recurrence; it is the system
+        recognising the question as one it has already answered, which is the
+        strongest evidence there is.
+
+        What a cached turn must not do is overwrite the stored draft: ``plan`` is
+        the "reused a verified solution" placeholder rather than an analysis, so
+        it is passed empty and ``bump_skill_candidate`` keeps the real one.
+        """
+        plan = "" if state.from_cache else state.plan
+
+        candidates = []
+        try:
+            recurring = await asyncio.to_thread(promotion.record_success, state.instruction, columns, plan, state.code)
+            if recurring:
+                candidates.append(recurring)
+
+            if state.retry_count > 0 and state.failed_code:
+                recovery = await asyncio.to_thread(
+                    promotion.record_recovery, state.instruction, columns, state.plan, state.code
+                )
+                if recovery:
+                    candidates.append(recovery)
+        except Exception as exc:
+            # Bookkeeping never costs a turn that already produced an answer.
+            logger.error("Could not record a skill candidate", error=str(exc))
+            return
+
+        for candidate in candidates:
+            await emit(emitter, EventType.SKILL_CANDIDATE, **candidate.to_dict())
+
     async def _finalize(self, state: RunState, session: Session, emitter: Emitter | None):
         """Persists what was learned and emits the terminal event."""
         columns = [str(c) for c in session.df.columns] if session.df is not None else []
@@ -1576,6 +1703,20 @@ class AnalysisOrchestrator:
                     logger.info("Recorded a failure-recovery trajectory")
                 except Exception as exc:
                     logger.error("Could not record trajectory", error=str(exc))
+
+            await self._note_promotion(state, columns, emitter)
+
+        # Outside the success branch on purpose: a skill informed the plan whether
+        # or not the code that followed it worked, and a browser that only counted
+        # the wins would misreport a skill that is reached for and keeps failing --
+        # which is exactly the one worth finding.
+        if state.skills_used:
+            try:
+                from src.core.database import db_mgr
+
+                await asyncio.to_thread(db_mgr.record_skill_usage, state.skills_used, state.instruction)
+            except Exception as exc:
+                logger.error("Could not record skill usage", error=str(exc))
 
         script = self._write_script(state, session)
         if script:
@@ -1619,6 +1760,7 @@ class AnalysisOrchestrator:
             grounding=state.grounding.to_dict(),
             verification=state.verification,
             usage=state.usage,
+            skills_used=state.skills_used,
         )
 
     @staticmethod
@@ -1701,6 +1843,7 @@ class AnalysisOrchestrator:
             verification=state.verification,
             grounding=state.grounding.to_dict(),
             usage=state.usage,
+            skills_used=state.skills_used,
         )
 
 

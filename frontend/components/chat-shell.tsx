@@ -73,8 +73,16 @@ export function ChatShell() {
     }
   }, [])
 
-  const { messages, connection, isRunning, sendMessage, respondToApproval, cancel, clear } =
-    useChatStream({ onArtifact })
+  const {
+    messages,
+    connection,
+    isRunning,
+    sendMessage,
+    respondToApproval,
+    clearSkillCandidate,
+    cancel,
+    clear,
+  } = useChatStream({ onArtifact })
 
   const refreshSession = useCallback(async () => {
     try {
@@ -256,6 +264,7 @@ export function ChatShell() {
                   message={message}
                   onApprove={respondToApproval}
                   onOpenArtifact={onArtifact}
+                  onSkillCandidateSettled={clearSkillCandidate}
                 />
               ))
             )}

@@ -280,6 +280,86 @@ async def test_the_worker_prompt_honours_the_tier_column_budget(
     assert 0 < mentioned <= 25, mentioned
 
 
+# --------------------------------------------------------------------------- #
+# What a skill is allowed to cost
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def skill():
+    """One installed skill, matched by the instruction these tests use."""
+    from src.core.skills.registry import skill_registry
+
+    body = "\n\n".join(f"Paragraph {index} about summing a column and its total." for index in range(60))
+    skill_registry.write("summing", "How to sum a column correctly", body)
+    yield skill_registry.get("summing")
+    skill_registry.delete("summing")
+
+
+async def test_a_skill_costs_no_extra_round_trip(loaded_session: Session, recording_llm, tier, skill) -> None:
+    """Retrieval is a ranking over local files, not a question put to a model.
+
+    A compact turn is still three calls with a skill installed. If this ever
+    becomes four, skills have started costing what the decision round-trip was
+    removed for.
+    """
+    tier("compact")
+    stub = recording_llm(["1. Sum column A.", CODE, "The sum is 15."])
+
+    result, _ = await _run(loaded_session, stub, instruction="sum column A and report the total")
+
+    assert result.status == "completed"
+    assert len(stub.calls) == 3, [call["role"] for call in stub.calls]
+    assert result.skills_used == ["summing"]
+
+
+async def test_the_skill_block_reaches_the_planner_and_nothing_else(
+    loaded_session: Session, recording_llm, tier, skill
+) -> None:
+    """The whole injection-point decision, pinned.
+
+    The worker prompt is rebuilt on every iteration *and* every correction retry,
+    so a block there is paid for N times per turn rather than once. The decision
+    and answer prompts already carry the plan, which is what the skill informed --
+    letting the body ride along in `state.plan` would be the `<think>`-tag defect
+    again, in a different shape.
+    """
+    tier("balanced")
+    stub = recording_llm(
+        ["1. Sum column A.", CODE, "ACTION: answer\nGOAL: report it", "```python\nprint('VERIFIED: 15')\n```", "15."]
+    )
+
+    await _run(loaded_session, stub, instruction="sum column A and report the total")
+
+    assert "<skills>" in stub.prompts[0]
+    for prompt in stub.prompts[1:]:
+        assert "<skills>" not in prompt
+
+
+async def test_the_skill_block_cannot_exceed_its_budget(
+    loaded_session: Session, recording_llm, tier, skill, monkeypatch
+) -> None:
+    """A long skill must not push the schema and the question out of a small
+    model's context. The cap covers the block whole, headings included."""
+    monkeypatch.setattr(settings, "SKILLS_MAX_CHARS", 600)
+    tier("compact")
+    stub = recording_llm(["1. Sum column A.", CODE, "The sum is 15."])
+
+    await _run(loaded_session, stub, instruction="sum column A and report the total")
+
+    prompt = stub.prompts[0]
+    block = prompt[prompt.index("<skills>") : prompt.index("</skills>") + len("</skills>")]
+    assert len(block) <= 600
+
+
+async def test_a_question_matching_no_skill_pays_nothing(loaded_session: Session, recording_llm, tier, skill) -> None:
+    tier("compact")
+    stub = recording_llm(["1. Go.", CODE, "Done."])
+
+    result, _ = await _run(loaded_session, stub, instruction="what is the capital of France")
+
+    assert "<skills>" not in stub.prompts[0]
+    assert result.skills_used == []
+
+
 def test_a_clean_frame_costs_no_model_call_to_clean(simple_df: pd.DataFrame) -> None:
     """Every upload bought a worker round-trip and a sandbox execution.
 

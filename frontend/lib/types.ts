@@ -32,6 +32,10 @@ export type EventType =
   | "plan_revised"
   | "assumption"
   | "verification"
+  // Which skill informed the turn, and whether an analysis has recurred often
+  // enough to be worth naming. Both additive.
+  | "skill"
+  | "skill_candidate"
   // What the turn cost. Only emitted when a cloud model was involved.
   | "usage"
 
@@ -166,6 +170,91 @@ export interface ChatMessage {
   /** Which budget tier the run was sized to — compact, balanced or full. */
   tier?: string
   mode?: AnalysisMode
+  /** Skills that informed this turn, in the order they were used. */
+  skillsUsed: SkillUse[]
+  /** An offer to save this analysis as a named skill. Never more than one is
+   *  shown at a time; dismissing it is persisted server-side. */
+  skillCandidate?: SkillCandidate | null
+  /** The question this answer was produced for. Carried on the answer rather
+   *  than looked up by walking backwards through the list, so "save this
+   *  analysis as a skill" cannot attach itself to the wrong turn. */
+  instruction?: string
+}
+
+/** One skill the agent consulted, as the `skill` frame reports it. */
+export interface SkillUse {
+  name: string
+  description?: string
+  layer: SkillLayer
+  score?: number
+  phase?: string
+}
+
+export type SkillLayer = "builtin" | "user" | "project"
+
+export interface SkillCandidate {
+  id: number
+  kind: "recurring" | "recovery"
+  label: string
+  instruction: string
+  occurrences: number
+  threshold: number
+  suggested_name: string
+  plan?: string
+  code?: string
+}
+
+export interface SkillSummary {
+  name: string
+  description: string
+  layer: SkillLayer
+  layer_label: string
+  path: string
+  tags: string[]
+  version: string
+  chars: number
+  chunks: number
+  /** False for built-in skills, which live in the checkout and would lose an
+   *  edit on the next update. The UI shows the reason, not a dead control. */
+  writable: boolean
+  source_url: string | null
+  pinned_sha: string | null
+  /** Which layer overrides this one, when a more specific layer defines the
+   *  same name. Without it, editing the shadowed copy looks like a no-op. */
+  shadowed_by: string | null
+  /** How many analyses this skill informed. The `skill` frame answers this
+   *  during a turn; by the time /skills is open that frame is gone. */
+  uses: number
+  last_used: number | null
+}
+
+export interface SkillDetail extends SkillSummary {
+  body: string
+  recent_uses: { instruction: string; timestamp: number }[]
+}
+
+export interface SkillRoot {
+  layer: SkillLayer
+  label: string
+  path: string
+  writable: boolean
+}
+
+export interface SkillListResponse {
+  skills: SkillSummary[]
+  roots: SkillRoot[]
+  candidates: SkillCandidate[]
+  enabled: boolean
+}
+
+export interface SkillDraft {
+  name: string
+  description: string
+  body: string
+  /** Null when the draft came from a question with no recorded candidate — the
+   *  client passes it straight back, and the backend only settles a real one. */
+  candidate_id?: number | null
+  candidate: SkillCandidate | null
 }
 
 /**

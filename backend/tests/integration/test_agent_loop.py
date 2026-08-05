@@ -18,6 +18,7 @@ from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
 from src.core.ingest.documents import ContextDocument, DocumentChunk
 from src.core.session import Session
+from src.core.skills.registry import skill_registry
 
 
 def kinds(collector: EventCollector) -> list[str]:
@@ -268,9 +269,14 @@ async def test_consult_retrieves_from_attached_documents(loaded_session: Session
     assert "rules.md" in consulted
 
 
-async def test_consult_is_not_offered_without_documents(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+async def test_consult_is_not_offered_with_nothing_to_consult(loaded_session: Session, stub_llm) -> None:  # noqa: F811
     """An action that cannot succeed must not be on the menu — a small model
-    will pick it, waste the iteration and learn nothing."""
+    will pick it, waste the iteration and learn nothing.
+
+    ``consult`` now has two corpora, so this needs both empty: no documents
+    attached, and no skills installed (the suite pins both derived skill roots to
+    empty temp directories).
+    """
     stub_llm(
         [
             "1. Go",
@@ -287,6 +293,134 @@ async def test_consult_is_not_offered_without_documents(loaded_session: Session,
     await orchestrator.run(session=loaded_session, instruction="analyse", mode="auto", emitter=collector)
 
     assert "consult" not in actions(collector)
+
+
+# --------------------------------------------------------------------------- #
+# Skills
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def installed_skill():
+    """One skill in the user layer, gone again afterwards."""
+    skill_registry.write(
+        "cohort-method",
+        "How to compute cohort retention",
+        "Anchor the cohort on the first purchase date, never on a recurring event.",
+    )
+    yield skill_registry.get("cohort-method")
+    skill_registry.delete("cohort-method")
+
+
+async def test_a_matching_skill_reaches_the_planning_prompt(
+    loaded_session: Session,  # noqa: F811
+    stub_llm,
+    installed_skill,
+) -> None:
+    """The mechanism behind the milestone: know-how the user wrote informs the
+    plan, without an extra round-trip to discover it."""
+    stub = stub_llm(["1. Compute retention", "```python\nprint(1)\n```", "```python\npass\n```", "Done."])
+    collector = EventCollector()
+
+    result = await orchestrator.run(
+        session=loaded_session,
+        instruction="compute cohort retention for the signup cohorts",
+        mode="fast",
+        emitter=collector,
+    )
+
+    assert "<skills>" in stub.prompts[0]
+    assert "Anchor the cohort on the first purchase date" in stub.prompts[0]
+    assert result.skills_used == ["cohort-method"]
+
+
+async def test_the_skill_is_named_on_a_frame_not_just_in_a_prompt(
+    loaded_session: Session,  # noqa: F811
+    stub_llm,
+    installed_skill,
+) -> None:
+    """Acceptance criterion 1. A prompt nobody sees cannot be how the agent
+    "names which skill informed a decision"."""
+    stub_llm(["1. Go", "```python\nprint(1)\n```", "```python\npass\n```", "Done."])
+    collector = EventCollector()
+
+    await orchestrator.run(
+        session=loaded_session, instruction="cohort retention by signup date", mode="fast", emitter=collector
+    )
+
+    frames = collector.of_type(EventType.SKILL)
+    assert [frame.data["name"] for frame in frames] == ["cohort-method"]
+    assert frames[0].data["layer"] == "user"
+    assert frames[0].data["score"] > 0
+
+
+async def test_an_unrelated_question_gets_no_skill_block(
+    loaded_session: Session,  # noqa: F811
+    stub_llm,
+    installed_skill,
+) -> None:
+    """Prompt budget is only spent when something actually matched."""
+    stub = stub_llm(["1. Go", "```python\nprint(1)\n```", "```python\npass\n```", "Done."])
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="what is the capital of France", mode="fast", emitter=EventCollector()
+    )
+
+    assert "<skills>" not in stub.prompts[0]
+    assert result.skills_used == []
+
+
+async def test_consult_is_offered_with_skills_and_no_documents(
+    loaded_session: Session,  # noqa: F811
+    stub_llm,
+    installed_skill,
+) -> None:
+    """The usual shape of a fresh install: nothing uploaded, skills present.
+
+    Before this, ``consult`` was gated on documents alone, so the installed
+    skills were unreachable through the action the milestone says they should be
+    consulted by.
+    """
+    stub_llm(
+        [
+            "1. Go",
+            "```python\nprint(1)\n```",
+            "ACTION: consult\nGOAL: how do I anchor a cohort",
+            "ACTION: answer\nGOAL: done",
+            "```python\npass\n```",
+            "Done.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="cohort retention analysis", mode="auto", emitter=collector
+    )
+
+    assert "consult" in actions(collector)
+    consulted = collector.of_type(EventType.OBSERVATION)[1].data["summary"]
+    assert "From skill `cohort-method`" in consulted
+    assert "first purchase date" in consulted
+    assert "cohort-method" in result.skills_used
+
+
+async def test_a_recurring_analysis_is_offered_for_promotion(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Nothing is written — the frame is an offer, and the file only appears when
+    the user confirms."""
+    collector = EventCollector()
+    for _ in range(settings.SKILL_PROMOTION_THRESHOLD):
+        stub_llm(["1. Go", "```python\nprint('total', 42)\n```", "```python\npass\n```", "The total is 42."])
+        collector = EventCollector()
+        await orchestrator.run(
+            session=loaded_session,
+            instruction="break the revenue down by region",
+            mode="fast",
+            emitter=collector,
+        )
+
+    offers = collector.of_type(EventType.SKILL_CANDIDATE)
+    assert len(offers) == 1
+    assert offers[0].data["occurrences"] == settings.SKILL_PROMOTION_THRESHOLD
+    assert offers[0].data["kind"] == "recurring"
+    assert skill_registry.get(offers[0].data["suggested_name"]) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -526,3 +660,43 @@ def test_inspect_reports_the_other_tables(session: Session) -> None:
 def test_inspection_detail_follows_the_goal(loaded_session: Session, goal: str, expected: str) -> None:
     """`inspect` is only worth an iteration if it answers the question asked."""
     assert expected in loaded_session.inspect(goal).lower() or expected in loaded_session.inspect(goal)
+
+
+async def test_a_used_skill_is_recorded_for_the_browser(
+    loaded_session: Session,  # noqa: F811
+    stub_llm,
+    installed_skill,
+) -> None:
+    """The `skill` frame is live and gone once the turn ends; the milestone's
+    browser has to answer "which analyses used this" later."""
+    from src.core.database import db_mgr
+
+    stub_llm(["1. Go", "```python\nprint(1)\n```", "```python\npass\n```", "Done."])
+
+    await orchestrator.run(
+        session=loaded_session, instruction="cohort retention by signup date", mode="fast", emitter=EventCollector()
+    )
+
+    assert db_mgr.skill_usage_summary()["cohort-method"]["uses"] == 1
+    assert db_mgr.get_skill_usage("cohort-method")[0]["instruction"] == "cohort retention by signup date"
+
+
+async def test_usage_is_recorded_even_when_the_turn_fails(
+    loaded_session: Session,  # noqa: F811
+    stub_llm,
+    installed_skill,
+) -> None:
+    """A skill informed the plan whether or not the code that followed worked.
+
+    Counting only the wins would misreport the skill that is reached for and
+    keeps failing, which is exactly the one worth finding.
+    """
+    from src.core.database import db_mgr
+
+    stub_llm(["1. Go", "```python\nimport os\n```", "```python\nimport os\n```", "Done."])
+
+    await orchestrator.run(
+        session=loaded_session, instruction="cohort retention by signup date", mode="fast", emitter=EventCollector()
+    )
+
+    assert db_mgr.skill_usage_summary().get("cohort-method", {}).get("uses") == 1

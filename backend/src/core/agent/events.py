@@ -48,6 +48,14 @@ class EventType(StrEnum):
     PLAN_REVISED = "plan_revised"  # {plan, why}
     ASSUMPTION = "assumption"  # {text, kind}
     VERIFICATION = "verification"  # {status, detail}
+    #: Which skill informed this turn. Emitted rather than left implicit in a
+    #: prompt nobody sees: "the agent can name which skill informed a decision"
+    #: is a Milestone 5 acceptance criterion, and a frame is the only way it can
+    #: be true on screen rather than by inference.
+    SKILL = "skill"  # {name, layer, score, phase}
+    #: An analysis has recurred enough times to be worth naming. Carries the
+    #: offer only -- nothing is written until the user confirms.
+    SKILL_CANDIDATE = "skill_candidate"  # {id, kind, label, instruction, occurrences, suggested_name}
     #: What the turn cost. Absent under local-only, where there is no meter.
     USAGE = "usage"  # {calls, total_tokens, cost_usd, any_cloud, estimated}
 

@@ -464,8 +464,17 @@ def create_planning_prompt(
     history: str = "",
     max_columns: int | None = None,
     redact: bool = False,
+    skills: str = "",
 ) -> str:
-    """Manager prompt: produce a plan, not code."""
+    """Manager prompt: produce a plan, not code.
+
+    ``skills`` is the retrieved know-how block, rendered by
+    :meth:`SkillRegistry.render_block` and already capped. **This is the only
+    prompt it reaches.** The worker prompt is rebuilt on every iteration and again
+    on every correction retry, so a block there would be paid for N times per
+    turn; the decision and answer prompts already carry the plan, which is what
+    the skill informed. A regression test pins that.
+    """
     context = generate_system_context(
         df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns, redact=redact
     )
@@ -484,7 +493,7 @@ You are a fast data analysis planner. Produce a terse, numbered implementation p
 </role>
 
 {context}
-{history}{revision_block}
+{skills}{history}{revision_block}
 <user_request>
 {instruction}
 </user_request>
@@ -499,7 +508,7 @@ coding engine implements it. You never write code yourself.
 </role>
 
 {context}
-{memory_context}{history}{revision_block}
+{skills}{memory_context}{history}{revision_block}
 <user_request>
 {instruction}
 </user_request>
@@ -563,7 +572,7 @@ def create_decision_prompt(
     menu = {
         "inspect": "inspect  — look at the data (schema, distributions, nulls, sample rows). Costs nothing.",
         "code": "code     — write and run Python for one concrete sub-task.",
-        "consult": "consult  — search the attached reference documents for a definition or rule.",
+        "consult": "consult  — search the reference documents and installed skills for a definition, rule or method.",
         "reflect": "reflect  — revise the plan because what you found changed the problem.",
         "answer": "answer   — you have enough to answer the question. Stop and write it.",
     }
