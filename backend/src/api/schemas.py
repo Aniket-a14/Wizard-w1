@@ -502,8 +502,14 @@ class SkillSummary(BaseModel):
     #: edit on the next update. The UI renders the reason rather than a disabled
     #: control with no explanation.
     writable: bool = True
+    #: Provenance, present only for a skill installed from a repository. It comes
+    #: from the local install index, never from the skill file's own frontmatter —
+    #: a fetched file describing its own origin is a claim, not a record.
     source_url: str | None = None
+    source_ref: str | None = None
     pinned_sha: str | None = None
+    installed_at: float | None = None
+    updated_at: float | None = None
     #: Which layer overrides this one, when a more specific layer defines the
     #: same name. Without it, editing the shadowed copy appears to do nothing.
     shadowed_by: str | None = None
@@ -535,6 +541,51 @@ class SkillListResponse(BaseModel):
     roots: list[SkillRoot] = Field(default_factory=list)
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     enabled: bool = True
+    #: Skills fetched from a repository and awaiting review. They are on disk but
+    #: in a directory the registry does not scan, so nothing here is reachable by
+    #: the agent — which is the point of listing them separately.
+    pending: list[dict[str, Any]] = Field(default_factory=list)
+    #: Where installs are fetched from, and whether a token is saved. The token
+    #: itself is never returned by any route.
+    registry: dict[str, Any] = Field(default_factory=dict)
+
+
+class SkillInstallRequest(BaseModel):
+    """A GitHub repository or gist URL to fetch skills from."""
+
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class SkillInstallPreviewResponse(BaseModel):
+    """What was fetched, pinned, and staged — with nothing yet installed."""
+
+    pending: list[dict[str, Any]] = Field(default_factory=list)
+    sha: str = ""
+    short_sha: str = ""
+    source: dict[str, Any] = Field(default_factory=dict)
+    message: str = ""
+
+
+class SkillPendingListResponse(BaseModel):
+    pending: list[dict[str, Any]] = Field(default_factory=list)
+    root: str = ""
+
+
+class SkillUpdateRequest(BaseModel):
+    """Whether to apply the update or only report what it would change.
+
+    Defaults to *reporting*. "Pin, don't track" means an installed skill changes
+    only when someone says so, and a request that applies by default would make
+    the diff a courtesy rather than a step.
+    """
+
+    apply: bool = False
+
+
+class GitHubTokenRequest(BaseModel):
+    """A personal access token, or an empty string to remove the stored one."""
+
+    token: str = Field(default="", max_length=512)
 
 
 class SkillWriteRequest(BaseModel):

@@ -217,8 +217,14 @@ export interface SkillSummary {
   /** False for built-in skills, which live in the checkout and would lose an
    *  edit on the next update. The UI shows the reason, not a dead control. */
   writable: boolean
+  /** Provenance, present only for a skill installed from a repository. It comes
+   *  from the local install index, never from the skill file's own frontmatter —
+   *  a fetched file describing its own origin is a claim, not a record. */
   source_url: string | null
+  source_ref: string | null
   pinned_sha: string | null
+  installed_at: number | null
+  updated_at: number | null
   /** Which layer overrides this one, when a more specific layer defines the
    *  same name. Without it, editing the shadowed copy looks like a no-op. */
   shadowed_by: string | null
@@ -245,6 +251,71 @@ export interface SkillListResponse {
   roots: SkillRoot[]
   candidates: SkillCandidate[]
   enabled: boolean
+  pending: PendingSkill[]
+  registry: SkillRegistryStatus
+}
+
+export interface SkillRegistryStatus {
+  api_root: string
+  /** Whether a GitHub token is stored. The token itself is never returned. */
+  token_saved: boolean
+  pending_root: string
+}
+
+export interface SkillSource {
+  kind: "repo" | "gist"
+  owner: string
+  repo: string
+  ref: string
+  path: string
+  gist_id: string
+  url: string
+  slug: string
+}
+
+/**
+ * A skill fetched from a repository and waiting to be read.
+ *
+ * It is on disk but in a directory the registry does not scan, so nothing here
+ * is reachable by the agent. That is the whole point of the state existing:
+ * "never silent-install-and-run" means there is a moment where the contents are
+ * on screen and the file is inert.
+ */
+export interface PendingSkill {
+  id: string
+  name: string
+  description: string
+  body: string
+  chars: number
+  source: SkillSource
+  sha: string
+  short_sha: string
+  staged_at: number
+  /** An installed skill of the same name, if one exists. Shown before install,
+   *  because finding out afterwards means wondering why nothing changed. */
+  conflicts_with: string | null
+  conflict_layer: SkillLayer | null
+}
+
+export interface SkillInstallPreview {
+  pending: PendingSkill[]
+  sha: string
+  short_sha: string
+  source: Partial<SkillSource>
+  message: string
+}
+
+export interface SkillUpdateResult {
+  name: string
+  changed: boolean
+  sha: string
+  short_sha: string
+  previous_sha: string
+  previous_short_sha: string
+  /** A unified diff against the file on disk. Empty when nothing changed. */
+  diff: string
+  applied: boolean
+  message: string
 }
 
 export interface SkillDraft {

@@ -216,6 +216,52 @@ def describe_categories() -> list[dict[str, object]]:
     ]
 
 
+@dataclass(frozen=True)
+class Ruling:
+    """Whether a gated action may proceed over HTTP, and why not if it may not."""
+
+    allowed: bool
+    reason: str = ""
+
+
+def authorize(permissions: PermissionState, category: str, subject: str) -> Ruling:
+    """Applies the permission profile to a **user-initiated** action.
+
+    ``orchestrator._permit`` is the gate for an action the *agent* chose: it has a
+    ``RunState``, an emitter and a socket, so it can suspend the turn and ask. A
+    user clicking a button has none of those. Calling the broker anyway would not
+    fail outright -- it would do something worse: emit the question to nobody,
+    wait out ``AGENT_CONSENT_TIMEOUT``, and return a denial nobody declined.
+
+    So this is the REST-shaped sibling, and the rule it adds is one line:
+
+        **an authenticated request from the user is itself the answer to an `ask`.**
+
+    Asking someone to confirm the button they just pressed is theatre, and worse,
+    it is training -- the fastest way to get a real prompt clicked through is to
+    show three meaningless ones first. ``deny`` stays terminal, because it is a
+    real third state and not a stronger flavour of ``ask``.
+
+    The grant is recorded when it proceeds, which is what stops the *agent* being
+    asked again about the same subject later in the session: the user has already
+    answered, in the only way HTTP offers.
+
+    Lives here rather than beside its first caller. It arrived with Milestone 4's
+    connectors and reads only a ``PermissionState``; Milestone 6's skill install
+    is the second caller, which is the point at which a helper belongs with the
+    thing it operates on rather than with whoever needed it first.
+    """
+    if permissions.granted(category, subject):
+        return Ruling(allowed=True)
+
+    ruling = permissions.ruling_for(category)
+    if ruling == "deny":
+        return Ruling(allowed=False, reason=denial_reason(category, subject, asked=False))
+
+    permissions.grant(category, subject)
+    return Ruling(allowed=True)
+
+
 def denial_reason(category_key: str, subject: str = "", *, asked: bool) -> str:
     """Why an action did not happen, in words the user can act on."""
     category = _BY_KEY.get(category_key)
@@ -246,6 +292,8 @@ __all__ = [
     "RULINGS",
     "PermissionCategory",
     "PermissionState",
+    "Ruling",
+    "authorize",
     "category_by_key",
     "denial_reason",
     "describe_categories",

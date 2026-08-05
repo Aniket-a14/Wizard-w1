@@ -155,6 +155,14 @@ class SkillRegistry:
                     shadowed.append(previous)
                 resolved[skill.name] = skill
 
+        # Provenance is stamped on here rather than read out of each file's own
+        # frontmatter, because Milestone 6 fetches those files from strangers and
+        # a claim written by the payload is not a record. The index is a file this
+        # machine wrote. See `skills/index.py`.
+        from .index import install_index
+
+        install_index.overlay([*resolved.values(), *shadowed])
+
         if resolved:
             logger.info("Skills loaded", count=len(resolved), shadowed=len(shadowed))
         return resolved, shadowed

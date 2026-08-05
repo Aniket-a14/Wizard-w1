@@ -60,6 +60,18 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def offending_names(names: list[str]) -> list[str]:
+    """Which of these filenames make a skill a code bundle rather than instructions.
+
+    The rule itself, separated from where the names came from. Milestone 6 applies
+    it to a **directory listing fetched from GitHub, before any content is
+    downloaded** -- so the same function decides for a skill on disk and for one
+    still on a stranger's server. Two implementations of a security boundary is
+    two chances for them to stop agreeing.
+    """
+    return [name for name in names if Path(name).suffix.lower() in EXECUTABLE_SUFFIXES]
+
+
 def executable_payload(directory: Path) -> list[str]:
     """Names any script shipped alongside a skill's instructions.
 
@@ -67,14 +79,11 @@ def executable_payload(directory: Path) -> list[str]:
     the problem -- "contains executable files" sends someone hunting through a
     directory they did not write.
     """
-    found: list[str] = []
     try:
-        for entry in sorted(directory.rglob("*")):
-            if entry.is_file() and entry.suffix.lower() in EXECUTABLE_SUFFIXES:
-                found.append(str(entry.relative_to(directory)))
+        entries = [str(entry.relative_to(directory)) for entry in sorted(directory.rglob("*")) if entry.is_file()]
     except OSError as exc:
         raise InvalidSkill(f"Could not read the skill directory: {exc}") from exc
-    return found
+    return offending_names(entries)
 
 
 def skill_paths(root: Path) -> list[Path]:
@@ -145,6 +154,12 @@ def load_skill(path: Path, layer: SkillLayer, *, embed: bool = True) -> Skill:
     if isinstance(tags, str):
         tags = [tags]
 
+    # `source_url` and `pinned_sha` are deliberately *not* read from the
+    # frontmatter, though they are fields on `Skill`. Milestone 6 fetches this
+    # file from a stranger's repository, and a provenance claim written by the
+    # payload is not provenance: a hostile SKILL.md could assert any commit it
+    # liked and the UI would render an unearned badge beside it. They are stamped
+    # on afterwards by `install_index.overlay`, from a file this machine wrote.
     skill = Skill(
         name=name,
         description=description,
@@ -153,8 +168,6 @@ def load_skill(path: Path, layer: SkillLayer, *, embed: bool = True) -> Skill:
         path=str(source),
         tags=[str(tag).strip() for tag in tags if str(tag).strip()],
         version=str(data.get("version") or "").strip(),
-        source_url=str(data.get("source_url")).strip() if data.get("source_url") else None,
-        pinned_sha=str(data.get("pinned_sha")).strip() if data.get("pinned_sha") else None,
     )
 
     if embed:
@@ -194,6 +207,7 @@ __all__ = [
     "MARKDOWN_SUFFIXES",
     "executable_payload",
     "load_skill",
+    "offending_names",
     "render_skill_file",
     "skill_paths",
 ]
