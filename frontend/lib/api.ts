@@ -7,8 +7,12 @@
  */
 
 import type {
+  ConnectionSummary,
+  ConnectionTarget,
+  ConnectorKind,
   DataMode,
   DataModeInfo,
+  DatasetSummary,
   DocumentSummary,
   ModelDownloadState,
   ModelDownloadsResponse,
@@ -248,6 +252,97 @@ export const api = {
     request<{ message: string }>(`/api/datasets/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+
+  /**
+   * Connections are ingest sources parallel to file upload — a table imported
+   * from one lands in `datasets` exactly as an uploaded CSV does. Listing is
+   * network-free: it reports what is configured and which drivers are present,
+   * and probes nothing, because it renders on every page load.
+   */
+  connections: () =>
+    request<{ connections: ConnectionSummary[]; kinds: ConnectorKind[] }>(
+      "/api/connections",
+    ),
+
+  createConnection: (body: {
+    name: string
+    kind: string
+    options: Record<string, string>
+    secret?: string
+  }) =>
+    request<ConnectionSummary>("/api/connections", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /**
+   * Edits in place rather than delete-and-recreate: recreating would drop the
+   * stored secret, every table imported from it, the per-source data policy and
+   * the write-back opt-in. Omitting `secret` leaves the stored one alone.
+   */
+  updateConnection: (
+    id: string,
+    body: { name: string; kind: string; options: Record<string, string>; secret?: string },
+  ) =>
+    request<ConnectionSummary>(`/api/connections/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  deleteConnection: (id: string) =>
+    request<{ message: string }>(`/api/connections/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+
+  testConnection: (id: string) =>
+    request<{ ok: boolean; detail: string }>(
+      `/api/connections/${encodeURIComponent(id)}/test`,
+      { method: "POST" },
+    ),
+
+  /**
+   * A POST because it opens a connection to the source. As a GET it slipped past
+   * the rate limiter, which only covers mutating methods — and the reason that
+   * limiter covers connections at all is that the cost lands on someone else's
+   * database.
+   */
+  connectionSchema: (id: string) =>
+    request<{ targets: ConnectionTarget[] }>(
+      `/api/connections/${encodeURIComponent(id)}/schema`,
+      { method: "POST" },
+    ),
+
+  importFromConnection: (id: string, target: string, makeActive = true) =>
+    request<{
+      message: string
+      dataset: DatasetSummary
+      truncated: boolean
+      session_id: string
+    }>(`/api/connections/${encodeURIComponent(id)}/import`, {
+      method: "POST",
+      body: JSON.stringify({ target, make_active: makeActive }),
+    }),
+
+  /**
+   * Writes a session table back to the source. Separate from `setWriteBack`:
+   * that one says this connection *may* be written to at all, this one is a
+   * write. Every session is still asked the first time.
+   */
+  writeToConnection: (id: string, dataset: string, target: string) =>
+    request<{ ok: boolean; detail: string }>(
+      `/api/connections/${encodeURIComponent(id)}/write`,
+      { method: "POST", body: JSON.stringify({ dataset, target }) },
+    ),
+
+  /**
+   * Enabling requires the connection's own name typed back. Write-back is the
+   * one decision here whose consequences land outside this machine.
+   */
+  setWriteBack: (id: string, enable: boolean, confirm: string) =>
+    request<ConnectionSummary>(
+      `/api/connections/${encodeURIComponent(id)}/write-back`,
+      { method: "POST", body: JSON.stringify({ enable, confirm }) },
+    ),
 
   preview: (params: {
     page?: number

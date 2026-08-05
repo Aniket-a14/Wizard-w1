@@ -80,14 +80,12 @@ CATEGORIES: tuple[PermissionCategory, ...] = (
         key="db_connect",
         label="Connect to a database",
         description="Open a read connection to an external database or warehouse.",
-        live=False,
     ),
     PermissionCategory(
         key="db_write",
         label="Write to a database",
         description="Modify data in an external database or warehouse.",
         always_ask=True,
-        live=False,
     ),
     PermissionCategory(
         key="tool_use",

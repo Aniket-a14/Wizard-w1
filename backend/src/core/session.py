@@ -51,6 +51,10 @@ class DatasetHandle:
     profile: dict[str, Any] = field(default_factory=dict)
     source_format: str = "csv"
     loaded_at: float = field(default_factory=time.time)
+    #: The connection this table came from, or `""` for an uploaded file. Carried
+    #: so one data-policy decision can cover every table from a source, including
+    #: tables imported later — see `DataPolicy.schema_only_for`.
+    origin: str = ""
 
     @property
     def table_key(self) -> str:
@@ -74,6 +78,7 @@ class DatasetHandle:
             "source_format": self.source_format,
             "profile": self.profile,
             "loaded_at": self.loaded_at,
+            "origin": self.origin,
         }
 
 

@@ -330,6 +330,8 @@ class DatasetSummary(BaseModel):
     source_format: str
     profile: dict[str, Any] = Field(default_factory=dict)
     loaded_at: float
+    #: The connection this table was imported from, or `""` for an uploaded file.
+    origin: str = ""
 
 
 class UploadResponse(BaseModel):
@@ -348,6 +350,103 @@ class PreviewResponse(BaseModel):
     total_pages: int
     columns: list[str]
     data: list[dict[str, Any]]
+
+
+# ---------------------------------------------------------------- connections --
+# A connection is an ingest source parallel to file upload. The secret half never
+# appears in any of these models: a request may carry one inbound, and no response
+# type has a field to put one in -- which is stronger than remembering to strip it.
+
+
+class ConnectorKindResponse(BaseModel):
+    kind: str
+    label: str
+    fields: list[str] = Field(default_factory=list)
+    requires_secret: bool = False
+    description: str = ""
+    #: Whether the driver is importable here. False is not an error -- it is the
+    #: reason the UI shows `install_hint` instead of a button that would fail.
+    available: bool = True
+    install_hint: str = ""
+
+
+class ConnectionSummary(BaseModel):
+    id: str
+    name: str
+    kind: str
+    options: dict[str, Any] = Field(default_factory=dict)
+    read_only: bool = True
+    created_at: float
+    #: Whether a secret is stored, never the secret. The same rule the provider
+    #: key routes follow: reading one back to render it would put it in a
+    #: response, a browser cache and a devtools log for no benefit.
+    has_secret: bool = False
+    available: bool = True
+    install_hint: str = ""
+
+
+class ConnectionRequest(BaseModel):
+    name: str
+    kind: str
+    options: dict[str, Any] = Field(default_factory=dict)
+    #: `None` means "leave the stored secret alone", which is what an edit that
+    #: did not retype the password must do. `""` means "there is no secret".
+    secret: str | None = None
+
+
+class ConnectionListResponse(BaseModel):
+    connections: list[ConnectionSummary] = Field(default_factory=list)
+    kinds: list[ConnectorKindResponse] = Field(default_factory=list)
+
+
+class ConnectionTestResponse(BaseModel):
+    ok: bool
+    detail: str = ""
+
+
+class ConnectionColumn(BaseModel):
+    name: str
+    type: str = ""
+
+
+class ConnectionTarget(BaseModel):
+    name: str
+    namespace: str = ""
+    qualified: str
+    columns: list[ConnectionColumn] = Field(default_factory=list)
+    row_estimate: int | None = None
+
+
+class ConnectionSchemaResponse(BaseModel):
+    targets: list[ConnectionTarget] = Field(default_factory=list)
+
+
+class ConnectionImportRequest(BaseModel):
+    target: str
+    make_active: bool = True
+
+
+class ConnectionImportResponse(BaseModel):
+    message: str
+    dataset: DatasetSummary
+    truncated: bool = False
+    session_id: str
+
+
+class ConnectionWriteRequest(BaseModel):
+    #: The session dataset to write, by name.
+    dataset: str
+    #: The table at the far end. Not derived from the dataset name: writing back
+    #: to a differently-named table is the ordinary case, not the exception.
+    target: str
+
+
+class WriteBackRequest(BaseModel):
+    enable: bool
+    #: The connection's own name, typed back. Write-back is described in the spec
+    #: as enabled "once, deliberately"; a decision whose blast radius is outside
+    #: this machine should cost more than one click.
+    confirm: str = ""
 
 
 #: ``auto`` lets the agent choose its own depth, ``fast`` forces a single shot,

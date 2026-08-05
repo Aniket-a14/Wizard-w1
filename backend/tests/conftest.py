@@ -68,7 +68,20 @@ os.environ.update(
         # a run should ever wait here is a bug. Two seconds fails it visibly
         # instead of stalling the run for two minutes.
         "AGENT_CONSENT_TIMEOUT": "2",
+        # Also where `connections.json` lands, so no test can read or write a
+        # developer's real saved connections either.
         "WIZARD_CONFIG_DIR": str(TEST_CONFIG_DIR),
+        # Bounds every connector import in the suite. Small, because no test
+        # needs a large frame to prove a read happened, and a ceiling nobody
+        # crosses is a ceiling nobody has tested.
+        "CONNECTOR_MAX_ROWS": "1000",
+        # A connector that somehow reaches a real host has to fail while the
+        # suite is still running, not after a driver's 30-second default. Same
+        # reasoning as the port-1 provider URLs and AGENT_CONSENT_TIMEOUT above.
+        # Note what this cannot do: no environment variable stops SQLAlchemy
+        # dialling a DSN. That guarantee comes from the suite using SQLite and a
+        # fake connector, never a networked one.
+        "CONNECTOR_TIMEOUT": "2",
         "COUNCIL_ENABLED": "false",
         "VISION_ENABLED": "false",
         "RATE_LIMIT_MAX_REQUESTS": "10000",
@@ -90,6 +103,7 @@ import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
 from src.core.agent.consent import consent_broker  # noqa: E402
+from src.core.connectors.store import connection_store  # noqa: E402
 from src.core.credentials import credential_store  # noqa: E402
 from src.core.llm.usage import usage_ledger  # noqa: E402
 from src.core.semantic_cache import semantic_cache  # noqa: E402
@@ -205,6 +219,11 @@ def _clean_database():
     semantic_cache.clear()
     usage_ledger.clear()
     credential_store.reload()
+    # Cleared, not merely reloaded. Connections persist to disk on purpose --
+    # they are configuration, not session data -- so without this a connection
+    # saved by one test is still there for the next, which sees a name conflict
+    # rather than the empty store it was written against.
+    connection_store.clear()
     consent_broker._pending.clear()
 
 

@@ -54,9 +54,19 @@ class DataPolicy:
     schema_only: bool = True
     per_dataset: dict[str, bool] = field(default_factory=dict)
 
-    def schema_only_for(self, dataset: str | None = None) -> bool:
+    def schema_only_for(self, dataset: str | None = None, origin: str | None = None) -> bool:
+        """The policy in force for one table: its own, then its source's, then the session's.
+
+        ``origin`` is the connection a table was imported from, passed
+        explicitly rather than split back out of the dataset name. A prefix test
+        would look equivalent and be wrong in a way nobody would notice: an
+        uploaded ``sales.csv`` must never inherit a policy set for a connection
+        that happens to be called ``sales``.
+        """
         if dataset and dataset in self.per_dataset:
             return self.per_dataset[dataset]
+        if origin and origin in self.per_dataset:
+            return self.per_dataset[origin]
         return self.schema_only
 
     def set_for(self, dataset: str, schema_only: bool) -> None:
@@ -127,7 +137,9 @@ def disabled_tools(mode: str) -> list[str]:
     return sorted(tool for tool in OUTBOUND_TOOLS if not tool_allowed(mode, tool))
 
 
-def should_redact(mode: str, policy: DataPolicy, provider: str, dataset: str | None = None) -> bool:
+def should_redact(
+    mode: str, policy: DataPolicy, provider: str, dataset: str | None = None, origin: str | None = None
+) -> bool:
     """Whether a prompt bound for ``provider`` must be stripped of real values.
 
     Decided per prompt from where that prompt is going, not once per session: under
@@ -141,7 +153,7 @@ def should_redact(mode: str, policy: DataPolicy, provider: str, dataset: str | N
         # helper that says "send everything" for a forbidden provider is the
         # wrong thing to leave lying around.
         return True
-    return policy.schema_only_for(dataset)
+    return policy.schema_only_for(dataset, origin)
 
 
 def describe_mode(mode: str) -> str:

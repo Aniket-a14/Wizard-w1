@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.deps import client_key, rate_limiter
-from src.api.routes import chat, datasets, meta, sandbox, sessions, workspace
+from src.api.routes import chat, connections, datasets, meta, sandbox, sessions, workspace
 from src.config import settings
 from src.core.embeddings import embedding_service
 from src.core.infra.queue import get_queue
@@ -31,7 +31,10 @@ MAINTENANCE_INTERVAL_SECONDS = 300
 
 # Paths whose cost justifies rate limiting. Read-only routes are excluded so a
 # polling UI is never throttled.
-RATE_LIMITED_PREFIXES = ("/api/chat", "/api/datasets")
+# `/api/connections` is here because an import reads a remote table, which is at
+# least as expensive as an upload -- and unlike an upload, the cost lands on
+# somebody else's database too.
+RATE_LIMITED_PREFIXES = ("/api/chat", "/api/datasets", "/api/connections")
 
 
 async def _maintenance_loop():
@@ -134,7 +137,11 @@ app.add_middleware(
     # Credentials cannot be combined with a wildcard origin; the setting object
     # resolves the two together so the combination is never invalid.
     allow_credentials=settings.cors_allow_credentials,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    # PUT is here because `PUT /api/data-mode/dataset/{name}` is what the
+    # per-source data policy control calls, cross-origin, from the frontend. It
+    # was missing, so that control's preflight failed in a browser while every
+    # test passed -- TestClient makes no preflight request.
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["X-Session-Id"],
 )
@@ -148,6 +155,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.include_router(meta.router)
 app.include_router(sessions.router)
 app.include_router(datasets.router)
+app.include_router(connections.router)
 app.include_router(workspace.router)
 app.include_router(sandbox.router)
 app.include_router(sandbox.jobs_router)

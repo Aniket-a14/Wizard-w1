@@ -473,6 +473,23 @@ class Settings(BaseSettings):
     PROFILE_SAMPLE_ROWS: int = 200_000  # rows used for profiling/catalog on big data
     PROMPT_MAX_COLUMNS: int = 60  # wide-frame guard for prompt context
 
+    # Connections (Milestone 4). An upload is bounded by MAX_UPLOAD_BYTES before
+    # anything reads it; a table is not, and `Session._materialize` writes each
+    # frame up to three times. Without a ceiling the first honest question asked
+    # of a real warehouse is an OOM in the API process -- which is not sandboxed.
+    # Truncation is reported through the dataset profile, never silent.
+    CONNECTOR_MAX_ROWS: int = 1_000_000
+    # An object store has no server-side row limit -- the smallest thing it will
+    # return is the whole object -- so CONNECTOR_MAX_ROWS cannot help: it applies
+    # after the bytes are already in memory. This is checked against the object's
+    # reported size *before* the read, which is the only point where refusing is
+    # still cheap. Mirrors MAX_UPLOAD_BYTES, which does the same job for a file.
+    CONNECTOR_MAX_OBJECT_BYTES: int = 512 * 1024 * 1024
+    # How long a connector may spend reaching a source. The drivers default to
+    # 30s or more, which is long enough that an unreachable host reads as a hang
+    # rather than as a wrong hostname.
+    CONNECTOR_TIMEOUT: int = 10
+
     # Sessions
     SESSION_TTL_SECONDS: int = 60 * 60 * 6
     SESSION_MAX_ACTIVE: int = 32

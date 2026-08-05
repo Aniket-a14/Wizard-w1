@@ -43,6 +43,12 @@ jobs:
         # a rule fails master with no code change, which is what happened when
         # UP042 (str+Enum -> StrEnum) started being reported.
         pip install "ruff==0.14.14" pytest pytest-asyncio pytest-cov
+        # SQLAlchemy is an optional dependency of the app but a required one of
+        # the suite: it is what lets the relational connector be exercised
+        # against a real database (SQLite, no server, no network). Without it
+        # every connector test skips and the reference implementation is only a
+        # docstring. A pure-Python wheel, so this costs seconds.
+        pip install "sqlalchemy>=2.0"
 
     - name: Lint
       run: |
