@@ -146,6 +146,13 @@ def test_injecting_into_a_dsn_that_already_has_one_changes_nothing() -> None:
         ({"driver": "postgresql", "host": "warehouse.example.com"}, True),
         ({"dsn": "postgresql://u@db.example.com/p"}, True),
         ({"dsn": "postgresql://u@localhost/p"}, False),
+        ({"dsn": "postgresql://u:pw@127.0.0.1:5432/p"}, False),
+        # A DSN naming no host at all is a *file*. Judged by whether a loopback
+        # name appeared anywhere in the string, these read as remote, and
+        # `local-only` refused the one connection that never leaves the machine.
+        ({"dsn": "sqlite:///tmp/local.db"}, False),
+        ({"dsn": "sqlite:////abs/path.db"}, False),
+        ({"endpoint_url": "https://s3.amazonaws.com", "bucket": "b"}, True),
         ({"bucket": "my-bucket"}, True),
         ({"endpoint_url": "http://127.0.0.1:9000", "bucket": "b"}, False),
     ],

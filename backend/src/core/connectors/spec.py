@@ -129,6 +129,19 @@ def inject_secret_into_dsn(dsn: str, secret: str) -> str:
     return urlunsplit((parsed.scheme, f"{userinfo}@{host}", parsed.path, parsed.query, parsed.fragment))
 
 
+def _hostname_of(url: str) -> str:
+    """The host a URL names, or ``""`` when it names none.
+
+    An empty answer is meaningful rather than a parse failure: ``sqlite:///x.db``
+    and a bare filesystem path both reach nothing over a network.
+    """
+    try:
+        parsed = urlsplit(url if "//" in url else f"//{url}")
+    except ValueError:
+        return ""
+    return (parsed.hostname or "").strip().lower()
+
+
 def sanitize_identifier(value: str) -> str:
     """Folds an arbitrary name to the ``[a-z0-9_]`` a table key may contain.
 
@@ -252,9 +265,17 @@ class ConnectionSpec:
         dsn = str(self.options.get("dsn") or "").strip().lower()
 
         if endpoint:
-            return not any(marker in endpoint for marker in LOOPBACK_HOSTS)
+            return _hostname_of(endpoint) not in LOOPBACK_HOSTS
         if dsn:
-            return not any(f"@{marker}" in dsn or f"//{marker}" in dsn for marker in LOOPBACK_HOSTS)
+            # Parsed rather than substring-matched, because a DSN can name no host
+            # at all: `sqlite:///data.db` is a *file*, and judging it by whether a
+            # loopback name appears in the string made every file-backed engine
+            # look remote -- so `local-only` refused the one connection that never
+            # leaves the machine.
+            parsed_host = _hostname_of(dsn)
+            if not parsed_host:
+                return False
+            return parsed_host not in LOOPBACK_HOSTS
         if host:
             return host not in LOOPBACK_HOSTS
         # No host, no endpoint, no DSN: a file-backed engine such as SQLite, or a

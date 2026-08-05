@@ -159,6 +159,7 @@ export function ConnectionsPanel({
 
       {(adding || editing) && (
         <ConnectionForm
+          key={editing?.id ?? "new"}
           kinds={kinds}
           existing={editing}
           onCancel={() => {
@@ -491,7 +492,7 @@ function ConnectionForm({
     try {
       const body = {
         name,
-        kind,
+        kind: kind,
         // Empty fields are dropped rather than stored as "": a blank host and an
         // unset host mean the same thing, and the driver reads them differently.
         options: Object.fromEntries(Object.entries(options).filter(([, value]) => value.trim())),
