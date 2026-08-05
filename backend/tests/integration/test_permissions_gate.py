@@ -268,13 +268,24 @@ async def test_the_profile_changes_consent_without_changing_depth(loaded_session
 
 
 # ------------------------------------------------------------ helpers --
-async def _await_approval(collector: EventCollector, tries: int = 200) -> list:
-    """Yields to the loop until the paused run has emitted its question."""
-    for _ in range(tries):
+async def _await_approval(collector: EventCollector, timeout: float = 5.0) -> list:
+    """Waits real time until the paused run has emitted its question.
+
+    A fixed count of ``asyncio.sleep(0)`` ticks only yields the event loop; it
+    buys the orchestrator no actual wall-clock time. The consent gate now sits
+    behind the planner's ``asyncio.to_thread(skill_registry.search, ...)``, a
+    real thread that has to be scheduled and finish before the code action --
+    and the one that requests consent -- ever runs. On a loaded CI runner that
+    can outlast 200 no-op ticks even though the run is proceeding normally, so
+    this polls against a wall-clock deadline instead.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
         frames = collector.of_type(EventType.APPROVAL_REQUIRED)
         if frames:
             return frames
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     raise AssertionError("The run never asked for consent")
 
 
