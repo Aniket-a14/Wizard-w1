@@ -26,7 +26,6 @@ import type {
   ServerEvent,
   SkillCandidate,
   SkillUse,
-  SubagentBranch,
   TrailEntry,
   Verification,
 } from "./types"
@@ -76,7 +75,6 @@ function blankAssistant(): ChatMessage {
     findings: [],
     assumptions: [],
     skillsUsed: [],
-    subagents: {},
     streaming: true,
     phase: "planning",
   }
@@ -96,103 +94,7 @@ function blankUser(content: string): ChatMessage {
     findings: [],
     assumptions: [],
     skillsUsed: [],
-    subagents: {},
   }
-}
-
-/**
- * Routes one branch-tagged frame into its own `SubagentBranch`, rather than
- * into the top-level fields the same event type would otherwise patch.
- *
- * A subagent reuses the main loop's own handlers unmodified, so it emits the
- * same event types (`action`, `observation`, `status`, `code`, `stdout`,
- * `iteration_start`) — only tagged with `branch` in the raw frame. Without
- * this, a subagent's own status line would overwrite the main thread's, and
- * two concurrent branches' `action`/`observation` frames would race on "close
- * the most recent open entry", which is only correct under strict seriality.
- * Each branch's own sequence *is* strictly serial (one loop, one task), so the
- * same matching rule the top-level trail uses is safe here, just scoped per
- * branch instead of per message.
- */
-function applyBranchEvent(message: ChatMessage, event: ServerEvent, branch: string): ChatMessage {
-  const existing = message.subagents[branch]
-  const group = String(event.group ?? existing?.group ?? "")
-  const current: SubagentBranch = existing ?? { id: branch, goal: "", group, trail: [], done: false }
-  let next: SubagentBranch = current
-
-  switch (event.type) {
-    case "subagent_start":
-      next = { ...current, goal: String(event.goal ?? ""), group }
-      break
-
-    case "subagent_end":
-      next = {
-        ...current,
-        done: true,
-        ok: Boolean(event.ok),
-        costUsd: (event.cost_usd as number | null | undefined) ?? null,
-        totalTokens: Number(event.total_tokens ?? 0),
-        calls: Number(event.calls ?? 0),
-      }
-      break
-
-    case "iteration_start":
-      next = { ...current, iteration: Number(event.n ?? 0), iterationBudget: Number(event.budget ?? 0) }
-      break
-
-    case "action": {
-      const entry: TrailEntry = {
-        id: newId(),
-        iteration: current.iteration ?? current.trail.length + 1,
-        kind: (event.kind as ActionKind) ?? "code",
-        goal: String(event.goal ?? ""),
-        rationale: (event.rationale as string) || undefined,
-        inferred: Boolean(event.inferred),
-      }
-      next = { ...current, trail: [...current.trail, entry] }
-      break
-    }
-
-    case "observation": {
-      const trail = [...current.trail]
-      for (let index = trail.length - 1; index >= 0; index -= 1) {
-        if (trail[index].observation === undefined) {
-          trail[index] = {
-            ...trail[index],
-            observation: String(event.summary ?? ""),
-            ok: Boolean(event.ok),
-            truncated: Boolean(event.truncated),
-            chars: Number(event.chars ?? 0),
-          }
-          break
-        }
-      }
-      next = { ...current, trail }
-      break
-    }
-
-    case "status":
-      next = { ...current, statusLabel: String(event.content ?? ""), phase: (event.phase as Phase) ?? current.phase }
-      break
-
-    case "code":
-      next = { ...current, code: String(event.content ?? "") }
-      break
-
-    case "stdout":
-      next = { ...current, stdout: (current.stdout ?? "") + String(event.content ?? "") }
-      break
-
-    default:
-      // step_start/step_end/assumption/etc. are not surfaced per branch --
-      // findings and assumptions still reach the top-level lists once the
-      // branch folds back into the parent's own investigation, and a
-      // branch's fine-grained code-writing/execution steps are not needed
-      // for the panel this renders.
-      break
-  }
-
-  return { ...message, subagents: { ...message.subagents, [branch]: next } }
 }
 
 /**
@@ -252,17 +154,6 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
 
   const handleEvent = useCallback(
     (event: ServerEvent) => {
-      // A branch-tagged frame never reaches the switch below: it would
-      // otherwise patch the top-level fields the same event type patches for
-      // the main thread (overwriting `code`/`stdout`/`phase` with a
-      // subagent's own, or racing another concurrent branch's `action`/
-      // `observation` pairing). See `applyBranchEvent`.
-      const branch = typeof event.branch === "string" ? event.branch : ""
-      if (branch) {
-        patchActive((message) => applyBranchEvent(message, event, branch))
-        return
-      }
-
       switch (event.type) {
         case "session": {
           const id = String(event.session_id ?? "")
@@ -388,9 +279,6 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
             goal: String(event.goal ?? ""),
             rationale: (event.rationale as string) || undefined,
             inferred: Boolean(event.inferred),
-            // Not set here: on a `parallel` entry the group id is only known
-            // once `_act_parallel` actually runs, which is after this frame
-            // fires. It arrives on the matching `observation` frame instead.
           }
           patchActive((message) => ({
             ...message,
@@ -413,10 +301,6 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
                   ok: Boolean(event.ok),
                   truncated: Boolean(event.truncated),
                   chars: Number(event.chars ?? 0),
-                  // A `parallel` entry's group is only known once the action
-                  // has actually run (the `action` frame fires before
-                  // `_act_parallel` computes one), so it arrives here instead.
-                  group: (event.group as string) || trail[index].group,
                 }
                 break
               }

@@ -77,13 +77,6 @@ class TierBudget:
     #: it if it fails, answer -- which is the shape a compact model executes well
     #: and turns a nine-call turn into a three-call one.
     allow_decisions: bool = True
-    #: Whether the model may fan a step out into isolated parallel subagents.
-    #: Off below balanced for the same reason `allow_decisions` is: choosing to
-    #: parallelize is itself a round-trip, and a compact model doesn't steer
-    #: its own loop reliably enough to be trusted with a second, nested one.
-    allow_subagents: bool = False
-    #: Ceiling on how many sub-questions one `parallel` action may spawn.
-    max_subagents: int = 0
 
 
 TIER_BUDGETS: dict[str, TierBudget] = {
@@ -107,8 +100,6 @@ TIER_BUDGETS: dict[str, TierBudget] = {
         allow_reflection=True,
         allow_verification=True,
         observation_chars=4000,
-        allow_subagents=True,
-        max_subagents=2,
     ),
     "full": TierBudget(
         tier="full",
@@ -119,8 +110,6 @@ TIER_BUDGETS: dict[str, TierBudget] = {
         allow_reflection=True,
         allow_verification=True,
         observation_chars=8000,
-        allow_subagents=True,
-        max_subagents=3,
     ),
 }
 
@@ -459,22 +448,6 @@ class Settings(BaseSettings):
     # flight finishes, because cancelling it would throw away work already paid
     # for and leave the provider mid-generation.
     AGENT_TURN_TIMEOUT: float = 300.0
-
-    # ------------------------------------------------------------------ #
-    # Subagents (Milestone 7)
-    #
-    # A `parallel` decision fans a step out into isolated child loops, each
-    # with its own process/container (the daemon protocol is single-in-flight,
-    # so real concurrency needs one runtime per branch, not multiplexed calls).
-    # Deliberately deterministic and small: no decision or verification
-    # round-trip per branch, and a cap independent of the parent's own tier.
-    # ------------------------------------------------------------------ #
-    SUBAGENT_ENABLED: bool = True
-    SUBAGENT_MAX_ITERATIONS: int = 3
-    # Wall clock for the whole fan-out, clamped to whatever's left of
-    # AGENT_TURN_TIMEOUT when that's set. A branch that hasn't finished by
-    # then contributes nothing rather than holding up the parent's own answer.
-    SUBAGENT_TIMEOUT: float = 120.0
 
     # Council review (each specialist costs an LLM round-trip)
     COUNCIL_ENABLED: bool = True

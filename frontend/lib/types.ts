@@ -38,11 +38,6 @@ export type EventType =
   | "skill_candidate"
   // What the turn cost. Only emitted when a cloud model was involved.
   | "usage"
-  // A subagent's own lifetime (Milestone 7). Everything else a branch emits
-  // reuses the types above, additively tagged with `branch` in `ServerEvent`
-  // — these two exist only to bound one branch's frames into a UI panel.
-  | "subagent_start"
-  | "subagent_end"
 
 export type Phase =
   | "idle"
@@ -56,7 +51,6 @@ export type Phase =
   | "executing"
   | "correcting"
   | "reflecting"
-  | "investigating_parallel"
   | "reviewing"
   | "verifying"
   | "answering"
@@ -64,7 +58,7 @@ export type Phase =
   | "failed"
 
 /** What the agent can spend an iteration on. */
-export type ActionKind = "inspect" | "code" | "consult" | "search" | "reflect" | "parallel" | "answer"
+export type ActionKind = "inspect" | "code" | "consult" | "search" | "reflect" | "answer"
 
 /**
  * `auto` lets the agent choose its own depth; `fast` is a single shot; `deep`
@@ -86,42 +80,6 @@ export interface TrailEntry {
   ok?: boolean
   truncated?: boolean
   chars?: number
-  /** Present only on a `parallel` entry: which `message.subagents` branches
-   *  belong to this one fan-out, since a turn can choose `parallel` more than
-   *  once. */
-  group?: string
-}
-
-/**
- * One isolated child investigation, live while its branch runs.
- *
- * A subagent reuses the same event types the main thread does — `action`,
- * `observation`, `status`, `code`, `stdout` — additively tagged with `branch`
- * in the raw frame, so this trail fills in exactly the way the top-level one
- * does, just scoped to one branch instead of the whole turn.
- */
-export interface SubagentBranch {
-  id: string
-  /** The sub-question this branch was asked to investigate. */
-  goal: string
-  /** Which `parallel` action spawned this branch — see `TrailEntry.group`. */
-  group: string
-  trail: TrailEntry[]
-  iteration?: number
-  iterationBudget?: number
-  phase?: Phase
-  statusLabel?: string
-  code?: string
-  stdout?: string
-  /** True once `subagent_end` has arrived. */
-  done: boolean
-  ok?: boolean
-  /** `null` when nothing is billable (a local model) or unpriced, never a
-   *  fabricated figure — same "report, don't invent" rule the session-wide
-   *  cost readout follows. */
-  costUsd?: number | null
-  totalTokens?: number
-  calls?: number
 }
 
 export interface Verification {
@@ -203,10 +161,6 @@ export interface ChatMessage {
   trail: TrailEntry[]
   iteration?: number
   iterationBudget?: number
-  /** Isolated child investigations spawned by a `parallel` action, keyed by
-   *  branch id (`sub1`, `sub2`, ...). Populated live as `subagent_*` and
-   *  branch-tagged frames arrive. */
-  subagents: Record<string, SubagentBranch>
   /** Facts the investigation established along the way. */
   findings: string[]
   /** Silent decisions the code made that change what the number means. */

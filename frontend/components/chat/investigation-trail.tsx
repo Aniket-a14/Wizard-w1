@@ -10,13 +10,12 @@ import {
   Loader2,
   RefreshCcw,
   Search,
-  Split,
   Table2,
   X,
 } from "lucide-react"
 import { useState } from "react"
 
-import type { ActionKind, SubagentBranch, TrailEntry } from "@/lib/types"
+import type { ActionKind, TrailEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
@@ -35,7 +34,6 @@ const ACTION_META: Record<ActionKind, { label: string; icon: typeof Code2; tone:
   consult: { label: "Consulted references", icon: BookOpen, tone: "text-brand" },
   search: { label: "Searched the web", icon: Search, tone: "text-brand" },
   reflect: { label: "Revised the plan", icon: RefreshCcw, tone: "text-warning" },
-  parallel: { label: "Investigated in parallel", icon: Split, tone: "text-brand" },
   answer: { label: "Concluded", icon: Flag, tone: "text-success" },
 }
 
@@ -44,15 +42,11 @@ export function InvestigationTrail({
   iteration,
   budget,
   streaming,
-  subagents,
 }: {
   trail: TrailEntry[]
   iteration?: number
   budget?: number
   streaming?: boolean
-  /** Isolated branches a `parallel` entry fanned out to, keyed by branch id —
-   *  see `TrailRow`, which matches them to their entry by `group`. */
-  subagents?: Record<string, SubagentBranch>
 }) {
   const [open, setOpen] = useState(false)
 
@@ -98,7 +92,7 @@ export function InvestigationTrail({
       {open && (
         <ol className="space-y-0 border-t border-border">
           {trail.map((entry, index) => (
-            <TrailRow key={entry.id} entry={entry} index={index + 1} subagents={subagents} />
+            <TrailRow key={entry.id} entry={entry} index={index + 1} />
           ))}
         </ol>
       )}
@@ -106,24 +100,12 @@ export function InvestigationTrail({
   )
 }
 
-function TrailRow({
-  entry,
-  index,
-  subagents,
-}: {
-  entry: TrailEntry
-  index: number
-  subagents?: Record<string, SubagentBranch>
-}) {
+function TrailRow({ entry, index }: { entry: TrailEntry; index: number }) {
   const [expanded, setExpanded] = useState(false)
   const meta = ACTION_META[entry.kind] ?? ACTION_META.code
   const Icon = meta.icon
-  const branches =
-    entry.kind === "parallel" && entry.group
-      ? Object.values(subagents ?? {}).filter((branch) => branch.group === entry.group)
-      : []
-  const pending = entry.observation === undefined && branches.length === 0
-  const hasDetail = Boolean(entry.observation) || branches.length > 0
+  const pending = entry.observation === undefined
+  const hasDetail = Boolean(entry.observation)
 
   return (
     <li className="border-b border-border last:border-b-0">
@@ -183,15 +165,7 @@ function TrailRow({
         )}
       </button>
 
-      {expanded && branches.length > 0 && (
-        <div className="space-y-2 px-3.5 pb-3">
-          {branches.map((branch) => (
-            <SubagentBranchPanel key={branch.id} branch={branch} />
-          ))}
-        </div>
-      )}
-
-      {expanded && branches.length === 0 && entry.observation && (
+      {expanded && entry.observation && (
         <div className="px-3.5 pb-3">
           <pre className="max-h-72 overflow-auto rounded-lg bg-muted/60 p-3 font-mono text-[11.5px] leading-relaxed">
             {entry.observation}
@@ -205,61 +179,5 @@ function TrailRow({
         </div>
       )}
     </li>
-  )
-}
-
-/**
- * One isolated branch, rendered as its own miniature trail.
- *
- * Distinguishable as a *parallel* branch rather than interleaved with the
- * main thread — that's the whole point of the panel, not just a nicety: two
- * branches ran concurrently, and showing their steps in one flat list would
- * read as if one thread produced them in that order.
- */
-function SubagentBranchPanel({ branch }: { branch: SubagentBranch }) {
-  const [expanded, setExpanded] = useState(false)
-
-  return (
-    <div className="ring-gradient overflow-hidden rounded-lg">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors duration-[var(--duration-fast)] hover:bg-muted/50"
-      >
-        <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-          {!branch.done ? (
-            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-          ) : branch.ok ? (
-            <Check className="h-3 w-3 text-success" />
-          ) : (
-            <X className="h-3 w-3 text-destructive" />
-          )}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12px] font-medium">{branch.goal || branch.id}</span>
-        </span>
-        {typeof branch.costUsd === "number" && (
-          <span className="font-mono text-[10px] text-muted-foreground">${branch.costUsd.toFixed(4)}</span>
-        )}
-        {branch.trail.length > 0 && (
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 text-muted-foreground",
-              "transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
-              expanded && "rotate-90",
-            )}
-          />
-        )}
-      </button>
-
-      {expanded && branch.trail.length > 0 && (
-        <ol className="space-y-0 border-t border-border">
-          {branch.trail.map((entry, index) => (
-            <TrailRow key={entry.id} entry={entry} index={index + 1} />
-          ))}
-        </ol>
-      )}
-    </div>
   )
 }

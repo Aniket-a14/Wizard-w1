@@ -32,37 +32,6 @@ from src.core.tools.daemon import PROBE_MODULES, DaemonClient
 #: One of ``host`` / ``docker`` / ``inprocess``.
 BackendName = str
 
-#: Separates a parent session id from a subagent's branch name in a composite
-#: id (Milestone 7). Distinct from anything `uuid4().hex` or a connection name
-#: could produce, so `is_subagent_id` cannot false-positive on an ordinary id.
-CHILD_DELIMITER = "::sub:"
-
-
-def is_subagent_id(session_id: str) -> bool:
-    return CHILD_DELIMITER in session_id
-
-
-def parent_session_id(session_id: str) -> str:
-    """The owning session's id, or ``session_id`` unchanged if it is not a child id."""
-    return session_id.split(CHILD_DELIMITER, 1)[0]
-
-
-def resolve_workspace_dir(session_id: str):
-    """Where a session's (or a subagent's) files live on disk.
-
-    A subagent is "a scoped child of the session, not a new top-level
-    session" -- so its workspace nests under the parent's directory rather
-    than sitting beside it as a flat, unrelated `sessions/<composite-id>`
-    sibling, which is what a plain join would produce.
-    """
-    if is_subagent_id(session_id):
-        parent, _, branch = session_id.partition(CHILD_DELIMITER)
-        directory = settings.WORKSPACE_DIR / "sessions" / parent / "subagents" / branch
-    else:
-        directory = settings.WORKSPACE_DIR / "sessions" / session_id
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
-
 
 def active_backend() -> BackendName:
     """Which backend a new session would use right now.
@@ -318,18 +287,14 @@ def tier_modules() -> frozenset[str]:
 
 
 __all__ = [
-    "CHILD_DELIMITER",
     "TIER_MODULES",
     "active_backend",
     "active_runtime_count",
     "capabilities",
     "forget_capabilities",
     "get_runtime",
-    "is_subagent_id",
-    "parent_session_id",
     "rebind_roots",
     "release_runtime",
-    "resolve_workspace_dir",
     "tier_modules",
     "workspace_for",
     "workspace_path",

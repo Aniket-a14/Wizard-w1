@@ -131,7 +131,6 @@ export function Message({
               iteration={message.iteration}
               budget={message.iterationBudget}
               streaming={message.streaming}
-              subagents={message.subagents}
             />
             <StepTimeline steps={message.steps} code={message.code} stdout={message.stdout} />
           </div>

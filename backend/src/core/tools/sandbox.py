@@ -285,15 +285,11 @@ class SandboxPool:
         """Per-session workspace directory, created on demand.
 
         Lives here rather than on the session because every runtime -- container
-        or subprocess -- reads its datasets out of this directory. Delegates to
-        `runtime.resolve_workspace_dir` so a subagent's composite id resolves to
-        a directory nested under its parent's rather than a flat, unrelated
-        sibling -- imported locally to avoid a import cycle with `runtime`,
-        which imports this pool lazily for the same reason.
+        or subprocess -- reads its datasets out of this directory.
         """
-        from src.core.tools.runtime import resolve_workspace_dir
-
-        return resolve_workspace_dir(session_id)
+        directory = settings.WORKSPACE_DIR / "sessions" / session_id
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     def get(self, session_id: str, create: bool = True) -> SandboxSession | None:
         session = self._sessions.get(session_id)

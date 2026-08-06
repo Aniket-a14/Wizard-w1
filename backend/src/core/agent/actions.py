@@ -44,9 +44,6 @@ class ActionKind(StrEnum):
     SEARCH = "search"
     #: Revise the plan from what has been learned so far.
     REFLECT = "reflect"
-    #: Split into independent sub-questions and investigate them at once, each
-    #: in its own isolated subagent. Only offered above the compact tier.
-    PARALLEL = "parallel"
     #: Stop investigating; synthesise the final answer.
     ANSWER = "answer"
 
@@ -54,14 +51,7 @@ class ActionKind(StrEnum):
 #: Actions a model may select. ``SEARCH`` is excluded — it leaves the machine,
 #: so it is only reachable through the plan's explicit ``SEARCH:`` directive,
 #: which routes through the consent gate.
-SELECTABLE = (
-    ActionKind.INSPECT,
-    ActionKind.CODE,
-    ActionKind.CONSULT,
-    ActionKind.REFLECT,
-    ActionKind.PARALLEL,
-    ActionKind.ANSWER,
-)
+SELECTABLE = (ActionKind.INSPECT, ActionKind.CODE, ActionKind.CONSULT, ActionKind.REFLECT, ActionKind.ANSWER)
 
 #: Words a model reaches for when it means one of the above. Small models
 #: paraphrase constantly; matching only the exact token throws away most of
@@ -93,13 +83,6 @@ SYNONYMS: dict[str, ActionKind] = {
     "replan": ActionKind.REFLECT,
     "revise": ActionKind.REFLECT,
     "rethink": ActionKind.REFLECT,
-    "parallel": ActionKind.PARALLEL,
-    "parallelize": ActionKind.PARALLEL,
-    "parallelise": ActionKind.PARALLEL,
-    "split": ActionKind.PARALLEL,
-    "fanout": ActionKind.PARALLEL,
-    "delegate": ActionKind.PARALLEL,
-    "subagents": ActionKind.PARALLEL,
     "answer": ActionKind.ANSWER,
     "finish": ActionKind.ANSWER,
     "done": ActionKind.ANSWER,
