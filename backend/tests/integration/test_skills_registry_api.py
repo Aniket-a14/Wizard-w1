@@ -132,7 +132,9 @@ def test_ask_always_is_answered_by_the_request_itself(client, fetcher) -> None:
     """The REST rule: an authenticated request from the user *is* the answer to
     an `ask`. Asking someone to confirm the button they just pressed is theatre."""
     client.post("/api/permissions", json={"profile": "ask-always"})
-    assert client.post("/api/skills/install/preview", json={"url": URL}).status_code == 200
+
+    response = client.post("/api/skills/install/preview", json={"url": URL})
+    assert response.status_code == 200
 
 
 def test_local_only_does_not_refuse_an_install(client, fetcher) -> None:
@@ -141,7 +143,9 @@ def test_local_only_does_not_refuse_an_install(client, fetcher) -> None:
     block either. `OUTBOUND_TOOLS` is about tools the agent invokes mid-analysis,
     where the query itself is derived from the user's data."""
     client.post("/api/data-mode", json={"mode": "local-only"})
-    assert client.post("/api/skills/install/preview", json={"url": URL}).status_code == 200
+
+    response = client.post("/api/skills/install/preview", json={"url": URL})
+    assert response.status_code == 200
 
 
 # --------------------------------------------------------------------------- #
@@ -175,13 +179,15 @@ def test_the_installed_skill_survives_a_reload_with_its_pin(client, fetcher) -> 
 def test_discarding_leaves_nothing_behind(client, fetcher) -> None:
     staged = _stage(client)["pending"][0]
 
-    assert client.delete(f"/api/skills/pending/{staged['id']}").status_code == 200
+    discarded = client.delete(f"/api/skills/pending/{staged['id']}")
+    assert discarded.status_code == 200
     assert client.get("/api/skills/pending").json()["pending"] == []
     assert client.get("/api/skills/cohorts").status_code == 404
 
 
 def test_approving_a_stale_id_says_so(client, fetcher) -> None:
-    assert client.post("/api/skills/pending/nope/approve").status_code == 400
+    response = client.post("/api/skills/pending/nope/approve")
+    assert response.status_code == 400
 
 
 # --------------------------------------------------------------------------- #
@@ -238,7 +244,8 @@ def test_deleting_an_installed_skill_forgets_where_it_came_from(client, fetcher)
     staged = _stage(client)["pending"][0]
     client.post(f"/api/skills/pending/{staged['id']}/approve")
 
-    assert client.delete("/api/skills/cohorts").status_code == 200
+    removed = client.delete("/api/skills/cohorts")
+    assert removed.status_code == 200
     assert install_index.get("cohorts") is None
     assert skill_registry.get("cohorts") is None
 

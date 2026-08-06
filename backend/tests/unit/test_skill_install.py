@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.config import settings
 from src.core.skills import install
 from src.core.skills.fetch import RemoteEntry
 from src.core.skills.index import install_index
@@ -243,7 +244,8 @@ def test_a_conflict_with_an_existing_skill_is_reported_before_install():
 
 def test_discarding_installs_nothing():
     install.preview("acme/skills", single_skill_repo())
-    assert install.discard(install.pending()[0].id) is True
+    discarded = install.discard(install.pending()[0].id)
+    assert discarded is True
     assert install.pending() == []
     assert skill_registry.get("cohorts") is None
 
@@ -327,6 +329,37 @@ def test_updating_a_hand_written_skill_is_refused_with_the_reason():
 def test_uninstalling_takes_the_index_entry_with_the_file():
     """A record left behind would offer an update for a skill that is not there."""
     _install_one()
-    assert install.uninstall("cohorts") is True
+    removed = install.uninstall("cohorts")
+    assert removed is True
     assert skill_registry.get("cohorts") is None
     assert install_index.get("cohorts") is None
+
+
+# --------------------------------------------------------------------------- #
+# GitHub Enterprise
+# --------------------------------------------------------------------------- #
+def test_the_enterprise_host_is_compared_exactly_not_matched_as_a_substring(monkeypatch):
+    """`"api.github.com" in root` reads as a hostname test and is not one.
+
+    A root of `https://api.github.com.example.invalid` contains that string while
+    being an entirely different host, so the setting would be classified by a name
+    that merely appears inside it. The host is parsed and compared instead.
+    """
+    monkeypatch.setattr(settings, "SKILLS_REGISTRY_API", "https://api.github.com")
+    assert install._enterprise_hosts() == frozenset()
+
+    monkeypatch.setattr(settings, "SKILLS_REGISTRY_API", "https://api.github.com.example.invalid")
+    assert install._enterprise_hosts() == frozenset({"api.github.com.example.invalid", "github.com.example.invalid"})
+
+    monkeypatch.setattr(settings, "SKILLS_REGISTRY_API", "https://github.example.com/api/v3")
+    assert install._enterprise_hosts() == frozenset({"github.example.com"})
+
+
+def test_an_enterprise_root_lets_its_own_web_host_through(monkeypatch):
+    """The point of deriving it: the operator configures the API root, and URLs
+    from the matching web host are then accepted without a second setting."""
+    from src.core.skills.source import parse_source
+
+    monkeypatch.setattr(settings, "SKILLS_REGISTRY_API", "https://github.example.com/api/v3")
+    source = parse_source("https://github.example.com/acme/skills", extra_hosts=install._enterprise_hosts())
+    assert (source.owner, source.repo) == ("acme", "skills")

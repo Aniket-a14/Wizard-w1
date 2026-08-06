@@ -60,6 +60,10 @@ from .spec import SKILL_FILENAME, InvalidSkill, Skill, SkillError, SkillLayer
 #: repository uses is asking them a question we can answer ourselves.
 SKILLS_SUBDIR = "skills"
 
+#: Hostnames that mean "this is public GitHub, not an Enterprise install".
+#: Compared against a parsed hostname, never searched for inside a URL.
+PUBLIC_GITHUB_HOSTS = frozenset({"api.github.com", "github.com"})
+
 
 class InstallError(SkillError):
     """An install that could not proceed, with the reason."""
@@ -286,14 +290,21 @@ def _enterprise_hosts() -> frozenset[str]:
     Derived rather than configured twice. Somebody running Enterprise sets the API
     root; making them also list the web hostname would be two settings that must
     agree, and one of them would eventually not.
+
+    **The host is parsed and compared exactly, never matched as a substring.**
+    ``"api.github.com" in root`` reads as the same test and is not one:
+    ``https://api.github.com.example.invalid`` contains that string while being a
+    different host entirely, so the setting would be classified by a name that
+    merely appears inside it. Which way that goes wrong is not the point — a
+    hostname test that can be satisfied by a substring is the wrong test.
     """
     from urllib.parse import urlparse
 
     root = (settings.SKILLS_REGISTRY_API or "").strip()
-    if not root or "api.github.com" in root:
+    if not root:
         return frozenset()
     host = urlparse(root).netloc.split("@")[-1].split(":")[0].lower()
-    if not host:
+    if not host or host in PUBLIC_GITHUB_HOSTS:
         return frozenset()
     # Enterprise serves its API at `<host>/api/v3`, so the web host is the same.
     return frozenset({host, host.removeprefix("api.")})

@@ -109,17 +109,23 @@ class Fetcher(Protocol):
     reaching out is a subsystem that stops being tested.
     """
 
+    # `raise NotImplementedError` rather than the more familiar trailing `...`.
+    # A bare Ellipsis is a statement that does nothing, which is exactly what
+    # CodeQL's "statement has no effect" rule is for; the rule is right, and a
+    # Protocol method is not an exception to it. Raising also keeps the declared
+    # return types honest, which a docstring-only body does not.
+
     def resolve(self, source: SkillSource) -> str:
         """The commit SHA ``source.ref`` currently points at."""
-        ...
+        raise NotImplementedError
 
     def listing(self, source: SkillSource, sha: str) -> list[RemoteEntry]:
         """What is at ``source.path``, at that commit."""
-        ...
+        raise NotImplementedError
 
     def read(self, source: SkillSource, sha: str, path: str) -> str:
         """One text file's contents, at that commit."""
-        ...
+        raise NotImplementedError
 
 
 class GitHubFetcher:

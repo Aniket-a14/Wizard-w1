@@ -106,7 +106,8 @@ def _record(name: str = "cohorts", sha: str = "a" * 40) -> InstallRecord:
 
 def test_the_index_round_trips_through_disk(tmp_path):
     index = InstallIndex(tmp_path / "installed.json")
-    assert index.record(_record())
+    saved = index.record(_record())
+    assert saved is True
 
     reread = InstallIndex(tmp_path / "installed.json")
     stored = reread.get("cohorts")
@@ -163,9 +164,12 @@ def test_overlay_leaves_other_layers_alone(tmp_path):
 def test_forgetting_removes_the_record(tmp_path):
     index = InstallIndex(tmp_path / "installed.json")
     index.record(_record())
-    assert index.forget("cohorts") is True
+    forgotten = index.forget("cohorts")
+    assert forgotten is True
     assert index.get("cohorts") is None
-    assert index.forget("cohorts") is False
+
+    again = index.forget("cohorts")
+    assert again is False
 
 
 def test_a_record_needs_a_name_and_a_commit():
