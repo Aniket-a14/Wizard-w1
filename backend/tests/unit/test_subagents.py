@@ -69,7 +69,11 @@ async def _run(session: Session, mode: str = "auto", instruction: str = "sum col
         # parts as a malformed choice and degrades to a plain code step.
         ("just one thing", ["just one thing"]),
         ("", []),
-        ("a |", ["a"]),  # trailing empty part dropped
+        # A pipe not flanked by whitespace on both sides is not a delimiter
+        # (see `_split_subgoals`'s docstring) -- a bare trailing "|" with
+        # nothing after it to anchor the closing `\s+` stays part of the one
+        # sub-goal rather than being read as an empty second part.
+        ("a |", ["a |"]),
     ],
 )
 def test_split_subgoals(goal: str, expected: list[str]) -> None:
@@ -113,6 +117,12 @@ async def test_a_branchs_number_is_grounded_in_the_parents_answer(loaded_session
     assert result.grounding["ok"] is True, result.grounding
     assert result.grounding["ungrounded"] == []
 
+    # Ordered assertions are sound only because `conftest.py` pins
+    # `EXECUTION_BACKEND=inprocess` for the whole suite, and `_act_parallel`
+    # runs branches strictly in sequence on that backend. Under `host`/
+    # `docker`, branches race through `asyncio.gather` and completion order
+    # is not guaranteed -- a test exercising those backends would need to
+    # compare `SUBAGENT_END` branches as a set instead.
     starts = [event.data["branch"] for event in collector.of_type(EventType.SUBAGENT_START)]
     ends = [event.data["branch"] for event in collector.of_type(EventType.SUBAGENT_END)]
     assert starts == ["sub1", "sub2"]

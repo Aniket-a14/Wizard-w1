@@ -162,6 +162,12 @@ async def test_a_subagent_never_spends_a_decision_or_verification_round_trip(
     result, _ = await _run(loaded_session, stub)
 
     assert result.status == "completed"
+    # The exact ordering of the two branch `worker` calls is sound only
+    # because `conftest.py` pins `EXECUTION_BACKEND=inprocess` for the whole
+    # suite, which is what makes `_act_parallel` run branches strictly in
+    # sequence. What this test actually pins is the role *count* -- two
+    # `worker` calls and nothing else for two branches, no `manager`
+    # round-trip among them.
     assert [call["role"] for call in stub.calls] == [
         "manager",  # plan
         "worker",  # iteration 1 code

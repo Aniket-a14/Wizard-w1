@@ -576,7 +576,10 @@ def create_decision_prompt(
         "consult": "consult  — search the reference documents and installed skills for a definition, rule or method.",
         "reflect": "reflect  — revise the plan because what you found changed the problem.",
         "parallel": (
-            f"parallel — investigate 2 to {max_subagents} INDEPENDENT sub-questions at once (e.g. comparing "
+            # `_act_parallel` is only ever offered when `budget.max_subagents
+            # >= 2`, but the clamp keeps this sentence sane on its own terms
+            # rather than depending on that caller invariant.
+            f"parallel — investigate 2 to {max(2, max_subagents)} INDEPENDENT sub-questions at once (e.g. comparing "
             "separate regions, segments or cohorts that don't depend on each other). "
             "GOAL: list each sub-question separated by ' | ', e.g. "
             '"Total revenue in region A | Total revenue in region B".'
@@ -584,6 +587,19 @@ def create_decision_prompt(
         "answer": "answer   — you have enough to answer the question. Stop and write it.",
     }
     options = "\n".join(menu[name] for name in allowed if name in menu)
+
+    # The fixed rule below says a goal is "one concrete sub-task" -- true for
+    # every other action, and directly contradicted by `parallel`'s own menu
+    # line above, which asks for 2+ sub-questions on that same GOAL line. A
+    # model that follows the stricter, always-present rule emits one goal,
+    # `_split_subgoals` returns fewer than two parts, and `_act_parallel`
+    # silently degrades to a plain `code` step.
+    parallel_rule = (
+        "\n- Exception: if you choose `parallel`, GOAL must list 2 or more independent "
+        "sub-questions separated by ' | ' -- not one sentence."
+        if "parallel" in allowed
+        else ""
+    )
 
     findings_block = ""
     if findings:
@@ -634,7 +650,7 @@ Rules:
 - Choose `answer` as soon as the question is genuinely answered. Do not keep exploring.
 - Do not repeat an action that has already produced the result you need.
 - If a previous step failed, the goal should address why it failed.
-- The goal must be one concrete sub-task, not a restatement of the whole question.
+- The goal must be one concrete sub-task, not a restatement of the whole question.{parallel_rule}
 </instructions>"""
 
 

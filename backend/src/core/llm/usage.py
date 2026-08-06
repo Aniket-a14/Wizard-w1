@@ -241,9 +241,14 @@ class UsageLedger:
         wants instead is still available from `totals(child_id)` individually.
         """
         merged = SessionUsage()
+        # `_act_parallel` appends a branch id whether or not it finished, so a
+        # caller-side accident aside, nothing here should assume the list is
+        # already unique. `dict.fromkeys` also drops the empty-string id a
+        # caller can pass without a truthiness check at every call site.
+        unique_ids = [session_id for session_id in dict.fromkeys(session_ids) if session_id]
         with self._lock:
-            for session_id in session_ids:
-                usage = self._sessions.get(session_id or "")
+            for session_id in unique_ids:
+                usage = self._sessions.get(session_id)
                 if usage is None:
                     continue
                 for key, record in usage.records.items():

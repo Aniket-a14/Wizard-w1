@@ -19,7 +19,9 @@ reached so a public deployment cannot be made to spawn unbounded containers.
 
 from __future__ import annotations
 
+import asyncio
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -276,12 +278,27 @@ class Session:
         concurrency needs its own runtime per branch, not multiplexed calls
         against this session's own daemon. `runtime.resolve_workspace_dir`
         nests the child's workspace under this session's own directory.
+
+        Only mints and registers the id -- the table snapshot is a real disk
+        copy and belongs on a worker thread, not on whichever coroutine
+        happens to call this. See `prepare_subagent_workspace`.
         """
         child_id = f"{self.id}{runtime_backend.CHILD_DELIMITER}{branch}"
         self._subagent_ids.add(child_id)
-        if runtime_backend.active_backend() != "inprocess":
-            self._snapshot_tables_for(child_id)
         return child_id
+
+    async def prepare_subagent_workspace(self, child_id: str) -> None:
+        """Snapshots this session's tables into a subagent's workspace.
+
+        Run via `asyncio.to_thread` so several branches' snapshots -- each a
+        handful of `shutil.copy2` calls -- proceed concurrently instead of
+        blocking the event loop one at a time. A no-op under `inprocess`,
+        which shares the parent's namespace directly and never reads a
+        subagent workspace off disk.
+        """
+        if runtime_backend.active_backend() == "inprocess":
+            return
+        await asyncio.to_thread(self._snapshot_tables_for, child_id)
 
     def _snapshot_tables_for(self, child_id: str) -> None:
         """Copies this session's materialized tables into a subagent's workspace.
@@ -293,8 +310,6 @@ class Session:
         concurrent mutation on the parent can never tear a file out from under
         a subagent mid-read.
         """
-        import shutil
-
         child_dir = runtime_backend.workspace_for(child_id)
         child_tables = child_dir / "tables"
         child_tables.mkdir(parents=True, exist_ok=True)
@@ -335,6 +350,9 @@ class Session:
         self._subagent_ids.discard(child_id)
         self.release_subagent_runtime(child_id)
         usage_ledger.forget(child_id)
+        # The workspace holds a full snapshot of every table; nothing reads
+        # it once the runtime that read it is gone.
+        shutil.rmtree(runtime_backend.workspace_for(child_id), ignore_errors=True)
 
     # ------------------------------------------------------------------ #
     # Reference documents

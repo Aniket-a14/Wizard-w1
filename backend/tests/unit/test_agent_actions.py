@@ -95,14 +95,28 @@ def test_prose_falls_back_to_the_first_action_word(raw: str, kind: ActionKind) -
     assert decision.inferred, "a prose match is a guess and must be reported as one"
 
 
-@pytest.mark.parametrize("word", ["parallel", "parallelize", "parallelise", "split", "fanout", "delegate"])
+@pytest.mark.parametrize("word", ["parallel", "parallelize", "parallelise", "fanout", "delegate", "subagents"])
 def test_parallel_synonyms_are_recognised(word: str) -> None:
     # The `ACTION:` line only ever reads its first whitespace-delimited token
     # as the action word (see `parse_decision`), so a two-word phrasing like
     # "fan out" is only reachable through the prose fallback, not this path --
     # `fanout` is the one-word spelling the synonym table actually keys on.
+    # "split" is deliberately not a synonym (see `SYNONYMS`), so it is not
+    # parametrized here.
     decision = parse_decision(f"ACTION: {word}\nGOAL: a | b")
     assert decision.kind is ActionKind.PARALLEL
+
+
+def test_parallel_is_refused_when_it_is_not_allowed() -> None:
+    """The tier gate lives in `allowed`, so an excluded choice must not be honoured.
+
+    This is what keeps the compact tier and a disabled `SUBAGENT_ENABLED`
+    from ever reaching `_act_parallel`.
+    """
+    allowed = (ActionKind.INSPECT, ActionKind.CODE, ActionKind.ANSWER)
+    decision = parse_decision("ACTION: parallel\nGOAL: a | b", allowed=allowed)
+    assert decision.kind is not ActionKind.PARALLEL
+    assert decision.kind in allowed
 
 
 @pytest.mark.parametrize("raw", ["", "   ", "###", "aaaa bbbb cccc", "42"])

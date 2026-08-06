@@ -96,7 +96,9 @@ SYNONYMS: dict[str, ActionKind] = {
     "parallel": ActionKind.PARALLEL,
     "parallelize": ActionKind.PARALLEL,
     "parallelise": ActionKind.PARALLEL,
-    "split": ActionKind.PARALLEL,
+    # No "split": prose reasoning routinely says "split the data by region"
+    # meaning an ordinary `code` step, and the prose-fallback matcher below
+    # would read that as a chosen `parallel` action.
     "fanout": ActionKind.PARALLEL,
     "delegate": ActionKind.PARALLEL,
     "subagents": ActionKind.PARALLEL,

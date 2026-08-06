@@ -245,6 +245,8 @@ class SubagentResult:
     goal: str
     investigation: Investigation
     ok: bool
+    warnings: list[str] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SubagentSession:
@@ -275,6 +277,13 @@ class SubagentSession:
         return runtime_backend.workspace_for(self.id)
 
     def __getattr__(self, name: str) -> Any:
+        # `.permissions` forwards here too, by design -- a subagent asks
+        # under the same grants as its parent. That means concurrent
+        # branches share one `PermissionState` and can both reach
+        # `consent_broker.ask` for the same subject before either calls
+        # `permissions.grant`, producing two prompts for one thing. Known
+        # and accepted for this milestone rather than a bug to chase if a
+        # duplicate prompt shows up under `parallel`.
         return getattr(self._parent, name)
 
 
@@ -1205,8 +1214,12 @@ class AnalysisOrchestrator:
         Never raises. Fewer than two usable parts is treated as a malformed
         choice by the caller, the same way an unparseable decision anywhere
         else in the loop falls back to a default rather than failing.
+
+        Splits on ``" | "`` (with the spaces the decision prompt specifies),
+        not a bare ``|`` -- a goal like "count rows where status matches A|B"
+        would otherwise be read as two sub-goals instead of one.
         """
-        parts = [part.strip() for part in (goal or "").split("|")]
+        parts = [part.strip() for part in re.split(r"\s+\|\s+", goal or "")]
         seen: list[str] = []
         for part in parts:
             if part and part not in seen:
@@ -1262,8 +1275,12 @@ class AnalysisOrchestrator:
 
         group = f"parallel-{state.iterations_used}"
         inprocess = runtime_backend.active_backend() == "inprocess"
+        # The child id is qualified by `group`, not just the branch label: a
+        # second `parallel` decision later in the same turn reuses "sub1",
+        # and an unqualified id would collide with the first branch's still
+        # -- or already -- torn-down workspace and usage-ledger bucket.
         branches = [
-            (f"sub{index + 1}", subgoal, session.spawn_subagent_id(f"sub{index + 1}"))
+            (f"sub{index + 1}", subgoal, session.spawn_subagent_id(f"{group}-sub{index + 1}"))
             for index, subgoal in enumerate(subgoals)
         ]
 
@@ -1306,6 +1323,12 @@ class AnalysisOrchestrator:
 
         summary_lines: list[str] = []
         for (branch, subgoal, child_id), result in zip(branches, results, strict=True):
+            # Registered -- and its usage read -- whether or not the branch
+            # finished: a timeout or an exception can still land after it has
+            # already spent a call or two, and that cost is real even though
+            # the branch contributed no `Step`.
+            state.subagent_ids.append(child_id)
+            branch_usage = usage_ledger.totals(child_id)
             if isinstance(result, BaseException) or result is None:
                 reason = str(result) if isinstance(result, BaseException) else "did not finish in time"
                 summary_lines.append(f"[{branch}] did not complete: {reason}")
@@ -1315,12 +1338,11 @@ class AnalysisOrchestrator:
                     branch=branch,
                     group=group,
                     ok=False,
-                    cost_usd=None,
-                    total_tokens=0,
-                    calls=0,
+                    cost_usd=branch_usage.get("cost_usd"),
+                    total_tokens=branch_usage.get("total_tokens", 0),
+                    calls=branch_usage.get("calls", 0),
                 )
             else:
-                state.subagent_ids.append(child_id)
                 observation = result.investigation.executed_output or "No output was produced."
                 state.investigation.record(
                     Step(
@@ -1336,7 +1358,8 @@ class AnalysisOrchestrator:
                     state.investigation.note_finding(finding)
                 for assumption in result.investigation.assumptions:
                     state.investigation.note_assumption(assumption)
-                branch_usage = usage_ledger.totals(child_id)
+                state.warnings.extend(result.warnings)
+                state.artifacts.extend(result.artifacts)
                 first_line = observation.strip().splitlines()[0][:120] if observation.strip() else ""
                 status = "completed" if result.ok else "failed"
                 summary_lines.append(f"[{branch}] {status}: {first_line}")
@@ -1391,6 +1414,11 @@ class AnalysisOrchestrator:
         the model is not asked to choose an action inside a branch, since the
         round-trip is real and the choice is not what a branch needs.
         """
+        # Off the event loop, and here rather than in `spawn_subagent_id`, so
+        # that under real concurrency each branch's copy proceeds on its own
+        # thread instead of serialising every branch's disk I/O onto whichever
+        # coroutine minted the ids first.
+        await session.prepare_subagent_workspace(child_id)
         child_session = SubagentSession(session, child_id)
         child_state = RunState(instruction=goal, mode="auto", can_prompt=parent_state.can_prompt)
         branch_emitter = BranchEmitter(emitter, branch)
@@ -1421,7 +1449,12 @@ class AnalysisOrchestrator:
 
         last = child_state.investigation.steps[-1] if child_state.investigation.steps else None
         return SubagentResult(
-            branch=branch, goal=goal, investigation=child_state.investigation, ok=bool(last and last.ok)
+            branch=branch,
+            goal=goal,
+            investigation=child_state.investigation,
+            ok=bool(last and last.ok),
+            warnings=child_state.warnings,
+            artifacts=child_state.artifacts,
         )
 
     async def _act_code(
