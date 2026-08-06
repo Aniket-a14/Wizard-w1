@@ -48,14 +48,14 @@ import asyncio
 import posixpath
 import re
 import time
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, cast
 
 from src.config import TierBudget, settings
 from src.core.agent.actions import ActionKind, Decision, Investigation, Step, parse_decision
 from src.core.agent.consent import ConsentRequest, consent_broker
 from src.core.agent.council import TheCouncil
-from src.core.agent.events import Emitter, EventType, Phase, emit
+from src.core.agent.events import BranchEmitter, Emitter, EventType, Phase, emit
 from src.core.agent.grounding import (
     GroundingReport,
     assumptions_from_code,
@@ -63,7 +63,7 @@ from src.core.agent.grounding import (
     check_grounding,
 )
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
-from src.core.execution import ExecutionResult
+from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
 from src.core.llm import LLMRole, llm_provider, model_registry
 from src.core.llm.provider import DataModeViolation, LLMUnavailableError
@@ -178,6 +178,10 @@ class RunState:
     #: Names of the skills that reached this turn, in the order they were used.
     #: Reported on the final frame so an answer can say what informed it.
     skills_used: list[str] = field(default_factory=list)
+    #: Composite ids of subagents spawned by a `parallel` action this turn.
+    #: `_finalize` merges their usage-ledger totals into the turn's own, since
+    #: each books under its own id rather than this session's.
+    subagent_ids: list[str] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
 
     @property
@@ -231,6 +235,47 @@ class RunResult:
             "usage": self.usage,
             "skills_used": self.skills_used,
         }
+
+
+@dataclass
+class SubagentResult:
+    """What one branch of a `parallel` action produced."""
+
+    branch: str
+    goal: str
+    investigation: Investigation
+    ok: bool
+
+
+class SubagentSession:
+    """A thin proxy that lets a subagent reuse `_act_code`/`_generate`/`_execute`
+    unmodified.
+
+    Wraps the parent `Session`. `.id` and `.executor` are overridden so every
+    LLM call and every execution a subagent makes is scoped to its own
+    composite id -- which is also how its usage-ledger cost and its guard/
+    workspace roots end up in their own bucket, for free, with zero changes to
+    `usage.py` or `execution.py`. `.workspace` is overridden too: `_execute`
+    deletes and (re)writes `plot.html` under `session.workspace`, and two
+    branches sharing the parent's workspace would race on that file.
+    Everything else -- `.df`, `.tables`, `.permissions`, `.data_mode`,
+    `.models`, `.catalog`, `.has_documents`, `.search_documents` -- forwards to
+    the parent unmodified: a subagent investigates the same data under the
+    same policy and the same permission grants, it just runs in its own
+    process.
+    """
+
+    def __init__(self, parent: Session, child_id: str):
+        self._parent = parent
+        self.id = child_id
+        self.executor = CodeExecutor(child_id)
+
+    @property
+    def workspace(self):
+        return runtime_backend.workspace_for(self.id)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._parent, name)
 
 
 class AnalysisOrchestrator:
@@ -817,6 +862,10 @@ class AnalysisOrchestrator:
                 await self._act_consult(state, session, emitter, decision, budget)
             elif decision.kind is ActionKind.REFLECT:
                 await self._act_reflect(state, session, emitter, decision, budget)
+            elif decision.kind is ActionKind.PARALLEL:
+                await self._act_parallel(state, session, emitter, decision, previous_code, budget)
+                if state.blocked:
+                    return
             else:
                 await self._act_code(state, session, emitter, decision, previous_code, budget)
                 if state.blocked:
@@ -840,6 +889,8 @@ class AnalysisOrchestrator:
         allowed = [ActionKind.INSPECT, ActionKind.CODE, ActionKind.ANSWER]
         if budget.allow_reflection:
             allowed.insert(2, ActionKind.REFLECT)
+        if settings.SUBAGENT_ENABLED and budget.allow_subagents and budget.max_subagents >= 2:
+            allowed.insert(2, ActionKind.PARALLEL)
 
         has_documents = settings.CONTEXT_DOCS_ENABLED and session.has_documents
         has_skills = settings.SKILLS_ENABLED and skill_registry.any_installed
@@ -888,6 +939,7 @@ class AnalysisOrchestrator:
             remaining=remaining,
             allowed=[kind.value for kind in allowed],
             findings=state.investigation.findings,
+            max_subagents=budget.max_subagents,
         )
 
         try:
@@ -1145,6 +1197,232 @@ class AnalysisOrchestrator:
             )
         )
         await emit(emitter, EventType.PLAN_REVISED, plan=revised, why=lead, previous=previous)
+
+    @staticmethod
+    def _split_subgoals(goal: str, budget: TierBudget) -> list[str]:
+        """Parses the ``|``-delimited sub-questions off a ``parallel`` decision's goal.
+
+        Never raises. Fewer than two usable parts is treated as a malformed
+        choice by the caller, the same way an unparseable decision anywhere
+        else in the loop falls back to a default rather than failing.
+        """
+        parts = [part.strip() for part in (goal or "").split("|")]
+        seen: list[str] = []
+        for part in parts:
+            if part and part not in seen:
+                seen.append(part)
+        return seen[: max(0, budget.max_subagents)]
+
+    async def _act_parallel(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        decision: Decision,
+        previous_code: str | None,
+        budget: TierBudget,
+    ):
+        """Fans one step out into isolated, concurrent subagents.
+
+        Real concurrency needs one runtime per branch -- the daemon protocol is
+        single-in-flight, so multiplexing calls into one session's own daemon
+        is not an option (see `tools/daemon.py`). Each branch gets its own
+        bounded, deterministic budget: no decision or verification round-trip
+        inside it, since the *parent* verifies once at the end over everything
+        folded back (`_verify`/`check_grounding` need no changes for that to
+        cover a subagent's numbers -- see the `Step.observation` built below).
+        A branch that fails or times out contributes nothing rather than a
+        half-written step, the same "everything degrades" rule the rest of the
+        loop already follows.
+        """
+        subgoals = self._split_subgoals(decision.goal, budget)
+        if len(subgoals) < 2:
+            # Not actually parallelizable -- `parallel` was chosen without a
+            # usable `|`-delimited goal. Degrade to a plain code step rather
+            # than failing the turn or spawning one pointless subagent.
+            await self._act_code(state, session, emitter, decision, previous_code, budget)
+            return
+
+        state.phase = Phase.INVESTIGATING_PARALLEL
+        await emit(
+            emitter,
+            EventType.STATUS,
+            content=f"Investigating {len(subgoals)} sub-questions in parallel",
+            phase=Phase.INVESTIGATING_PARALLEL.value,
+        )
+
+        remaining_iterations = max(1, budget.iterations - state.iterations_used)
+        child_budget = replace(
+            budget,
+            iterations=min(settings.SUBAGENT_MAX_ITERATIONS, remaining_iterations),
+            allow_decisions=False,
+            allow_verification=False,
+            allow_reflection=False,
+        )
+
+        group = f"parallel-{state.iterations_used}"
+        inprocess = runtime_backend.active_backend() == "inprocess"
+        branches = [
+            (f"sub{index + 1}", subgoal, session.spawn_subagent_id(f"sub{index + 1}"))
+            for index, subgoal in enumerate(subgoals)
+        ]
+
+        for branch, subgoal, _ in branches:
+            await emit(emitter, EventType.SUBAGENT_START, branch=branch, goal=subgoal, group=group)
+
+        async def run_one(branch: str, child_id: str, subgoal: str) -> SubagentResult:
+            return await self._run_subagent(state, session, emitter, branch, child_id, subgoal, child_budget)
+
+        results: list[SubagentResult | BaseException | None]
+        if inprocess:
+            # inprocess has no per-call isolation (a single, process-global
+            # matplotlib/pyplot state, among other things) -- it is dev/test
+            # only, so branches run one at a time through the identical code
+            # path rather than adding locking machinery to `execution.py` for
+            # a backend that never promised isolation in the first place.
+            results = []
+            for branch, subgoal, child_id in branches:
+                try:
+                    results.append(await run_one(branch, child_id, subgoal))
+                except Exception as exc:  # noqa: BLE001 - folded into a failed branch below
+                    results.append(exc)
+        else:
+            deadline = settings.SUBAGENT_TIMEOUT
+            if settings.AGENT_TURN_TIMEOUT > 0:
+                deadline = min(deadline, max(10.0, settings.AGENT_TURN_TIMEOUT - state.elapsed_ms / 1000))
+            tasks = [
+                asyncio.ensure_future(run_one(branch, child_id, subgoal)) for branch, subgoal, child_id in branches
+            ]
+            try:
+                results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=deadline)
+            except TimeoutError:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                results = [
+                    task.result() if task.done() and not task.cancelled() and task.exception() is None else None
+                    for task in tasks
+                ]
+
+        summary_lines: list[str] = []
+        for (branch, subgoal, child_id), result in zip(branches, results, strict=True):
+            if isinstance(result, BaseException) or result is None:
+                reason = str(result) if isinstance(result, BaseException) else "did not finish in time"
+                summary_lines.append(f"[{branch}] did not complete: {reason}")
+                await emit(
+                    emitter,
+                    EventType.SUBAGENT_END,
+                    branch=branch,
+                    group=group,
+                    ok=False,
+                    cost_usd=None,
+                    total_tokens=0,
+                    calls=0,
+                )
+            else:
+                state.subagent_ids.append(child_id)
+                observation = result.investigation.executed_output or "No output was produced."
+                state.investigation.record(
+                    Step(
+                        index=state.iterations_used,
+                        kind=ActionKind.CODE,
+                        goal=f"[{branch}] {subgoal}",
+                        observation=observation,
+                        ok=result.ok,
+                        code=result.investigation.last_successful_code,
+                    )
+                )
+                for finding in result.investigation.findings:
+                    state.investigation.note_finding(finding)
+                for assumption in result.investigation.assumptions:
+                    state.investigation.note_assumption(assumption)
+                branch_usage = usage_ledger.totals(child_id)
+                first_line = observation.strip().splitlines()[0][:120] if observation.strip() else ""
+                status = "completed" if result.ok else "failed"
+                summary_lines.append(f"[{branch}] {status}: {first_line}")
+                await emit(
+                    emitter,
+                    EventType.SUBAGENT_END,
+                    branch=branch,
+                    group=group,
+                    ok=result.ok,
+                    cost_usd=branch_usage.get("cost_usd"),
+                    total_tokens=branch_usage.get("total_tokens", 0),
+                    calls=branch_usage.get("calls", 0),
+                )
+            session.release_subagent_runtime(child_id)
+
+        completed = sum(
+            1 for result in results if not isinstance(result, BaseException) and result is not None and result.ok
+        )
+        summary = f"{completed}/{len(branches)} sub-investigations completed:\n" + "\n".join(summary_lines)
+        await emit(
+            emitter,
+            EventType.OBSERVATION,
+            summary=summary[: budget.observation_chars],
+            ok=completed > 0,
+            truncated=len(summary) > budget.observation_chars,
+            chars=len(summary),
+            # The top-level `action` frame fires before this handler even
+            # computes `group` (it's emitted generically in `_investigate`
+            # before dispatch), so this is the only frame that can carry it --
+            # a client associates the trail entry with its branches from here.
+            group=group,
+        )
+
+    async def _run_subagent(
+        self,
+        parent_state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        branch: str,
+        child_id: str,
+        goal: str,
+        budget: TierBudget,
+    ) -> SubagentResult:
+        """Runs one bounded, deterministic mini-loop for a single sub-question.
+
+        Reuses `_act_code` verbatim against a `SubagentSession` proxy and a
+        branch-tagged emitter, so every frame it emits, every consent check it
+        makes and every dollar it spends is indistinguishable in *kind* from
+        the main loop's own -- only tagged with `branch` (frames), or booked
+        under a different id (cost; permission grants stay session-wide by
+        design, see `SubagentSession`). Deterministic like the compact tier:
+        the model is not asked to choose an action inside a branch, since the
+        round-trip is real and the choice is not what a branch needs.
+        """
+        child_session = SubagentSession(session, child_id)
+        child_state = RunState(instruction=goal, mode="auto", can_prompt=parent_state.can_prompt)
+        branch_emitter = BranchEmitter(emitter, branch)
+        decision = Decision(kind=ActionKind.CODE, goal=goal)
+
+        for i in range(1, budget.iterations + 1):
+            child_state.iterations_used = i
+            await emit(branch_emitter, EventType.ITERATION_START, n=i, budget=budget.iterations, mode=child_state.mode)
+            await emit(
+                branch_emitter,
+                EventType.ACTION,
+                kind=decision.kind.value,
+                goal=decision.goal,
+                rationale=decision.rationale,
+                inferred=decision.inferred,
+            )
+            # `SubagentSession` is a structural proxy, not a `Session` subclass
+            # -- `_act_code` only ever touches the attributes it forwards or
+            # overrides, so this is sound at runtime; `cast` tells the checker
+            # what duck typing already guarantees.
+            await self._act_code(child_state, cast("Session", child_session), branch_emitter, decision, None, budget)
+            if child_state.blocked:
+                break
+            last = child_state.investigation.steps[-1] if child_state.investigation.steps else None
+            if last is not None and last.ok and (last.observation or "").strip():
+                break
+            decision = Decision(kind=ActionKind.CODE, goal=goal, rationale="Retrying after a failed attempt.")
+
+        last = child_state.investigation.steps[-1] if child_state.investigation.steps else None
+        return SubagentResult(
+            branch=branch, goal=goal, investigation=child_state.investigation, ok=bool(last and last.ok)
+        )
 
     async def _act_code(
         self,
@@ -1739,7 +2017,10 @@ class AnalysisOrchestrator:
 
         state.phase = Phase.DONE
         downloads = self._collect_downloads(state, session)
-        state.usage = usage_ledger.totals(session.id)
+        # Subagent LLM calls book under their own composite ids (see
+        # `SubagentSession`), so the turn's own id alone would under-report
+        # what a turn with subagents actually cost.
+        state.usage = usage_ledger.totals_many([session.id, *state.subagent_ids])
         # Only where a meter means something. Under local-only nothing was spent
         # and the honest surface is silence, not a row of zeroes.
         if state.usage.get("any_cloud"):

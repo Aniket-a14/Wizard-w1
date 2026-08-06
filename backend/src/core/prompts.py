@@ -562,6 +562,7 @@ def create_decision_prompt(
     remaining: int,
     allowed: list[str],
     findings: list[str] | None = None,
+    max_subagents: int = 0,
 ) -> str:
     """Manager prompt: choose the next action from what has actually happened.
 
@@ -574,6 +575,12 @@ def create_decision_prompt(
         "code": "code     — write and run Python for one concrete sub-task.",
         "consult": "consult  — search the reference documents and installed skills for a definition, rule or method.",
         "reflect": "reflect  — revise the plan because what you found changed the problem.",
+        "parallel": (
+            f"parallel — investigate 2 to {max_subagents} INDEPENDENT sub-questions at once (e.g. comparing "
+            "separate regions, segments or cohorts that don't depend on each other). "
+            "GOAL: list each sub-question separated by ' | ', e.g. "
+            '"Total revenue in region A | Total revenue in region B".'
+        ),
         "answer": "answer   — you have enough to answer the question. Stop and write it.",
     }
     options = "\n".join(menu[name] for name in allowed if name in menu)
