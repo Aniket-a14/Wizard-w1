@@ -274,3 +274,34 @@ def test_nothing_is_restarted_when_no_sandbox_fixed_the_roots(monkeypatch) -> No
 
     assert runtime_backend.rebind_roots("s2") is False
     assert runtime.stopped is False
+
+
+# --------------------------------------------------------------------------- #
+# Subagent composite ids (Milestone 7)
+# --------------------------------------------------------------------------- #
+def test_is_subagent_id_recognises_the_delimiter() -> None:
+    assert runtime_backend.is_subagent_id("abc123::sub:sub1") is True
+    assert runtime_backend.is_subagent_id("abc123") is False
+
+
+def test_parent_session_id_strips_the_branch() -> None:
+    assert runtime_backend.parent_session_id("abc123::sub:sub1") == "abc123"
+    # An ordinary id is returned unchanged rather than raising.
+    assert runtime_backend.parent_session_id("abc123") == "abc123"
+
+
+def test_resolve_workspace_dir_nests_a_subagent_under_its_parent() -> None:
+    """A subagent is a scoped child, not a new top-level session.
+
+    A flat join (`sessions/<composite-id>`) would produce an unrelated
+    sibling directory; this must nest under the parent's own directory
+    instead, so a subagent is visibly and actually part of one session.
+    """
+    parent = runtime_backend.resolve_workspace_dir("abc123")
+    child = runtime_backend.resolve_workspace_dir("abc123::sub:sub1")
+
+    assert child != parent
+    assert child.parent.name == "subagents"
+    assert child.parent.parent == parent
+    assert child.name == "sub1"
+    assert child.is_dir()  # created on demand, like the parent's own workspace

@@ -132,6 +132,54 @@ async def test_a_failed_step_still_gets_another_attempt(loaded_session: Session,
     assert decision(state).kind.value == "code"
 
 
+async def test_a_subagent_never_spends_a_decision_or_verification_round_trip(
+    loaded_session: Session, recording_llm, tier
+) -> None:
+    """A `parallel` branch is deterministic, on every tier -- not just compact.
+
+    `_act_parallel` forces `allow_decisions=False`/`allow_verification=False`
+    on every branch's own budget regardless of the parent's tier, the same
+    reasoning `TierBudget.allow_decisions` uses for the compact tier as a
+    whole: a branch that printed something has already produced what it was
+    asked for, and asking it to choose its next move round-trips a manager
+    call to be told something the transcript already says. Two branches cost
+    exactly two extra worker calls and nothing else.
+    """
+    tier("balanced")
+    stub = recording_llm(
+        [
+            "1. Compare two totals.",  # plan
+            CODE,  # iteration 1: hardcoded first code step
+            "ACTION: parallel\nGOAL: sum column A again | sum column A once more",  # iteration 2: decide
+            CODE,  # branch sub1 -- one worker call, no decision, no verification
+            CODE,  # branch sub2 -- one worker call, no decision, no verification
+            "ACTION: answer\nGOAL: report it",  # iteration 3: decide
+            "```python\nprint('VERIFIED: 15')\n```",  # the *parent's* one verification pass
+            "The sum is 15.",  # answer
+        ]
+    )
+
+    result, _ = await _run(loaded_session, stub)
+
+    assert result.status == "completed"
+    # The exact ordering of the two branch `worker` calls is sound only
+    # because `conftest.py` pins `EXECUTION_BACKEND=inprocess` for the whole
+    # suite, which is what makes `_act_parallel` run branches strictly in
+    # sequence. What this test actually pins is the role *count* -- two
+    # `worker` calls and nothing else for two branches, no `manager`
+    # round-trip among them.
+    assert [call["role"] for call in stub.calls] == [
+        "manager",  # plan
+        "worker",  # iteration 1 code
+        "manager",  # iteration 2 decide -> parallel
+        "worker",  # branch sub1
+        "worker",  # branch sub2
+        "manager",  # iteration 3 decide -> answer
+        "worker",  # the turn's own, single verification pass
+        "manager",  # answer
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # Output budgets
 # --------------------------------------------------------------------------- #

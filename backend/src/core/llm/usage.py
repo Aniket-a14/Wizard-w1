@@ -228,6 +228,48 @@ class UsageLedger:
             usage = self._sessions.get(session_id or "")
             return usage.to_dict() if usage else SessionUsage().to_dict()
 
+    def totals_many(self, session_ids: list[str]) -> dict[str, Any]:
+        """Combined totals across a parent session and any of its subagents.
+
+        Each subagent's LLM calls book under its own composite session id -- a
+        separate bucket created automatically because `SubagentSession.id` is
+        that composite id -- so the parent's own `totals()` alone would
+        under-report what a turn with subagents actually cost. Records are
+        merged by `(provider, model, role)`: a subagent's `worker` calls fold
+        into the same bucket the main loop's `worker` calls do, which is
+        correct for "what did this turn cost." The per-branch breakdown a UI
+        wants instead is still available from `totals(child_id)` individually.
+        """
+        merged = SessionUsage()
+        # `_act_parallel` appends a branch id whether or not it finished, so a
+        # caller-side accident aside, nothing here should assume the list is
+        # already unique. `dict.fromkeys` also drops the empty-string id a
+        # caller can pass without a truthiness check at every call site.
+        unique_ids = [session_id for session_id in dict.fromkeys(session_ids) if session_id]
+        with self._lock:
+            for session_id in unique_ids:
+                usage = self._sessions.get(session_id)
+                if usage is None:
+                    continue
+                for key, record in usage.records.items():
+                    target = merged.records.get(key)
+                    if target is None:
+                        merged.records[key] = UsageRecord(
+                            provider=record.provider,
+                            model=record.model,
+                            role=record.role,
+                            calls=record.calls,
+                            input_tokens=record.input_tokens,
+                            output_tokens=record.output_tokens,
+                            estimated=record.estimated,
+                        )
+                    else:
+                        target.calls += record.calls
+                        target.input_tokens += record.input_tokens
+                        target.output_tokens += record.output_tokens
+                        target.estimated = target.estimated or record.estimated
+        return merged.to_dict()
+
     def forget(self, session_id: str) -> None:
         with self._lock:
             self._sessions.pop(session_id, None)

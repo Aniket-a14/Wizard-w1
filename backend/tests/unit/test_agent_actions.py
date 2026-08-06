@@ -30,6 +30,11 @@ from src.core.agent.actions import (
         ("ACTION: inspect\nGOAL: check nulls", ActionKind.INSPECT, "check nulls"),
         ("ACTION: reflect\nGOAL: revise the plan", ActionKind.REFLECT, "revise the plan"),
         ("ACTION: consult\nGOAL: find the fee rule", ActionKind.CONSULT, "find the fee rule"),
+        (
+            "ACTION: parallel\nGOAL: revenue in region A | revenue in region B",
+            ActionKind.PARALLEL,
+            "revenue in region A | revenue in region B",
+        ),
     ],
 )
 def test_exact_format_is_read_exactly(raw: str, kind: ActionKind, goal: str) -> None:
@@ -81,12 +86,37 @@ def test_rationale_is_captured_when_offered() -> None:
         ("Let me examine the null structure first.", ActionKind.INSPECT),
         ("I think we can conclude from this.", ActionKind.ANSWER),
         ("Time to revise my approach.", ActionKind.REFLECT),
+        ("Let's split this into two sub-questions and delegate them.", ActionKind.PARALLEL),
     ],
 )
 def test_prose_falls_back_to_the_first_action_word(raw: str, kind: ActionKind) -> None:
     decision = parse_decision(raw)
     assert decision.kind is kind
     assert decision.inferred, "a prose match is a guess and must be reported as one"
+
+
+@pytest.mark.parametrize("word", ["parallel", "parallelize", "parallelise", "fanout", "delegate", "subagents"])
+def test_parallel_synonyms_are_recognised(word: str) -> None:
+    # The `ACTION:` line only ever reads its first whitespace-delimited token
+    # as the action word (see `parse_decision`), so a two-word phrasing like
+    # "fan out" is only reachable through the prose fallback, not this path --
+    # `fanout` is the one-word spelling the synonym table actually keys on.
+    # "split" is deliberately not a synonym (see `SYNONYMS`), so it is not
+    # parametrized here.
+    decision = parse_decision(f"ACTION: {word}\nGOAL: a | b")
+    assert decision.kind is ActionKind.PARALLEL
+
+
+def test_parallel_is_refused_when_it_is_not_allowed() -> None:
+    """The tier gate lives in `allowed`, so an excluded choice must not be honoured.
+
+    This is what keeps the compact tier and a disabled `SUBAGENT_ENABLED`
+    from ever reaching `_act_parallel`.
+    """
+    allowed = (ActionKind.INSPECT, ActionKind.CODE, ActionKind.ANSWER)
+    decision = parse_decision("ACTION: parallel\nGOAL: a | b", allowed=allowed)
+    assert decision.kind is not ActionKind.PARALLEL
+    assert decision.kind in allowed
 
 
 @pytest.mark.parametrize("raw", ["", "   ", "###", "aaaa bbbb cccc", "42"])

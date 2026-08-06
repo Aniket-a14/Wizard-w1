@@ -19,7 +19,9 @@ reached so a public deployment cannot be made to spawn unbounded containers.
 
 from __future__ import annotations
 
+import asyncio
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -138,6 +140,11 @@ class Session:
         self.permissions = PermissionState(profile=settings.AGENT_PERMISSION_PROFILE)
         self.executor = CodeExecutor(session_id)
         self._lock = threading.Lock()
+        # Composite ids of subagents spawned from a `parallel` action (Milestone
+        # 7). A subagent is a scoped child, not a new top-level session -- it
+        # never appears in `SessionManager._sessions` -- so nothing else walks
+        # this to reap or evict it, and `dispose()` is the only thing that must.
+        self._subagent_ids: set[str] = set()
 
     # ------------------------------------------------------------------ #
     def touch(self):
@@ -259,6 +266,93 @@ class Session:
                     )
         except Exception as exc:
             logger.error("Failed to materialize dataset into workspace", dataset=handle.name, error=str(exc))
+
+    # ------------------------------------------------------------------ #
+    # Subagents (Milestone 7)
+    # ------------------------------------------------------------------ #
+    def spawn_subagent_id(self, branch: str) -> str:
+        """Mints a composite id for one isolated child of this session.
+
+        The daemon protocol is single-in-flight per process (one `accept()`
+        loop, one shared `exec_globals`, a process-global stdout swap), so real
+        concurrency needs its own runtime per branch, not multiplexed calls
+        against this session's own daemon. `runtime.resolve_workspace_dir`
+        nests the child's workspace under this session's own directory.
+
+        Only mints and registers the id -- the table snapshot is a real disk
+        copy and belongs on a worker thread, not on whichever coroutine
+        happens to call this. See `prepare_subagent_workspace`.
+        """
+        child_id = f"{self.id}{runtime_backend.CHILD_DELIMITER}{branch}"
+        self._subagent_ids.add(child_id)
+        return child_id
+
+    async def prepare_subagent_workspace(self, child_id: str) -> None:
+        """Snapshots this session's tables into a subagent's workspace.
+
+        Run via `asyncio.to_thread` so several branches' snapshots -- each a
+        handful of `shutil.copy2` calls -- proceed concurrently instead of
+        blocking the event loop one at a time. A no-op under `inprocess`,
+        which shares the parent's namespace directly and never reads a
+        subagent workspace off disk.
+        """
+        if runtime_backend.active_backend() == "inprocess":
+            return
+        await asyncio.to_thread(self._snapshot_tables_for, child_id)
+
+    def _snapshot_tables_for(self, child_id: str) -> None:
+        """Copies this session's materialized tables into a subagent's workspace.
+
+        A copy, not a live share: the daemon that will read these only reads
+        them once at startup, but this session can still `set_active`/upload/
+        remove a dataset while the subagent's daemon is starting or running,
+        and `remove_dataset` unlinks files outside any lock. A snapshot means a
+        concurrent mutation on the parent can never tear a file out from under
+        a subagent mid-read.
+        """
+        child_dir = runtime_backend.workspace_for(child_id)
+        child_tables = child_dir / "tables"
+        child_tables.mkdir(parents=True, exist_ok=True)
+        parent_dir = self.workspace
+        try:
+            for feather in (parent_dir / "tables").glob("*.feather"):
+                shutil.copy2(feather, child_tables / feather.name)
+            for name in ("dataset.feather", "dataset.csv"):
+                source = parent_dir / name
+                if source.exists():
+                    shutil.copy2(source, child_dir / name)
+        except OSError as exc:
+            logger.warning("Could not snapshot tables for subagent", subagent=child_id, error=str(exc))
+
+    def release_subagent_runtime(self, child_id: str) -> None:
+        """Frees a finished branch's process/container as soon as it is done.
+
+        Unlike the parent's own runtime, a subagent is never reused across
+        iterations -- it exists for one bounded mini-loop -- so nothing is
+        gained from keeping it warm past that. Deliberately does **not**
+        forget the usage ledger or drop `child_id` from `_subagent_ids`: the
+        turn's own `_finalize` still has to read this branch's cost through
+        `usage_ledger.totals_many` after every branch has folded back, and
+        forgetting it here would zero that out from under it. Full teardown
+        is `dispose_subagent`, called once the turn -- not just the branch --
+        is over.
+        """
+        runtime_backend.release_runtime(child_id)
+        runtime_backend.forget_capabilities(child_id)
+
+    def dispose_subagent(self, child_id: str) -> None:
+        """Forgets a subagent completely: runtime, capabilities and cost.
+
+        Called from `Session.dispose()` for any branch still registered when
+        the session itself goes away -- by then nothing will read its usage
+        ledger rows again.
+        """
+        self._subagent_ids.discard(child_id)
+        self.release_subagent_runtime(child_id)
+        usage_ledger.forget(child_id)
+        # The workspace holds a full snapshot of every table; nothing reads
+        # it once the runtime that read it is gone.
+        shutil.rmtree(runtime_backend.workspace_for(child_id), ignore_errors=True)
 
     # ------------------------------------------------------------------ #
     # Reference documents
@@ -414,6 +508,11 @@ class Session:
 
     def dispose(self):
         """Releases the container and forgets persisted rows for this session."""
+        # Any subagent still alive at session end (a turn cancelled mid-fan-out,
+        # a crash) would otherwise leak its process/container until this
+        # process exits, since a subagent never appears in `SessionManager`.
+        for child_id in list(self._subagent_ids):
+            self.dispose_subagent(child_id)
         runtime_backend.release_runtime(self.id)
         runtime_backend.forget_capabilities(self.id)
         usage_ledger.forget(self.id)

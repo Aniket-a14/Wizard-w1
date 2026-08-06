@@ -59,6 +59,22 @@ class EventType(StrEnum):
     #: What the turn cost. Absent under local-only, where there is no meter.
     USAGE = "usage"  # {calls, total_tokens, cost_usd, any_cloud, estimated}
 
+    # ------------------------------------------------------------------ #
+    # Subagent frames (Milestone 7).
+    #
+    # A branch's own iteration_start/action/observation/step_start/step_end/
+    # status/assumption/code/stdout frames are the *existing* types, just
+    # additively tagged with `branch` by `BranchEmitter` -- reusing them would
+    # be wrong for the top-level `action`/`observation` pair (whose "closes the
+    # most recent open entry" matching only holds under strict seriality), but
+    # is exactly right for everything else, since each branch's own sequence is
+    # still strictly serial even though branches run concurrently with each
+    # other. These two frames exist only to bound a branch's lifetime for a UI
+    # that wants to group its tagged frames into a panel.
+    # ------------------------------------------------------------------ #
+    SUBAGENT_START = "subagent_start"  # {branch, goal, group}
+    SUBAGENT_END = "subagent_end"  # {branch, group, ok, cost_usd, total_tokens, calls}
+
 
 class Phase(StrEnum):
     IDLE = "idle"
@@ -72,6 +88,7 @@ class Phase(StrEnum):
     EXECUTING = "executing"
     CORRECTING = "correcting"
     REFLECTING = "reflecting"
+    INVESTIGATING_PARALLEL = "investigating_parallel"
     REVIEWING = "reviewing"
     VERIFYING = "verifying"
     ANSWERING = "answering"
@@ -102,6 +119,29 @@ async def emit(emitter: Emitter | None, event_type: EventType, **data: Any) -> N
     result = emitter(Event(type=event_type, data=data))
     if asyncio.iscoroutine(result):
         await result
+
+
+class BranchEmitter:
+    """Wraps an emitter, tagging every event with which subagent branch sent it.
+
+    A subagent runs the *same* handlers (``_act_code``/``_generate``/
+    ``_execute``) the main loop does, unmodified, so it emits the same event
+    types. What distinguishes its frames from the main thread's -- and from a
+    concurrent sibling branch's -- is purely this additive ``branch`` key.
+    ``setdefault`` rather than assignment so a frame that already names its own
+    branch (there isn't one today, but nesting is not precluded) is not
+    overwritten by an outer wrapper.
+    """
+
+    def __init__(self, inner: Emitter | None, branch: str):
+        self._inner = inner
+        self._branch = branch
+
+    def __call__(self, event: Event) -> Awaitable[None] | None:
+        event.data.setdefault("branch", self._branch)
+        if self._inner is None:
+            return None
+        return self._inner(event)
 
 
 class EventCollector:

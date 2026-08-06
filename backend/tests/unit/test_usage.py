@@ -132,6 +132,37 @@ def test_disposing_a_session_forgets_its_usage() -> None:
     assert ledger.totals("s1")["calls"] == 0
 
 
+def test_totals_many_merges_records_across_ids() -> None:
+    """The building block Milestone 7 uses to keep a turn's cost readout honest.
+
+    A subagent's LLM calls book under its own composite session id rather
+    than the parent's (see `SubagentSession`), so the parent's own `totals()`
+    alone would under-report a turn that used subagents. Records are merged by
+    `(provider, model, role)`, so a subagent's `worker` calls fold into the
+    same bucket the main loop's own do -- correct for "what did this turn
+    cost," and each id is still independently queryable for a per-branch
+    breakdown.
+    """
+    ledger = UsageLedger()
+    ledger.record("parent", "ollama", "qwen2.5-coder", "manager", TokenUsage(100, 20))
+    ledger.record("parent::sub:sub1", "ollama", "qwen2.5-coder", "worker", TokenUsage(50, 10))
+    ledger.record("parent::sub:sub2", "ollama", "qwen2.5-coder", "worker", TokenUsage(30, 5))
+
+    merged = ledger.totals_many(["parent", "parent::sub:sub1", "parent::sub:sub2"])
+    assert merged["calls"] == 3
+    assert merged["input_tokens"] == 180
+    assert merged["output_tokens"] == 35
+    # Merged into one record per (provider, model, role): two `worker` rows
+    # from two different subagents collapse into one bucket, not two.
+    assert len(merged["records"]) == 2
+
+    # Each id is still independently queryable.
+    assert ledger.totals("parent::sub:sub1")["calls"] == 1
+
+    # An id with nothing recorded (a branch that never ran) contributes nothing.
+    assert ledger.totals_many(["parent", "never-spawned"]) == ledger.totals("parent")
+
+
 # --------------------------------------------------------------------------- #
 # Recording through the provider
 # --------------------------------------------------------------------------- #
