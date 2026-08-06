@@ -184,7 +184,22 @@ def skills_list() -> int:
         print(f"\n{len(staged)} skill(s) fetched and awaiting review:")
         for item in staged:
             print(f"  {item.id}  {item.name} — {item.source.url} @ {item.short_sha}")
-        print("Review them in the app, or discard with `skills remove <name>` after installing.")
+        print("Install one with `skills add <url>` again, or throw it away with `skills discard <id>`.")
+    return 0
+
+
+def skills_discard(pending_id: str) -> int:
+    """Throws a staged skill away without installing it.
+
+    Its own action because `skills remove` cannot do this: that removes an
+    *installed* skill through the registry, and a staged one is not installed —
+    it would report "No skill called ..." and leave the staged copy on disk.
+    Without this the CLI could stage a skill it had no way to clear.
+    """
+    if not install.discard(pending_id):
+        print(f"Nothing staged under id {pending_id!r}. `skills list` shows what is waiting.", file=sys.stderr)
+        return 1
+    print(f"Discarded {pending_id}. Nothing was installed.")
     return 0
 
 
@@ -216,6 +231,13 @@ def skills_update(name: str | None, assume_yes: bool) -> int:
             continue
         try:
             applied = install.apply_update(target)
+        except FetchError as exc:
+            # `apply_update` re-fetches after the check, so an upstream failure
+            # between the diff and the apply lands here. `FetchError` is a
+            # `RuntimeError`, not a `SkillError`, so without this the command
+            # exits on a traceback instead of the sentence written for it.
+            print(f"{target}: could not fetch — {exc}", file=sys.stderr)
+            continue
         except SkillError as exc:
             print(f"{target}: {exc}", file=sys.stderr)
             continue
@@ -241,7 +263,12 @@ def skills_token(token: str | None) -> int:
         print("A GitHub token is saved." if token_saved() else "No GitHub token is saved.")
         print("Without one, GitHub allows 60 requests an hour and no private repositories.")
         return 0
-    save_token(token)
+    if not save_token(token) and token.strip():
+        # `save_token` returns False when the credential store could not write.
+        # Printing "Saved." anyway would leave someone believing a token is
+        # stored and unable to explain the rate-limit refusals that follow.
+        print("Could not save the token — check the config directory is writable.", file=sys.stderr)
+        return 1
     print("Saved." if token.strip() else "Removed the stored token.")
     return 0
 
@@ -282,6 +309,9 @@ def _build_skills_parser() -> argparse.ArgumentParser:
     update.add_argument("name", nargs="?", help="One skill; omit for every installed skill.")
     update.add_argument("--yes", action="store_true", help="Apply without confirming the diff.")
 
+    discard = actions.add_parser("discard", help="Throw away a fetched skill without installing it.")
+    discard.add_argument("pending_id", help="The id `skills list` prints beside a skill awaiting review.")
+
     remove = actions.add_parser("remove", help="Uninstall a skill.")
     remove.add_argument("name")
 
@@ -299,6 +329,8 @@ def _run_skills(argv: list[str]) -> int:
         return skills_list()
     if args.action == "update":
         return skills_update(args.name, args.yes)
+    if args.action == "discard":
+        return skills_discard(args.pending_id)
     if args.action == "remove":
         return skills_remove(args.name)
     if args.action == "token":

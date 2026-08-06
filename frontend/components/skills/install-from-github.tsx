@@ -76,6 +76,10 @@ export function InstallFromGitHub({
   const discard = useCallback(
     async (item: PendingSkill) => {
       setBusy(`discard:${item.id}`)
+      // Cleared here as it is in `fetchSource` and `approve`. The notice below
+      // renders only when `error` is null, so a stale failure would both stay on
+      // screen and swallow the success message for the action that just worked.
+      setError(null)
       try {
         await api.discardPendingSkill(item.id)
         setNotice(`Discarded “${item.name}”. Nothing was installed.`)
@@ -91,6 +95,7 @@ export function InstallFromGitHub({
 
   const saveToken = useCallback(async () => {
     setBusy("token")
+    setError(null)
     try {
       const result = await api.setGitHubToken(token)
       setNotice(result.message)

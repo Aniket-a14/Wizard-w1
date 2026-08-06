@@ -175,3 +175,50 @@ def test_forgetting_removes_the_record(tmp_path):
 def test_a_record_needs_a_name_and_a_commit():
     with pytest.raises(ValueError):
         InstallRecord.from_dict({"source": SkillSource(kind="repo").to_dict(), "sha": ""})
+
+
+# --------------------------------------------------------------------------- #
+# Gist requests carry the pin
+# --------------------------------------------------------------------------- #
+def test_a_gist_read_asks_for_the_pinned_revision(monkeypatch):
+    """`gists/{id}` answers with the *current* revision.
+
+    Reading through it after pinning to `history[0].version` would record a
+    commit that does not identify the bytes read, and an update check would then
+    compare a stored SHA against a body fetched from HEAD — "pin, don't track"
+    quietly not holding for gists. The revision belongs in the path.
+    """
+    from src.core.skills.fetch import GitHubFetcher
+
+    asked: list[str] = []
+    fetcher = GitHubFetcher(api_root="https://api.example.invalid", token="")
+
+    def fake_get(path, params=None):
+        asked.append(path)
+        return {"files": {"SKILL.md": {"size": 12, "content": "hello", "truncated": False}}}
+
+    monkeypatch.setattr(fetcher, "_get", fake_get)
+    source = parse_source("https://gist.github.com/bob/abc123")
+
+    fetcher.listing(source, "f" * 40)
+    fetcher.read(source, "f" * 40, "SKILL.md")
+
+    assert asked == [f"gists/abc123/{'f' * 40}"] * 2
+
+
+def test_a_gist_file_over_the_ceiling_is_refused(monkeypatch):
+    """`truncated` is the gist API's own limit and sits near 1 MB, so checking
+    only that would accept a file several times over the configured maximum."""
+    from src.config import settings
+    from src.core.skills.fetch import FetchError, GitHubFetcher
+
+    fetcher = GitHubFetcher(api_root="https://api.example.invalid", token="")
+    oversized = settings.SKILLS_FETCH_MAX_BYTES + 1
+    monkeypatch.setattr(
+        fetcher,
+        "_get",
+        lambda path, params=None: {"files": {"SKILL.md": {"size": oversized, "content": "x", "truncated": False}}},
+    )
+
+    with pytest.raises(FetchError, match="ceiling"):
+        fetcher.read(parse_source("https://gist.github.com/abc123"), "f" * 40, "SKILL.md")

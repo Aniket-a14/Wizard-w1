@@ -437,7 +437,20 @@ def approve(pending_id: str) -> Skill:
     except OSError as exc:
         raise InstallError(f"Could not install the skill: {exc}")
 
-    install_index.record(InstallRecord(name=item.name, source=item.source, sha=item.sha, updated_at=time.time()))
+    # Checked, not fired and forgotten. `record` logs and returns False rather
+    # than raising, so ignoring it would leave a skill on disk with no provenance
+    # — the UI would show no source and no pin, and `check_update` would report a
+    # skill installed from a repository as hand-written. Raising here, *before*
+    # the staged copy is removed, leaves the review standing so it can be
+    # approved again once whatever blocked the write is fixed.
+    if not install_index.record(
+        InstallRecord(name=item.name, source=item.source, sha=item.sha, updated_at=time.time())
+    ):
+        raise InstallError(
+            f"'{item.name}' was written but its source could not be recorded, so it would show no origin "
+            "and could not be updated. The staged copy has been kept — check the config directory is writable."
+        )
+
     skill_registry.reload()
     shutil.rmtree(pending_root() / item.id, ignore_errors=True)
 
@@ -480,7 +493,15 @@ def check_update(name: str, fetcher: Fetcher | None = None) -> UpdateResult:
     # Diffed against the file on disk, not against what upstream looked like at
     # install time. Those differ the moment somebody edits an installed skill,
     # and diffing the wrong one would present their own edits as incoming changes.
-    current = Path(skill.path).read_text(encoding="utf-8")
+    #
+    # `skill_registry.get` answers from a cached scan, so the file can be gone by
+    # the time it is opened. An `OSError` here is neither a `FetchError` nor a
+    # `SkillError`, and the route catches only those two — it would reach the user
+    # as a 500 instead of the sentence this module promises.
+    try:
+        current = Path(skill.path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise InstallError(f"Could not read the installed copy of '{record.name}' to compare against: {exc}")
     diff = "".join(
         difflib.unified_diff(
             current.splitlines(keepends=True),
@@ -522,7 +543,19 @@ def apply_update(name: str, fetcher: Fetcher | None = None) -> UpdateResult:
     except OSError as exc:
         raise InstallError(f"Could not write the updated skill: {exc}")
 
-    install_index.record(InstallRecord(name=record.name, source=record.source, sha=result.sha, updated_at=time.time()))
+    # Checked after the file moved, and the failure is reported as exactly that:
+    # the bytes are at the new commit and the record still names the old one, so
+    # the next update check would diff against a commit that is no longer what is
+    # installed. Saying so beats reporting a clean update that half happened.
+    if not install_index.record(
+        InstallRecord(name=record.name, source=record.source, sha=result.sha, updated_at=time.time())
+    ):
+        raise InstallError(
+            f"'{record.name}' was updated to {result.sha[:7]} on disk, but the new commit could not be "
+            f"recorded — it is still noted as {record.short_sha}, so the next update check would compare "
+            "against the wrong commit. Check the config directory is writable and update again."
+        )
+
     skill_registry.reload()
     logger.info("Updated a skill", skill=record.name, sha=result.sha[:7], was=record.short_sha)
     result.applied = True

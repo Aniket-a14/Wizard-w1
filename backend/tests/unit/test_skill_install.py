@@ -7,6 +7,8 @@ by reaching out is a subsystem that stops being tested.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from src.config import settings
@@ -363,3 +365,36 @@ def test_an_enterprise_root_lets_its_own_web_host_through(monkeypatch):
     monkeypatch.setattr(settings, "SKILLS_REGISTRY_API", "https://github.example.com/api/v3")
     source = parse_source("https://github.example.com/acme/skills", extra_hosts=install._enterprise_hosts())
     assert (source.owner, source.repo) == ("acme", "skills")
+
+
+# --------------------------------------------------------------------------- #
+# Failure paths
+# --------------------------------------------------------------------------- #
+def test_a_failed_index_write_keeps_the_review_standing(monkeypatch):
+    """`record` logs and returns False rather than raising.
+
+    Ignoring it would leave a skill on disk with no provenance: the UI would show
+    no source and no pin, and `check_update` would call it hand-written. Failing
+    *before* the staged copy is removed means the user can approve again.
+    """
+    install.preview("acme/skills", single_skill_repo())
+    monkeypatch.setattr(install_index, "record", lambda record: False)
+
+    with pytest.raises(install.InstallError, match="could not be recorded"):
+        install.approve(install.pending()[0].id)
+
+    assert len(install.pending()) == 1, "the staged copy must survive so it can be approved again"
+
+
+def test_a_missing_installed_file_is_reported_not_raised_as_an_oserror():
+    """`skill_registry.get` answers from a cached scan, so the file can be gone
+    by the time the diff opens it. The route catches InstallError, not OSError."""
+    _install_one()
+    skill = skill_registry.get("cohorts")
+    assert skill is not None
+    Path(skill.path).unlink()
+
+    fetcher = single_skill_repo(skill_text(body="Upstream moved on."))
+    fetcher.sha = SHA_TWO
+    with pytest.raises(install.InstallError, match="Could not read the installed copy"):
+        install.check_update("cohorts", fetcher)

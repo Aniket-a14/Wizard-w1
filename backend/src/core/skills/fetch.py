@@ -231,7 +231,7 @@ class GitHubFetcher:
 
     def listing(self, source: SkillSource, sha: str) -> list[RemoteEntry]:
         if source.is_gist:
-            return self._gist_listing(source)
+            return self._gist_listing(source, sha)
 
         payload = self._get(
             f"repos/{source.owner}/{source.repo}/contents/{source.path}".rstrip("/"),
@@ -260,8 +260,20 @@ class GitHubFetcher:
             )
         return entries
 
-    def _gist_listing(self, source: SkillSource) -> list[RemoteEntry]:
-        payload = self._get(f"gists/{source.gist_id}")
+    def _gist_path(self, source: SkillSource, sha: str) -> str:
+        """A gist request that carries the pin, when there is one.
+
+        ``gists/{id}`` answers with the *current* revision. Reading through it
+        after pinning to ``history[0].version`` would record a commit that does
+        not identify the bytes that were read — and an update check would then
+        compare a stored SHA against a body fetched from HEAD, which is the
+        "pin, don't track" guarantee quietly not holding for gists. The revision
+        goes in the path, the way the API spells it.
+        """
+        return f"gists/{source.gist_id}/{sha}" if sha else f"gists/{source.gist_id}"
+
+    def _gist_listing(self, source: SkillSource, sha: str) -> list[RemoteEntry]:
+        payload = self._get(self._gist_path(source, sha))
         files = payload.get("files") if isinstance(payload, dict) else None
         if not isinstance(files, dict):
             raise FetchError("That gist has no files in it.")
@@ -272,7 +284,7 @@ class GitHubFetcher:
 
     def read(self, source: SkillSource, sha: str, path: str) -> str:
         if source.is_gist:
-            return self._gist_read(source, path)
+            return self._gist_read(source, sha, path)
 
         payload = self._get(f"repos/{source.owner}/{source.repo}/contents/{path}", params={"ref": sha})
         if not isinstance(payload, dict):
@@ -294,12 +306,22 @@ class GitHubFetcher:
             raise FetchError(f"GitHub did not inline the contents of '{path}'.")
         return _decode(content, path)
 
-    def _gist_read(self, source: SkillSource, path: str) -> str:
-        payload = self._get(f"gists/{source.gist_id}")
+    def _gist_read(self, source: SkillSource, sha: str, path: str) -> str:
+        payload = self._get(self._gist_path(source, sha))
         files = payload.get("files") if isinstance(payload, dict) else None
         entry = files.get(path) if isinstance(files, dict) else None
         if not isinstance(entry, dict):
             raise FetchError(f"That gist has no file called '{path}'.")
+
+        # The same ceiling the repository path applies. `truncated` is the gist
+        # API's own limit and sits around 1 MB, so checking only that would
+        # accept a file four times over the configured maximum.
+        size = int(entry.get("size") or 0)
+        if size > settings.SKILLS_FETCH_MAX_BYTES:
+            raise FetchError(
+                f"'{path}' is {size:,} bytes, over the {settings.SKILLS_FETCH_MAX_BYTES:,}-byte ceiling "
+                "for a skill file."
+            )
         if entry.get("truncated"):
             raise FetchError(f"'{path}' is too large for the gist API to return in full.")
         return str(entry.get("content") or "")

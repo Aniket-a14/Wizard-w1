@@ -438,7 +438,19 @@ export function SkillsWorkbench() {
                     A pulled skill is pinned to a commit and stays there until
                     somebody updates it, so the pin belongs on screen next to the
                     text it vouches for. */}
-                {selected && <UpdateFromSource skill={selected} onUpdated={() => open(selected.name)} />}
+                {/* Both, not just `open`. The detail pane re-reads itself, but
+                    the list beside it renders `pinned_sha` from `skills` state —
+                    without the refresh the two would disagree about which commit
+                    is installed, immediately after an update. */}
+                {selected && (
+                  <UpdateFromSource
+                    skill={selected}
+                    onUpdated={async () => {
+                      await open(selected.name)
+                      await refresh()
+                    }}
+                  />
+                )}
 
                 {selected && (
                   <p
