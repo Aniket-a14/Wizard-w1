@@ -84,6 +84,13 @@ os.environ.update(
         # points the registry at itself.
         "SKILLS_BUILTIN_DIR": str(TEST_SKILLS_BUILTIN_DIR),
         "SKILLS_PROJECT_DIR": str(TEST_SKILLS_PROJECT_DIR),
+        # Installing a skill is the one thing in this package that dials out, so
+        # it gets the same treatment as the provider URLs below: a port that
+        # refuses instantly. Every install test injects a fake fetcher; this is
+        # what turns "somebody forgot to" into an immediate failure instead of a
+        # request to github.com from a test run.
+        "SKILLS_REGISTRY_API": "http://127.0.0.1:1",
+        "SKILLS_FETCH_TIMEOUT": "2",
         # Bounds every connector import in the suite. Small, because no test
         # needs a large frame to prove a read happened, and a ceiling nobody
         # crosses is a ceiling nobody has tested.
@@ -122,6 +129,8 @@ from src.core.database import db_mgr  # noqa: E402
 from src.core.llm.usage import usage_ledger  # noqa: E402
 from src.core.semantic_cache import semantic_cache  # noqa: E402
 from src.core.session import Session, session_manager  # noqa: E402
+from src.core.skills import install as skill_install  # noqa: E402
+from src.core.skills.index import install_index  # noqa: E402
 from src.core.skills.registry import skill_registry  # noqa: E402
 
 
@@ -243,6 +252,13 @@ def _clean_database():
     db_mgr.clear_skill_candidates()
     db_mgr.clear_skill_usage()
     skill_registry.clear_user_skills()
+    # The install index and the staging root live in the config directory, which
+    # `clear_user_skills` does not touch: it removes skill *files* by path, and
+    # neither of these is one. A record carried forward would offer an update for
+    # a skill the next test does not have, and a staged skill would show up in a
+    # pending list a test wrote nothing into.
+    install_index.clear()
+    skill_install.clear_pending()
     # Cleared, not merely reloaded. Connections persist to disk on purpose --
     # they are configuration, not session data -- so without this a connection
     # saved by one test is still there for the next, which sees a name conflict

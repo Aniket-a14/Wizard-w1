@@ -19,6 +19,7 @@ import type {
   ModelListResponse,
   PermissionProfile,
   PermissionRuling,
+  PendingSkill,
   PermissionsInfo,
   ProvidersResponse,
   SandboxSelfTest,
@@ -27,7 +28,9 @@ import type {
   SkillCandidate,
   SkillDetail,
   SkillDraft,
+  SkillInstallPreview,
   SkillListResponse,
+  SkillUpdateResult,
   UsageTotals,
   WorkspaceFileEntry,
 } from "./types"
@@ -443,6 +446,50 @@ export const api = {
 
   dismissSkillCandidate: (id: number) =>
     request<{ message: string }>(`/api/skills/candidates/${id}/dismiss`, { method: "POST" }),
+
+  // ------------------------------------------------------------------ //
+  // Installing from GitHub
+  // ------------------------------------------------------------------ //
+  /**
+   * Fetches a repository or gist, pins it to a commit, and stages it.
+   *
+   * Installs nothing. What comes back is what the review panel renders: the full
+   * body of each skill and the exact commit it came from. Gated by the `network`
+   * permission category, so a `deny` ruling returns 403 with its reason.
+   */
+  previewSkillInstall: (url: string) =>
+    request<SkillInstallPreview>("/api/skills/install/preview", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  pendingSkills: () => request<{ pending: PendingSkill[]; root: string }>("/api/skills/pending"),
+
+  approvePendingSkill: (id: string) =>
+    request<SkillDetail>(`/api/skills/pending/${encodeURIComponent(id)}/approve`, { method: "POST" }),
+
+  discardPendingSkill: (id: string) =>
+    request<{ message: string }>(`/api/skills/pending/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /**
+   * Re-resolves the pinned ref and reports what changed.
+   *
+   * `apply` defaults to false: pin-don't-track means an installed skill changes
+   * only when someone says so, and applying by default would make the diff a
+   * courtesy rather than a step.
+   */
+  updateSkillFromSource: (name: string, apply = false) =>
+    request<SkillUpdateResult>(`/api/skills/${encodeURIComponent(name)}/update`, {
+      method: "POST",
+      body: JSON.stringify({ apply }),
+    }),
+
+  /** Saves or clears the GitHub token. Never read back — only whether one exists. */
+  setGitHubToken: (token: string) =>
+    request<{ message: string; token_saved: boolean }>("/api/skills/token", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
 }
 
 /** Absolute URL for a file in the current session's workspace. */

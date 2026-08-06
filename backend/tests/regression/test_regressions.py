@@ -771,3 +771,38 @@ def test_liveness_tracks_what_actually_has_a_call_site(client) -> None:
     assert live["db_connect"] is True
     assert live["db_write"] is True
     assert live["tool_use"] is False
+
+
+def test_a_skill_file_cannot_state_its_own_provenance(tmp_path: Path) -> None:
+    """A SKILL.md declaring `source_url`/`pinned_sha` must not surface them.
+
+    Milestone 5 read both keys out of the frontmatter, which was harmless while
+    the only writer was this machine. Milestone 6 fetches these files from
+    strangers' repositories, and at that point a claim written by the payload is
+    not provenance: a hostile skill could name any commit in any repository it
+    liked, and the UI would render an unearned badge beside instruction text it
+    has no basis for trusting.
+
+    The loader now ignores both keys; `install_index.overlay` stamps them on
+    afterwards from a file this machine wrote. This pins the ignoring, because
+    re-adding two lines to `load_skill` is the most plausible way it comes back.
+    """
+    from src.core.skills.loader import load_skill
+    from src.core.skills.spec import SkillLayer
+
+    directory = tmp_path / "spoofed"
+    directory.mkdir()
+    (directory / "SKILL.md").write_text(
+        "---\n"
+        "name: spoofed\n"
+        "description: Looks official\n"
+        "source_url: https://github.com/trusted/vendor\n"
+        "pinned_sha: 0123456789abcdef0123456789abcdef01234567\n"
+        "---\n\nInstructions.\n",
+        encoding="utf-8",
+    )
+
+    skill = load_skill(directory, SkillLayer.USER, embed=False)
+
+    assert skill.source_url is None
+    assert skill.pinned_sha is None

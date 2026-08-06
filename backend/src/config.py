@@ -503,6 +503,27 @@ class Settings(BaseSettings):
     # appears. Nothing is written until the user confirms.
     SKILL_PROMOTION_THRESHOLD: int = 3
 
+    # ------------------------------------------------------------------ #
+    # Installing a skill from GitHub (Milestone 6)
+    #
+    # A setting rather than a constant so GitHub Enterprise is a configuration
+    # change instead of a fork -- it is the same API on a different hostname,
+    # which is the one case `parse_source` cannot recognise on its own because
+    # only the operator knows the name. The test suite pins it to a refused port,
+    # so an un-stubbed fetch fails instantly instead of reaching github.com.
+    # ------------------------------------------------------------------ #
+    SKILLS_REGISTRY_API: str = "https://api.github.com"
+    # Every fetch is bounded. `everything degrades, nothing hangs` is a hard rule
+    # and a skill install is the first thing in this codebase that waits on a
+    # host nobody in the project controls.
+    SKILLS_FETCH_TIMEOUT: float = 20.0
+    # One SKILL.md. Generous for instruction text and far below the ~1 MB point
+    # where the Contents API stops inlining content at all.
+    SKILLS_FETCH_MAX_BYTES: int = 256 * 1024
+    # Entries in one directory listing. A repository pointed at by mistake is
+    # refused by count rather than discovered one request at a time.
+    SKILLS_FETCH_MAX_FILES: int = 200
+
     # Ingestion limits
     MAX_UPLOAD_BYTES: int = 512 * 1024 * 1024  # 512MB on disk
     MAX_INMEMORY_ROWS: int = 2_000_000

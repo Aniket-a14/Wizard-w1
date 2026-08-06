@@ -120,10 +120,19 @@ class Skill:
     tags: list[str] = field(default_factory=list)
     version: str = ""
     chunks: list[SkillChunk] = field(default_factory=list)
-    #: Set by Milestone 6 when a skill came from a repository. Present now so an
-    #: installed skill's stored shape does not change under it later.
+    #: Where this came from, when it did not come from here. Stamped on after the
+    #: scan by ``install_index.overlay`` and **never read from the file's own
+    #: frontmatter** -- a fetched SKILL.md describing its own origin is a claim,
+    #: not a record. See :mod:`~src.core.skills.index`.
     source_url: str | None = None
+    #: The branch or tag being followed, kept alongside the commit it resolved to.
+    #: Two different facts: the ref is what an update re-resolves, the SHA is what
+    #: is installed right now. Keeping only one of them is how "pin, don't track"
+    #: quietly becomes "track".
+    source_ref: str | None = None
     pinned_sha: str | None = None
+    installed_at: float | None = None
+    updated_at: float | None = None
     #: Name of the layer that overrides this one, when a more specific layer
     #: defines the same name. The UI needs this to explain why editing the
     #: built-in copy changed nothing.
@@ -151,7 +160,10 @@ class Skill:
             "chunks": len(self.chunks),
             "writable": self.layer.writable,
             "source_url": self.source_url,
+            "source_ref": self.source_ref,
             "pinned_sha": self.pinned_sha,
+            "installed_at": self.installed_at,
+            "updated_at": self.updated_at,
             "shadowed_by": self.shadowed_by,
         }
 

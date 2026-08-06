@@ -3,6 +3,7 @@
 import {
   BookmarkPlus,
   FolderOpen,
+  GitCommit,
   Layers,
   Loader2,
   Lock,
@@ -14,8 +15,17 @@ import {
 import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader } from "@/components/page-header"
+import { InstallFromGitHub, UpdateFromSource } from "@/components/skills/install-from-github"
 import { api, ApiError } from "@/lib/api"
-import type { SkillCandidate, SkillDetail, SkillLayer, SkillRoot, SkillSummary } from "@/lib/types"
+import type {
+  PendingSkill,
+  SkillCandidate,
+  SkillDetail,
+  SkillLayer,
+  SkillRegistryStatus,
+  SkillRoot,
+  SkillSummary,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const LAYER_ORDER: SkillLayer[] = ["project", "user", "builtin"]
@@ -53,6 +63,8 @@ export function SkillsWorkbench() {
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [roots, setRoots] = useState<SkillRoot[]>([])
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
+  const [pending, setPending] = useState<PendingSkill[]>([])
+  const [registry, setRegistry] = useState<SkillRegistryStatus | null>(null)
   const [enabled, setEnabled] = useState(true)
   const [selected, setSelected] = useState<SkillDetail | null>(null)
   const [draft, setDraft] = useState(EMPTY_DRAFT)
@@ -67,6 +79,8 @@ export function SkillsWorkbench() {
       setSkills(payload.skills)
       setRoots(payload.roots)
       setCandidates(payload.candidates)
+      setPending(payload.pending ?? [])
+      setRegistry(payload.registry ?? null)
       setEnabled(payload.enabled)
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not load skills.")
@@ -228,6 +242,8 @@ export function SkillsWorkbench() {
         {error && <Banner tone="danger">{error}</Banner>}
         {notice && !error && <Banner tone="ok">{notice}</Banner>}
 
+        <InstallFromGitHub pending={pending} registry={registry} onChanged={refresh} />
+
         {candidates.length > 0 && (
           <section className="mb-6">
             <SectionTitle icon={BookmarkPlus}>Worth saving</SectionTitle>
@@ -316,6 +332,12 @@ export function SkillsWorkbench() {
                             {skill.uses > 0 && (
                               <span className="mt-1 block text-[11px] text-muted-foreground/80">
                                 Informed {skill.uses} {skill.uses === 1 ? "analysis" : "analyses"}
+                              </span>
+                            )}
+                            {skill.pinned_sha && (
+                              <span className="mt-1 flex items-center gap-1 font-mono text-[10.5px] text-muted-foreground/80">
+                                <GitCommit className="h-3 w-3 shrink-0" />
+                                installed · {skill.pinned_sha.slice(0, 7)}
                               </span>
                             )}
                             {skill.shadowed_by && (
@@ -410,6 +432,24 @@ export function SkillsWorkbench() {
                       ))}
                     </ul>
                   </div>
+                )}
+
+                {/* Where it came from, and the one control that can change it.
+                    A pulled skill is pinned to a commit and stays there until
+                    somebody updates it, so the pin belongs on screen next to the
+                    text it vouches for. */}
+                {/* Both, not just `open`. The detail pane re-reads itself, but
+                    the list beside it renders `pinned_sha` from `skills` state —
+                    without the refresh the two would disagree about which commit
+                    is installed, immediately after an update. */}
+                {selected && (
+                  <UpdateFromSource
+                    skill={selected}
+                    onUpdated={async () => {
+                      await open(selected.name)
+                      await refresh()
+                    }}
+                  />
                 )}
 
                 {selected && (
