@@ -295,11 +295,18 @@ class HostRuntimePool:
         Read here rather than passed in, because a runtime is created lazily
         from several call sites and none of them holds the session. Imported
         inside the function: `core.session` imports this module's pool.
+
+        A subagent's composite id is not a real key in `session_manager` -- it
+        is resolved back to the owning session's id first, since permission
+        grants are deliberately session-wide (see `SubagentSession`): a branch
+        should see the same consented roots its parent already has, not none.
         """
         try:
             from src.core.session import session_manager
+            from src.core.tools.runtime import is_subagent_id, parent_session_id
 
-            session = session_manager.get(session_id)
+            real_id = parent_session_id(session_id) if is_subagent_id(session_id) else session_id
+            session = session_manager.get(real_id)
             return tuple(session.permissions.extra_roots) if session is not None else ()
         except Exception:  # noqa: BLE001 - a missing session is not an error here
             return ()
