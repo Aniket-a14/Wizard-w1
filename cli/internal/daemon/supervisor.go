@@ -75,12 +75,23 @@ type managed struct {
 	failStreak int
 }
 
+// start is transactional: m.child is only assigned once the process is both
+// running and recorded. A child that started but whose pid file could not be
+// written is terminated immediately rather than left running and untracked
+// -- otherwise a WritePID failure leaks a process `wizard stop` can never
+// find, since it has no pid file to read.
 func (m *managed) start() error {
-	m.child = NewChild(m.spec.Label, m.spec.Name, m.spec.Args, m.spec.Dir, m.spec.Env, m.log)
-	if err := m.child.Start(); err != nil {
+	child := NewChild(m.spec.Label, m.spec.Name, m.spec.Args, m.spec.Dir, m.spec.Env, m.log)
+	if err := child.Start(); err != nil {
 		return err
 	}
-	return WritePID(m.pidPath, m.child.Pid())
+	if err := WritePID(m.pidPath, child.Pid()); err != nil {
+		_ = child.Terminate(DefaultTerminateGrace)
+		_ = RemovePID(m.pidPath)
+		return fmt.Errorf("recording pid for %s: %w", m.spec.Label, err)
+	}
+	m.child = child
+	return nil
 }
 
 // Run blocks until told to stop (the sentinel file appears) or a child

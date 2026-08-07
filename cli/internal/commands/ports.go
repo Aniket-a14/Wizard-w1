@@ -48,6 +48,12 @@ func saveActivePorts(env *Env, backend, frontend string) error {
 	if err != nil {
 		return err
 	}
+	// RunDir normally already exists (appdir.RunDir creates it), but
+	// `wizard start` calls this before the supervisor's own daemon.Run has
+	// necessarily created it -- see cli/internal/daemon/supervisor.go.
+	if err := os.MkdirAll(env.RunDir, 0o700); err != nil {
+		return err
+	}
 	return os.WriteFile(portsFilePath(env), data, 0o644)
 }
 

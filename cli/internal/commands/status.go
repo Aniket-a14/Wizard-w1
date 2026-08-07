@@ -45,8 +45,11 @@ func RunStatus(env *Env, args []string) int {
 	printLogSize(env, "  frontend.log", env.FrontendLogPath())
 	printLogSize(env, "  daemon.log  ", env.DaemonLogPath())
 
-	execBackend, found := readEnvValue(env.BackendEnvPath(), "EXECUTION_BACKEND")
-	if !found {
+	execBackend, found, err := readEnvValue(env.BackendEnvPath(), "EXECUTION_BACKEND")
+	switch {
+	case err != nil:
+		execBackend = fmt.Sprintf("(could not read backend/.env: %v)", err)
+	case !found:
 		execBackend = "host (default; no backend/.env override)"
 	}
 	fmt.Fprintf(env.Out, "\nEXECUTION_BACKEND: %s\n", execBackend)
@@ -87,7 +90,7 @@ func printDockerReachability(env *Env) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := exec.CommandContext(ctx, "docker", "info").Run(); err != nil {
-		fmt.Fprintln(env.Out, "docker:   found, but the daemon is not reachable (EXECUTION_BACKEND=docker will degrade to host)")
+		fmt.Fprintln(env.Out, "docker:   found, but the daemon is not reachable (fallback behavior is whatever the backend's own EXECUTION_BACKEND resolution reports -- see the backend section above)")
 		return
 	}
 	fmt.Fprintln(env.Out, "docker:   reachable")

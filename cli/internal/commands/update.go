@@ -46,8 +46,18 @@ func RunUpdate(env *Env, args []string) int {
 		return 1
 	}
 
-	if newVersion, err := readAPIVersionFromSource(env); err == nil {
-		if mismatched, cmpErr := compat.Mismatch(newVersion); cmpErr == nil && mismatched {
+	newVersion, err := readAPIVersionFromSource(env)
+	switch {
+	case err != nil:
+		// The pull already succeeded and dependencies are installed -- do
+		// not claim compatibility is confirmed when it was never checked.
+		fmt.Fprintf(env.Err, "(could not read the backend API version after the pull: %v; compatibility is unverified)\n", err)
+	default:
+		mismatched, cmpErr := compat.Mismatch(newVersion)
+		switch {
+		case cmpErr != nil:
+			fmt.Fprintf(env.Err, "(could not compare API versions: %v; compatibility is unverified)\n", cmpErr)
+		case mismatched:
 			fmt.Fprintf(env.Err,
 				"The updated backend now reports API v%s; this wizard binary is built for v%s.\n"+
 					"Rebuild/reinstall the wizard CLI before starting it again.\n",
@@ -58,7 +68,8 @@ func RunUpdate(env *Env, args []string) int {
 
 	if wasRunning {
 		fmt.Fprintln(env.Out, "\nRestarting...")
-		return RunStart(env, nil)
+		backend, frontend := loadActivePorts(env)
+		return RunStart(env, []string{"--backend-port", backend, "--frontend-port", frontend})
 	}
 
 	fmt.Fprintln(env.Out, "\nUpdated. Run `wizard start` when you're ready.")

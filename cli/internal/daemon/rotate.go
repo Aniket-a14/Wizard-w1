@@ -73,18 +73,34 @@ func (w *RotatingWriter) rotate() error {
 		return err
 	}
 
+	// Errors are collected rather than returned immediately: w.file was just
+	// closed above, so this call must still reach w.open() to leave the
+	// writer usable, even when a rename/remove step failed -- returning
+	// early here would brick every later Write with "file already closed"
+	// over one transient rotation failure, trading a bounded-growth problem
+	// for a total-log-loss one.
+	var rotateErr error
+	recordErr := func(err error) {
+		if err != nil && !os.IsNotExist(err) && rotateErr == nil {
+			rotateErr = err
+		}
+	}
+
 	oldest := fmt.Sprintf("%s.%d", w.Path, w.Backups)
-	_ = os.Remove(oldest)
+	recordErr(os.Remove(oldest))
 	for i := w.Backups - 1; i >= 1; i-- {
 		src := fmt.Sprintf("%s.%d", w.Path, i)
 		dst := fmt.Sprintf("%s.%d", w.Path, i+1)
-		_ = os.Rename(src, dst)
+		recordErr(os.Rename(src, dst))
 	}
 	if w.Backups >= 1 {
-		_ = os.Rename(w.Path, fmt.Sprintf("%s.1", w.Path))
+		recordErr(os.Rename(w.Path, fmt.Sprintf("%s.1", w.Path)))
 	}
 
-	return w.open()
+	if err := w.open(); err != nil {
+		return err
+	}
+	return rotateErr
 }
 
 func (w *RotatingWriter) Close() error {

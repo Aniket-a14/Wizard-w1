@@ -60,6 +60,9 @@ func tailLines(path string, n int) ([]string, error) {
 	for scanner.Scan() {
 		all = append(all, scanner.Text())
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
 	if len(all) <= n {
 		return all, nil
 	}

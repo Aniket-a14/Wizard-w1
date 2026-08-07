@@ -22,6 +22,17 @@ func TestActivePortsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestActivePortsCreatesRunDir(t *testing.T) {
+	env := &Env{RunDir: filepath.Join(t.TempDir(), "run")} // RunDir does not exist yet
+	if err := saveActivePorts(env, "9000", "4000"); err != nil {
+		t.Fatalf("saveActivePorts: %v", err)
+	}
+	backend, frontend := loadActivePorts(env)
+	if backend != "9000" || frontend != "4000" {
+		t.Fatalf("got (%q, %q), want (\"9000\", \"4000\")", backend, frontend)
+	}
+}
+
 func TestActivePortsFallBackToDefaults(t *testing.T) {
 	dir := t.TempDir()
 	env := &Env{RunDir: filepath.Join(dir, "run")} // nothing saved, dir does not even exist

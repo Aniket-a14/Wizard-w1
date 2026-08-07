@@ -14,10 +14,15 @@ import (
 // applied). It exists only for `wizard status`/`doctor` to report a setting
 // like EXECUTION_BACKEND without a Python dependency -- it is not a general
 // .env parser and does not need to handle everything python-dotenv does.
-func readEnvValue(path, key string) (string, bool) {
+//
+// A missing file is reported as (found=false, err=nil) -- that is the
+// ordinary state before `wizard init` runs. A scan failure (for example a
+// line past bufio.Scanner's token limit) is returned as an error instead,
+// so it is not silently indistinguishable from the key simply being absent.
+func readEnvValue(path, key string) (string, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
 	defer f.Close()
 
@@ -35,7 +40,10 @@ func readEnvValue(path, key string) (string, bool) {
 		value = strings.Trim(strings.TrimSpace(parts[1]), `"'`)
 		found = true
 	}
-	return value, found
+	if err := scanner.Err(); err != nil {
+		return "", false, err
+	}
+	return value, found, nil
 }
 
 var apiVersionPattern = regexp.MustCompile(`API_VERSION\s*=\s*"([^"]+)"`)

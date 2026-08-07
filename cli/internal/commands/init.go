@@ -53,14 +53,12 @@ func RunInit(env *Env, args []string) int {
 
 	if *pullModels {
 		if !ollama.Found {
-			fmt.Fprintln(env.Out, "\n--pull-models given but Ollama was not found on PATH; skipping.")
-		} else {
-			fmt.Fprintln(env.Out, "\nPulling default models via Ollama...")
-			for _, model := range []string{*managerModel, *workerModel} {
-				if err := runStreamed(env, env.RepoRoot, "ollama", []string{"pull", model}); err != nil {
-					fmt.Fprintf(env.Err, "ollama pull %s failed: %v\n", model, err)
-				}
-			}
+			fmt.Fprintln(env.Err, "\n--pull-models given but Ollama was not found on PATH; nothing was pulled.")
+			return 1
+		}
+		fmt.Fprintln(env.Out, "\nPulling default models via Ollama...")
+		if !pullDefaultModels(env, *managerModel, *workerModel) {
+			return 1
 		}
 	} else if ollama.Found {
 		fmt.Fprintln(env.Out, "\nOllama detected. Run `wizard init --pull-models` to also fetch a default manager/worker model pair.")
@@ -68,6 +66,42 @@ func RunInit(env *Env, args []string) int {
 
 	fmt.Fprintln(env.Out, "\nDone. Run `wizard start` to launch the backend and frontend.")
 	return 0
+}
+
+// pullDefaultModels pulls manager/worker into whichever role does not
+// already have a model pinned in backend/.env (MODEL_NAME/WORKER_MODEL_NAME
+// -- see backend/src/config.py), so a configured checkout does not
+// re-download a default it will not use. It reports whether every requested
+// pull succeeded; the caller turns that into `wizard init`'s exit code, since
+// a silently skipped or failed pull under --pull-models must not look like a
+// completed one.
+func pullDefaultModels(env *Env, managerModel, workerModel string) bool {
+	type modelPull struct {
+		role   string
+		envKey string
+		model  string
+	}
+	pulls := []modelPull{
+		{"manager", "MODEL_NAME", managerModel},
+		{"worker", "WORKER_MODEL_NAME", workerModel},
+	}
+
+	ok := true
+	for _, p := range pulls {
+		pinned, found, err := readEnvValue(env.BackendEnvPath(), p.envKey)
+		switch {
+		case err != nil:
+			fmt.Fprintf(env.Err, "  could not check whether %s is already pinned (%v); pulling the default anyway.\n", p.envKey, err)
+		case found && pinned != "":
+			fmt.Fprintf(env.Out, "  %s already has %s=%s pinned in backend/.env; skipping.\n", p.role, p.envKey, pinned)
+			continue
+		}
+		if err := runStreamed(env, env.RepoRoot, "ollama", []string{"pull", p.model}); err != nil {
+			fmt.Fprintf(env.Err, "ollama pull %s failed: %v\n", p.model, err)
+			ok = false
+		}
+	}
+	return ok
 }
 
 func printCheck(out io.Writer, c ToolCheck) {
@@ -102,7 +136,7 @@ func ensureEnvFile(env *Env) error {
 	}
 	defer src.Close()
 
-	dst, err := os.OpenFile(env.BackendEnvPath(), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
+	dst, err := os.OpenFile(env.BackendEnvPath(), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}

@@ -41,12 +41,16 @@ func RunStart(env *Env, args []string) int {
 		return 1
 	}
 
-	extraEnv := []string{}
-	if *backendPortFlag != "" {
-		extraEnv = append(extraEnv, "WIZARD_BACKEND_PORT="+*backendPortFlag)
-	}
-	if *frontendPortFlag != "" {
-		extraEnv = append(extraEnv, "WIZARD_FRONTEND_PORT="+*frontendPortFlag)
+	// Resolved through the same backendPort()/frontendPort() helpers
+	// RunSupervise uses, and always exported -- otherwise a
+	// WIZARD_BACKEND_PORT set in the environment (but no --backend-port
+	// flag) would be honored by the supervisor and ignored here, and start
+	// would poll the wrong URL and report a false health timeout.
+	resolvedBackendPort := firstNonEmpty(*backendPortFlag, backendPort())
+	resolvedFrontendPort := firstNonEmpty(*frontendPortFlag, frontendPort())
+	extraEnv := []string{
+		"WIZARD_BACKEND_PORT=" + resolvedBackendPort,
+		"WIZARD_FRONTEND_PORT=" + resolvedFrontendPort,
 	}
 
 	self, err := os.Executable()
@@ -63,11 +67,15 @@ func RunStart(env *Env, args []string) int {
 	}
 	if err := daemon.WritePID(env.DaemonPIDPath(), pid); err != nil {
 		fmt.Fprintf(env.Err, "Could not record the daemon pid: %v\n", err)
+		// The supervisor is running detached with no pid file recorded for
+		// it -- left alone it would be an orphan `wizard stop` can never
+		// find, still holding both ports.
+		if killErr := daemon.KillPID(pid); killErr != nil {
+			fmt.Fprintf(env.Err, "Could not stop the orphaned supervisor (pid %d): %v\n", pid, killErr)
+		}
 		return 1
 	}
 
-	resolvedBackendPort := firstNonEmpty(*backendPortFlag, DefaultBackendPort)
-	resolvedFrontendPort := firstNonEmpty(*frontendPortFlag, DefaultFrontendPort)
 	if err := saveActivePorts(env, resolvedBackendPort, resolvedFrontendPort); err != nil {
 		fmt.Fprintf(env.Out, "(could not record the active ports for `wizard status`: %v)\n", err)
 	}
@@ -129,4 +137,10 @@ func requestStop(env *Env) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	// The supervisor did not notice in time. Leaving the sentinel behind
+	// would make the *next* `wizard start` shut its own supervisor down at
+	// the first poll tick, since daemon.Run only clears the crashed marker
+	// on a fresh run, not this one.
+	_ = os.Remove(env.StopSentinelPath())
+	fmt.Fprintln(env.Err, "The supervisor is still running. Run `wizard stop` to force a shutdown.")
 }

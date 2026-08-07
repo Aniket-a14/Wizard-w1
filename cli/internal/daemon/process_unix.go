@@ -4,8 +4,11 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -64,7 +67,34 @@ func detachAttrs(cmd *exec.Cmd) {
 // process group) to stop, given only a bare pid recorded in a pid file --
 // `wizard stop`'s fallback for when the supervisor did not clean up in time
 // and there is no live *Child, just a number on disk.
+//
+// pid <= 1 is refused outright: kill(-1, ...) is a broadcast to every
+// process the caller may signal, and kill(-0/-1 as a group, ...) is never a
+// pid this package could have legitimately recorded (see WritePID/LiveAt),
+// so treating one as an ordinary target is always a bug upstream, not a
+// process actually worth signaling.
 func KillPID(pid int) error {
+	if pid <= 1 {
+		return fmt.Errorf("refusing to signal pid %d (would broadcast rather than target one process)", pid)
+	}
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	return syscall.Kill(pid, syscall.SIGKILL)
+}
+
+// processStartTime returns an opaque, comparable token identifying when pid
+// started, used to detect pid reuse (see LiveAt in pidfile.go). There is no
+// portable syscall for this in the stdlib across Linux and macOS -- /proc is
+// Linux-only -- so this shells out to `ps`, which both platforms ship. A
+// failure here (ps missing, pid gone) is reported as an error, and callers
+// treat that as "ownership unverifiable" rather than as proof of anything.
+func processStartTime(pid int) (string, error) {
+	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return "", err
+	}
+	started := strings.TrimSpace(string(out))
+	if started == "" {
+		return "", fmt.Errorf("ps reported no start time for pid %d", pid)
+	}
+	return started, nil
 }

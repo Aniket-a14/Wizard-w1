@@ -2,10 +2,12 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
+	"time"
 )
 
 // ToolCheck is what `wizard init`/`wizard doctor` report about one
@@ -82,12 +84,21 @@ func CheckOllama() ToolCheck {
 	return ToolCheck{Name: "Ollama", Found: true, Path: path, OK: true}
 }
 
+// runVersion is bounded so a PATH-resolved executable that hangs (an
+// unrelated program shadowing the expected name, a broken wrapper script)
+// cannot block `wizard init`/`wizard doctor` from reporting anything at all.
+// A timeout is treated the same as unparsable output -- an unknown version,
+// not a crash.
 func runVersion(name string, args ...string) string {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out // some tools (older Python) print --version to stderr
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil && ctx.Err() != nil {
+		return ""
+	}
 	return out.String()
 }
 

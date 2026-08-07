@@ -3,6 +3,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,9 +15,9 @@ func TestReadEnvValueFindsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	value, found := readEnvValue(path, "EXECUTION_BACKEND")
-	if !found || value != "docker" {
-		t.Fatalf("got (%q, %v), want (\"docker\", true)", value, found)
+	value, found, err := readEnvValue(path, "EXECUTION_BACKEND")
+	if err != nil || !found || value != "docker" {
+		t.Fatalf("got (%q, %v, %v), want (\"docker\", true, nil)", value, found, err)
 	}
 }
 
@@ -26,9 +27,9 @@ func TestReadEnvValueStripsQuotes(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`APP_NAME="Wizard"`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	value, found := readEnvValue(path, "APP_NAME")
-	if !found || value != "Wizard" {
-		t.Fatalf("got (%q, %v), want (\"Wizard\", true)", value, found)
+	value, found, err := readEnvValue(path, "APP_NAME")
+	if err != nil || !found || value != "Wizard" {
+		t.Fatalf("got (%q, %v, %v), want (\"Wizard\", true, nil)", value, found, err)
 	}
 }
 
@@ -39,14 +40,17 @@ func TestReadEnvValueLastAssignmentWins(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	value, found := readEnvValue(path, "EXECUTION_BACKEND")
-	if !found || value != "docker" {
-		t.Fatalf("got (%q, %v), want (\"docker\", true)", value, found)
+	value, found, err := readEnvValue(path, "EXECUTION_BACKEND")
+	if err != nil || !found || value != "docker" {
+		t.Fatalf("got (%q, %v, %v), want (\"docker\", true, nil)", value, found, err)
 	}
 }
 
 func TestReadEnvValueMissingFile(t *testing.T) {
-	_, found := readEnvValue(filepath.Join(t.TempDir(), "nope.env"), "ANY")
+	_, found, err := readEnvValue(filepath.Join(t.TempDir(), "nope.env"), "ANY")
+	if err != nil {
+		t.Fatalf("expected no error for a missing file, got %v", err)
+	}
 	if found {
 		t.Fatal("expected found=false for a missing file")
 	}
@@ -58,9 +62,30 @@ func TestReadEnvValueMissingKey(t *testing.T) {
 	if err := os.WriteFile(path, []byte("OTHER=1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, found := readEnvValue(path, "EXECUTION_BACKEND")
+	_, found, err := readEnvValue(path, "EXECUTION_BACKEND")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if found {
 		t.Fatal("expected found=false for a key that is not present")
+	}
+}
+
+func TestReadEnvValueOversizedLineReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	// bufio.Scanner's default max token size is 64KiB; one line past that
+	// must surface as an error, not as a silent found=false.
+	huge := "EXECUTION_BACKEND=" + strings.Repeat("x", 100*1024) + "\n"
+	if err := os.WriteFile(path, []byte(huge), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, found, err := readEnvValue(path, "EXECUTION_BACKEND")
+	if err == nil {
+		t.Fatal("expected an error for a line exceeding the scanner's token limit")
+	}
+	if found {
+		t.Fatal("expected found=false alongside the error")
 	}
 }
 
