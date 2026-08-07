@@ -459,8 +459,8 @@ class Session:
         return f"- `{column}`: {series.nunique(dropna=True):,} distinct — {rendered}"
 
     # ------------------------------------------------------------------ #
-    def append_message(self, role: str, content: str, meta: dict[str, Any] | None = None):
-        db_mgr.append_chat_message(self.id, role, content, meta)
+    def append_message(self, role: str, content: str, meta: dict[str, Any] | None = None) -> int:
+        return db_mgr.append_chat_message(self.id, role, content, meta)
 
     def history(self, limit: int | None = None) -> list[dict[str, Any]]:
         return db_mgr.get_chat_messages(self.id, limit=limit or settings.SESSION_HISTORY_TURNS * 2)

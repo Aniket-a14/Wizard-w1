@@ -713,17 +713,25 @@ class DatabaseManager:
     # ------------------------------------------------------------------ #
     # Chat transcripts (multi-turn context)
     # ------------------------------------------------------------------ #
-    def append_chat_message(self, session_id: str, role: str, content: str, meta: dict[str, Any] | None = None):
+    def append_chat_message(self, session_id: str, role: str, content: str, meta: dict[str, Any] | None = None) -> int:
+        """Records one chat message. Returns the new row id, or 0 on failure.
+
+        The id is what a later "export this turn" request keys on -- see
+        `get_chat_message` -- since `meta` is the only place the ordered,
+        actually-executed steps of a turn are persisted past the run itself.
+        """
         import time
 
         try:
             with self._write() as conn:
-                conn.execute(
+                cursor = conn.execute(
                     "INSERT INTO chat_messages (session_id, timestamp, role, content, meta) VALUES (?, ?, ?, ?, ?)",
                     (session_id, time.time(), role, content, json.dumps(meta or {})),
                 )
+                return int(cursor.lastrowid or 0)
         except Exception as e:
             logger.error("Failed to append chat message", error=str(e))
+            return 0
 
     def get_chat_messages(self, session_id: str, limit: int = 20) -> list[dict[str, Any]]:
         try:
@@ -741,6 +749,31 @@ class DatabaseManager:
         except Exception as e:
             logger.error("Failed to fetch chat messages", error=str(e))
             return []
+
+    def get_chat_message(self, session_id: str, message_id: int) -> dict[str, Any] | None:
+        """One message by id, scoped to ``session_id`` so a message id from a
+        different session can never be looked up -- the export route's only
+        access check.
+        """
+        try:
+            with self._read() as conn:
+                row = conn.execute(
+                    "SELECT id, role, content, timestamp, meta FROM chat_messages WHERE id = ? AND session_id = ?",
+                    (message_id, session_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+                return {
+                    "id": row["id"],
+                    "role": row["role"],
+                    "content": row["content"],
+                    "timestamp": row["timestamp"],
+                    "meta": meta,
+                }
+        except Exception as e:
+            logger.error("Failed to fetch chat message", error=str(e))
+            return None
 
     def delete_session_data(self, session_id: str):
         try:
