@@ -13,7 +13,7 @@ body:
     attributes:
       label: Where is the issue?
       description: Link to the page or file where you found the issue.
-      placeholder: "https://github.com/Aniket-a14/Wizard-w1/blob/master/README.md"
+      placeholder: "https://github.com/Wizard-AIA/Wizard-w2/blob/master/README.md"
     validations:
       required: true
 

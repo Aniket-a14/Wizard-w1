@@ -29,9 +29,9 @@ Two rules that are easy to violate by accident:
 **Prerequisites:** Python 3.11+, Node.js 20+, Ollama. Docker is optional and opt-in — the default `EXECUTION_BACKEND=host` runs generated code in a subprocess of the backend.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Wizard-w1.git
-cd Wizard-w1
-git remote add upstream https://github.com/Wizard-AIA/Wizard-w1.git
+git clone https://github.com/YOUR_USERNAME/Wizard-w2.git
+cd Wizard-w2
+git remote add upstream https://github.com/Wizard-AIA/Wizard-w2.git
 
 # Any two models. Nothing in the app is tied to a particular one — an empty
 # MODEL_NAME means "use whatever this provider has installed".

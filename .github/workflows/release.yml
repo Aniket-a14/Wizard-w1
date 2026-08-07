@@ -22,6 +22,20 @@ jobs:
           draft: false
           prerelease: false
 
+  sbom:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # anchore/sbom-action attaches the SBOM to the release it's run against
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate SBOM and attach to release
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+
   push-images:
     needs: release
     runs-on: ubuntu-latest

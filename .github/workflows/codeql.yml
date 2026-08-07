@@ -26,6 +26,8 @@ jobs:
           build-mode: none
         - language: python
           build-mode: none
+        - language: go
+          build-mode: autobuild
 
     steps:
     - name: Checkout repository

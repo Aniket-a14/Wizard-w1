@@ -1,0 +1,67 @@
+name: CLI (Go)
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-ci.yml"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        working-directory: cli
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Format check
+        # gofmt -l lists files that are not formatted; any output means fail.
+        # Not run on Windows: the shell used there (pwsh) doesn't share the
+        # same failure-on-output idiom as bash, and the check is redundant
+        # across platforms since gofmt's output doesn't vary by OS.
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./... -v

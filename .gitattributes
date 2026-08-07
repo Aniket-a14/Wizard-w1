@@ -1,0 +1,8 @@
+# Normalize to LF in the repo; Git still checks out CRLF on Windows for
+# text files unless told otherwise here. Go tooling (gofmt) is LF-sensitive,
+# so pin the CLI source explicitly rather than let every Windows contributor
+# see spurious formatting diffs.
+* text=auto eol=lf
+
+*.go text eol=lf
+*.sh text eol=lf

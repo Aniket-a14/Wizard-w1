@@ -2,7 +2,7 @@
 
 > A local-first autonomous data analysis agent. Ask a real question about your data; it investigates — looking, computing, revising its approach when the data disagrees with it — then verifies the result and explains it, streaming its reasoning as it goes.
 
-![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v4.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
+![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v4.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Wizard-AIA/Wizard-w2/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Wizard-AIA/Wizard-w2/actions/workflows/codeql.yml/badge.svg?branch=master) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Wizard-AIA/Wizard-w2/badge)](https://scorecard.dev/viewer/?uri=github.com/Wizard-AIA/Wizard-w2) [![License](https://img.shields.io/github/license/Wizard-AIA/Wizard-w2)](LICENSE) [![Docs](https://img.shields.io/badge/docs-wizard--aia.github.io-blue)](https://wizard-aia.github.io/docs/)
 
 Upgrading from w1? See [the migration notes](docs/wizard-w1-to-w2-migration.md) — most installs need to change nothing.
 
@@ -34,8 +34,8 @@ Every stage streams to the browser as it happens — the reasoning, each move an
 **Prerequisites:** [Ollama](https://ollama.com/) (or LM Studio). [Docker Desktop](https://www.docker.com/products/docker-desktop/) is recommended but **not required** — see [Running without Docker](#running-without-docker).
 
 ```bash
-git clone https://github.com/Aniket-a14/Wizard-w1.git
-cd Wizard-w1
+git clone https://github.com/Wizard-AIA/Wizard-w2.git
+cd Wizard-w2
 docker compose up --build -d
 ```
 

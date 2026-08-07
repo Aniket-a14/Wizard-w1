@@ -2,9 +2,9 @@
 
 ## Reporting a Vulnerability
 
-Wizard-w1 operates as a secure, sandboxed code-execution platform relying on dynamic local inference. We treat sandbox escapes, prompt-injection bypasses, and data-leakage vulnerabilities with the utmost severity.
+Wizard operates as a secure, sandboxed code-execution platform relying on dynamic local inference. We treat sandbox escapes, prompt-injection bypasses, and data-leakage vulnerabilities with the utmost severity.
 
-If you discover a security vulnerability in **Wizard-w1**, please report it responsibly by following these exact steps:
+If you discover a security vulnerability in **Wizard**, please report it responsibly by following these exact steps:
 
 1. **Do not** disclose the issue or proof-of-concept (PoC) code publicly until an official patch is released.
 2. Create a **private security advisory** on GitHub or immediately email the core maintainers.
@@ -22,7 +22,7 @@ We operate on a rapid-iteration cycle. We actively maintain and supply security 
 
 ## Security Best Practices Built-in
 
-To secure the execution environment and the underlying repository, Wizard-w1 employs several strict layers of defense:
+To secure the execution environment and the underlying repository, Wizard employs several strict layers of defense:
 
 - **Per-session runtime isolation:** Generated code never runs in the API process. The default `EXECUTION_BACKEND=host` gives each session its own subprocess, restricted by the OS — Landlock and seccomp on Linux, a `sandbox-exec` profile on macOS, a job object and a Low integrity level on Windows — confining writes to the session workspace, denying outbound network (loopback aside) and capping memory and process counts. `EXECUTION_BACKEND=docker` gives each session a restricted-permission container instead, and remains the strongest option for data or questions you did not write yourself.
 - **Containment is reported, not assumed:** `/settings` lists what this machine can enforce with a reason for every gap (outbound network is not enforced on Windows, and says so), and `GET /api/sandbox/selftest` spawns a probe that attempts each forbidden operation and reports what stopped it.

@@ -7,3 +7,17 @@
 
 # Specific owners for frontend
 /frontend/ @Aniket-a14
+
+# Specific owners for the CLI daemon
+/cli/ @Aniket-a14
+
+# Specific owners for internal/dev-facing docs
+/docs/ @Aniket-a14
+
+# Repo governance and CI/CD own themselves
+/.github/          @Aniket-a14
+/CODE_OF_CONDUCT.md @Aniket-a14
+/CONTRIBUTING.md    @Aniket-a14
+/GOVERNANCE.md      @Aniket-a14
+/MAINTAINERS.md     @Aniket-a14
+/SECURITY.md        @Aniket-a14
