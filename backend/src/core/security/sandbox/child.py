@@ -267,12 +267,28 @@ def _lower_integrity() -> tuple[bool, str]:
         class TokenMandatoryLabel(ctypes.Structure):
             _fields_ = [("Label", SidAndAttributes)]
 
+        # GetCurrentProcess returns the pseudo-handle -1, which as an unsigned
+        # 64-bit value overflows the 32-bit int ctypes would otherwise guess
+        # for an unannotated argument -- every call taking a HANDLE needs its
+        # argtypes/restype declared explicitly, or marshalling silently breaks
+        # on 64-bit Windows.
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi32.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+        advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
+        advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        advapi32.OpenProcessToken.restype = wintypes.BOOL
+        advapi32.GetLengthSid.argtypes = [ctypes.c_void_p]
+        advapi32.GetLengthSid.restype = wintypes.DWORD
+        advapi32.SetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        advapi32.SetTokenInformation.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
         sid = ctypes.c_void_p()
         if not advapi32.ConvertStringSidToSidW(LOW_INTEGRITY_SID, ctypes.byref(sid)):
             return False, f"could not build the Low integrity SID (error {ctypes.get_last_error()})"
 
         token = wintypes.HANDLE()
-        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
         if not advapi32.OpenProcessToken(
             kernel32.GetCurrentProcess(), TOKEN_ADJUST_DEFAULT | TOKEN_QUERY, ctypes.byref(token)
         ):
@@ -287,7 +303,7 @@ def _lower_integrity() -> tuple[bool, str]:
                 return False, f"SetTokenInformation was refused (error {ctypes.get_last_error()})"
         finally:
             kernel32.CloseHandle(token)
-    except (OSError, AttributeError, ValueError) as exc:
+    except (OSError, AttributeError, ValueError, ctypes.ArgumentError) as exc:
         return False, f"integrity level could not be lowered ({exc})"
 
     return True, "running at Low integrity"
@@ -358,7 +374,17 @@ def apply_policy(policy: dict) -> dict:
     elif sys.platform == "darwin":
         report["filesystem"] = _feature(True, "sandbox-exec profile applied by the parent")
     elif sys.platform == "win32":
-        report["filesystem"] = _feature(*_lower_integrity())
+        if policy.get("windows_lower_integrity", True):
+            report["filesystem"] = _feature(*_lower_integrity())
+        else:
+            # The parent could not label the workspace Low (commonly: the
+            # session lives under a directory this account does not own the
+            # ACL of). Lowering integrity anyway would leave the child unable
+            # to write even its own pid file, so the boundary is left
+            # unenforced here rather than making the runtime unusable.
+            report["filesystem"] = _feature(
+                False, "workspace could not be labeled Low; integrity left unchanged so writes still work"
+            )
 
     report["memory"] = _feature(*_apply_memory_limit(int(policy.get("mem_bytes") or 0)))
     report["processes"] = _feature(*_apply_process_limit(int(policy.get("max_processes") or 0)))

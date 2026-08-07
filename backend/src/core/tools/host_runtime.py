@@ -33,6 +33,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from src.config import settings
@@ -98,15 +99,24 @@ class HostSession(DaemonClient):
         entry = self._script_path
         policy = policy_for(self.workspace_dir, self.extra_roots)
         if policy.enabled:
+            entry = self.workspace_dir / ".runtime_bootstrap.py"
+            self._bootstrap_path = entry
+
+        # `plan_spawn` is what actually attempts the Windows workspace label
+        # (a side effect of building the plan), so it must run *before* the
+        # bootstrap is rendered -- the bootstrap's policy needs to know
+        # whether that label took, not just what was requested.
+        plan = plan_spawn(policy, [sys.executable, "-u", str(entry), str(self.port)], self.workspace_dir)
+        self._plan = plan
+
+        if policy.enabled:
             # The daemon is run *through* the bootstrap so the restrictions are
             # in force before it imports anything; it still ends up as
             # `__main__` in a process of its own, so nothing else changes.
-            entry = self.workspace_dir / ".runtime_bootstrap.py"
-            entry.write_text(render_bootstrap(policy, self._script_path), encoding="utf-8")
-            self._bootstrap_path = entry
-
-        plan = plan_spawn(policy, [sys.executable, "-u", str(entry), str(self.port)], self.workspace_dir)
-        self._plan = plan
+            bootstrap_policy = policy
+            if sys.platform == "win32" and "low-integrity" not in plan.mechanism:
+                bootstrap_policy = replace(policy, windows_lower_integrity=False)
+            entry.write_text(render_bootstrap(bootstrap_policy, self._script_path), encoding="utf-8")
 
         env = dict(os.environ)
         env["MPLBACKEND"] = "Agg"

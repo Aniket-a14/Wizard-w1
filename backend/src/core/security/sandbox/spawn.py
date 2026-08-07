@@ -59,14 +59,19 @@ def _macos_plan(policy: SandboxPolicy, argv: list[str], workspace: Path) -> Spaw
 def _windows_plan(policy: SandboxPolicy, argv: list[str], workspace: Path) -> SpawnPlan:
     from src.core.security.sandbox import windows
 
-    windows.label_workspace_low(workspace)
+    labeled = windows.label_workspace_low(workspace)
     job = windows.create_job(policy.mem_bytes, policy.max_processes)
 
+    # The job object bounds memory/process count either way; integrity
+    # lowering is only safe to claim -- and only worth the child attempting --
+    # when the workspace label actually took. A caller threads this back into
+    # the policy the child receives; see `windows_lower_integrity`.
+    mechanism = "job-object+low-integrity" if labeled else "job-object"
     return SpawnPlan(
         argv=argv,
         adopt=lambda process: windows.assign_to_job(job, process),  # type: ignore[arg-type]
         teardown=lambda: windows.close_job(job),
-        mechanism="job-object+low-integrity",
+        mechanism=mechanism,
     )
 
 

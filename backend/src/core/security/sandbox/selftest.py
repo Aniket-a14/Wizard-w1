@@ -24,7 +24,7 @@ import json
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from src.core.security.sandbox.bootstrap import render_bootstrap
@@ -163,9 +163,17 @@ def run(timeout: float = 60.0) -> SelfTestResult:
 
             if policy.enabled:
                 entry = workspace / "bootstrap.py"
-                entry.write_text(render_bootstrap(policy, probe_path), encoding="utf-8")
 
+            # `plan_spawn` attempts the Windows workspace label as a side
+            # effect, so it has to run before the bootstrap is rendered --
+            # see the matching comment in `tools/host_runtime.py`.
             plan = plan_spawn(policy, [sys.executable, "-u", str(entry)], workspace)
+
+            if policy.enabled:
+                bootstrap_policy = policy
+                if sys.platform == "win32" and "low-integrity" not in plan.mechanism:
+                    bootstrap_policy = replace(policy, windows_lower_integrity=False)
+                entry.write_text(render_bootstrap(bootstrap_policy, probe_path), encoding="utf-8")
         except SandboxUnavailableError as exc:
             return SelfTestResult(False, str(exc), {}, {})
         except OSError as exc:

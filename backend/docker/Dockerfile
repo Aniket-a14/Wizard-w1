@@ -46,7 +46,7 @@ RUN $PIP \
     "pandas==2.2.2" \
     "numpy==1.26.4" \
     "pyarrow==17.0.0" \
-    "matplotlib==3.9.1" \
+    "matplotlib==3.9.1.post1" \
     "duckdb==1.1.0" \
     "openpyxl==3.1.5"
 

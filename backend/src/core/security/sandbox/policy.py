@@ -45,6 +45,12 @@ class SandboxPolicy:
     cache_dir: str = ""
     #: Extra roots the user has consented to through the permission profile.
     extra_roots: tuple[str, ...] = field(default_factory=tuple)
+    #: Windows only. Whether the child may lower its own integrity level.
+    #: Set to ``False`` by ``plan_spawn`` when the parent could not label the
+    #: workspace Low -- a Low-IL child in a Medium-IL workspace cannot write
+    #: even its own pid file, so lowering integrity must not be attempted
+    #: unless the label actually took.
+    windows_lower_integrity: bool = True
 
     @property
     def enabled(self) -> bool:
@@ -64,6 +70,7 @@ class SandboxPolicy:
             "mode": self.mode,
             "cache_dir": self.cache_dir,
             "extra_roots": list(self.extra_roots),
+            "windows_lower_integrity": self.windows_lower_integrity,
         }
 
     @classmethod
@@ -77,6 +84,7 @@ class SandboxPolicy:
             mode=payload.get("mode") or "best-effort",
             cache_dir=payload.get("cache_dir") or "",
             extra_roots=tuple(payload.get("extra_roots") or ()),
+            windows_lower_integrity=bool(payload.get("windows_lower_integrity", True)),
         )
 
     def cache_environment(self) -> dict[str, str]:
