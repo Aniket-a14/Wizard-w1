@@ -179,6 +179,10 @@ export interface ChatMessage {
   role: "user" | "assistant"
   content: string
   createdAt: number
+  /** The persisted `chat_messages` row id, set once the `final` frame arrives.
+   *  What `GET /api/export/{messageId}` is keyed on -- absent while the turn
+   *  is still streaming, since there is nothing to export yet. */
+  messageId?: number | null
 
   /** Streamed reasoning from the manager model, rendered in a collapsible panel. */
   reasoning?: string

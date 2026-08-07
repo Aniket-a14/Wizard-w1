@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.deps import client_key, rate_limiter
-from src.api.routes import chat, connections, datasets, meta, sandbox, sessions, skills, workspace
+from src.api.routes import chat, connections, datasets, export, meta, sandbox, sessions, skills, workspace
 from src.config import settings
 from src.core.embeddings import embedding_service
 from src.core.infra.queue import get_queue
@@ -161,6 +161,7 @@ app.include_router(skills.router)
 app.include_router(sandbox.router)
 app.include_router(sandbox.jobs_router)
 app.include_router(chat.router)
+app.include_router(export.router)
 
 
 __all__ = ["app"]

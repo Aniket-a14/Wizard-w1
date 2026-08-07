@@ -9,7 +9,7 @@ import {
   Download,
   TriangleAlert,
 } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { AnimatedOrb } from "@/components/animated-orb"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
@@ -19,7 +19,7 @@ import { ReasoningPanel } from "@/components/chat/reasoning-panel"
 import { SkillCredit } from "@/components/chat/skill-credit"
 import { SkillPromotion } from "@/components/chat/skill-promotion"
 import { StepTimeline } from "@/components/chat/step-timeline"
-import { workspaceFileUrl } from "@/lib/api"
+import { exportUrl, workspaceFileUrl } from "@/lib/api"
 import type { Artifact, ChatMessage } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -64,6 +64,70 @@ function CopyButton({ value }: { value: string }) {
       {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
       {copied ? "Copied" : "Copy"}
     </button>
+  )
+}
+
+/**
+ * Re-download this turn's real executed steps as a runnable script or notebook.
+ *
+ * Sits with Copy and Save-as-skill rather than in the generic files list: a
+ * chart PNG and a re-runnable analysis are not the same kind of download, and
+ * burying the one export a user is likely to actually want among every
+ * workspace file is what this milestone replaces. `messageId` is only set
+ * once the `final` frame lands, which is also when there is anything to
+ * export.
+ */
+function ExportMenu({ messageId }: { messageId: number }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    return () => document.removeEventListener("pointerdown", onPointerDown)
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-muted hover:text-foreground"
+      >
+        <Download className="h-3 w-3" />
+        Export
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Export analysis"
+          className="glass absolute bottom-full left-0 z-50 mb-2 w-[220px] rounded-xl border border-border p-1.5 shadow-lg reveal-scale"
+        >
+          <a
+            href={exportUrl(messageId, "script")}
+            download
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 rounded-lg px-2 py-2 text-[12.5px] transition-colors duration-[var(--duration-fast)] hover:bg-accent/40"
+          >
+            Download script (.py)
+          </a>
+          <a
+            href={exportUrl(messageId, "notebook")}
+            download
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 rounded-lg px-2 py-2 text-[12.5px] transition-colors duration-[var(--duration-fast)] hover:bg-accent/40"
+          >
+            Download notebook (.ipynb)
+          </a>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -303,6 +367,10 @@ export function Message({
                   Save as skill
                 </button>
               )}
+              {message.messageId != null &&
+                message.artifacts.some((artifact) => artifact.kind === "script") && (
+                  <ExportMenu messageId={message.messageId} />
+                )}
               {message.elapsedMs ? (
                 <span className="text-[11px] text-muted-foreground/60">
                   {(message.elapsedMs / 1000).toFixed(1)}s

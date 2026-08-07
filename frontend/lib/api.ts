@@ -500,6 +500,19 @@ export function workspaceFileUrl(path: string, bustCache = false): string {
   return `${API_BASE_URL}/api/workspace/file/${path}${suffix}${sessionParam}`
 }
 
+/**
+ * Absolute URL to re-export one finished turn as a script or notebook.
+ *
+ * A plain `<a href download>` can't set the `X-Session-Id` header, so the
+ * session travels as a query param -- same pattern as `workspaceFileUrl` and
+ * `websocketUrl`.
+ */
+export function exportUrl(messageId: number, format: "script" | "notebook"): string {
+  const session = getStoredSessionId()
+  const sessionParam = session ? `&session=${session}` : ""
+  return `${API_BASE_URL}/api/export/${messageId}?format=${format}${sessionParam}`
+}
+
 export function websocketUrl(): string {
   const base = API_BASE_URL.replace(/^http/, "ws")
   const session = getStoredSessionId()

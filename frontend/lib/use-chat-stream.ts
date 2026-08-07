@@ -580,6 +580,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
             iteration: Number(event.iterations ?? message.iteration ?? 0),
             tier: (event.tier as string) ?? message.tier,
             elapsedMs: Number(event.elapsed_ms ?? 0),
+            messageId: (event.message_id as number | null | undefined) ?? message.messageId ?? null,
             streaming: false,
             phase: "done",
           }))

@@ -575,6 +575,60 @@ async def test_a_reproducible_script_is_written(loaded_session: Session, stub_ll
     assert any(artifact.get("name") == "analysis.py" for artifact in result.artifacts)
 
 
+async def test_the_reproducible_script_binds_every_table(session: Session, stub_llm) -> None:  # noqa: F811
+    """Milestone 9: the always-on script used to load a single flat
+    `dataset.csv` unconditionally, so a second table's name was never bound
+    and the script `NameError`d the moment it ran standalone. It must now
+    bind every table the session actually has."""
+    session.add_dataset("orders.csv", pd.DataFrame({"id": [1, 2], "customer_id": [10, 11]}))
+    session.add_dataset("customers.csv", pd.DataFrame({"customer_id": [10, 11], "name": ["a", "b"]}))
+    stub_llm(
+        [
+            "1. Join them",
+            "```python\nprint(tables['orders'].merge(tables['customers']))\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Done.",
+        ]
+    )
+
+    await orchestrator.run(session=session, instruction="join", mode="auto", emitter=EventCollector())
+
+    body = (session.workspace / "analysis.py").read_text(encoding="utf-8")
+    assert "tables/orders.feather" in body
+    assert "tables/customers.feather" in body
+
+
+async def test_the_reproducible_script_looks_up_a_connector_table_by_name(session: Session, stub_llm) -> None:  # noqa: F811
+    """A connector-sourced table must never be embedded or carry a secret --
+    `ConnectionStore.by_name` exists for exactly this."""
+    from src.core.connectors.spec import ConnectionSpec
+    from src.core.connectors.store import connection_store
+
+    connection_store.save(
+        ConnectionSpec(name="Shop", kind="relational", options={"driver": "sqlite", "database": "x.db"}),
+        secret="s3cr3t-password",
+    )
+    handle = session.add_dataset("orders", pd.DataFrame({"id": [1]}))
+    handle.origin = "Shop"
+    handle.profile["target"] = "orders"
+    stub_llm(
+        [
+            "1. Count",
+            "```python\nprint(len(df))\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Done.",
+        ]
+    )
+
+    await orchestrator.run(session=session, instruction="count", mode="auto", emitter=EventCollector())
+
+    body = (session.workspace / "analysis.py").read_text(encoding="utf-8")
+    assert "connection_store.by_name('Shop')" in body
+    assert "s3cr3t-password" not in body
+
+
 # --------------------------------------------------------------------------- #
 # Multiple tables
 # --------------------------------------------------------------------------- #
