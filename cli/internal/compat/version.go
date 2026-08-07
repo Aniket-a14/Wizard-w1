@@ -2,13 +2,16 @@
 // checkout it was not built for.
 //
 // There is no new backend field for this: backend/src/api/routes/meta.py
-// already reports API_VERSION (currently "3.1.0") from both GET /health and
-// GET /api/config. CompatAPIVersion below is this binary's own build-time
-// opinion of that number, set via `-ldflags "-X wizard/internal/compat.CompatAPIVersion=3.1.0"`
+// already reports API_VERSION (currently "4.0.0", the w2 generation bump)
+// from both GET /health and GET /api/config. CompatAPIVersion below is this
+// binary's own build-time opinion of that number, set via
+// `-ldflags "-X wizard/internal/compat.CompatAPIVersion=4.0.0"`
 // (see cli/README.md) with the literal here as the fallback for a plain
 // `go build`. Only the major component is compared, so a routine backend
 // patch/minor bump does not force a CLI rebuild -- only a change large enough
-// that the backend's own maintainers bumped the major version does.
+// that the backend's own maintainers bumped the major version does (as w1 ->
+// w2 did: a w1-era binary compiled with CompatAPIVersion="3.1.0" correctly
+// refuses to pair with a w2 backend).
 package compat
 
 import (
@@ -20,7 +23,7 @@ import (
 // CompatAPIVersion is overridden at build time via -ldflags -X. Keep this
 // literal in sync with API_VERSION in backend/src/api/routes/meta.py when
 // building without ldflags (e.g. `go build` during local development).
-var CompatAPIVersion = "3.1.0"
+var CompatAPIVersion = "4.0.0"
 
 // Major returns the leading numeric component of a dotted version string,
 // e.g. "3.1.0" -> 3. An unparsable string yields an error rather than a

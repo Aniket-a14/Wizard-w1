@@ -24,7 +24,7 @@ To stamp the binary with a specific backend API compat version (see
 source:
 
 ```bash
-go build -ldflags "-X wizard/internal/compat.CompatAPIVersion=3.1.0" -o wizard ./cmd/wizard
+go build -ldflags "-X wizard/internal/compat.CompatAPIVersion=4.0.0" -o wizard ./cmd/wizard
 ```
 
 Match that value to `API_VERSION` in

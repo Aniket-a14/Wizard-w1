@@ -1,14 +1,16 @@
-# 🧙‍♂️ Wizard w1
+# 🧙‍♂️ Wizard w2
 
 > A local-first autonomous data analysis agent. Ask a real question about your data; it investigates — looking, computing, revising its approach when the data disagrees with it — then verifies the result and explains it, streaming its reasoning as it goes.
 
-![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v3.1.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
+![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v4.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Aniket-a14/Wizard-w1/actions/workflows/codeql.yml/badge.svg?branch=master)
+
+Upgrading from w1? See [the migration notes](docs/wizard-w1-to-w2-migration.md) — most installs need to change nothing.
 
 ## What it is
 
-Wizard runs entirely on your machine. Your data never leaves it, and no API key is required.
+Wizard runs entirely on your machine. Your data never leaves it, and no API key is required by default — cloud providers are supported too, gated behind an explicit data mode (see below).
 
-You upload a file and ask a question in plain language. A **manager** model works out what to do; a **worker** model writes the Python; the code is statically screened and executed inside a Docker container scoped to your session.
+You upload a file (or connect a database) and ask a question in plain language. A **manager** model works out what to do; a **worker** model writes the Python. The code is statically screened, then executed in its own subprocess under OS-native sandboxing by default (Landlock/seccomp on Linux, `sandbox-exec` on macOS, a restricted job object on Windows) — or in a Docker container scoped to your session if you opt into that instead.
 
 The important part is what happens next. Rather than following a plan fixed before anything ran, the manager sees the **real output** and decides what to do next — examine a column, compute something else, consult an attached document, revise the plan outright, or stop and answer. It repeats until it has an answer or runs out of budget. Real analytical questions are not one step; you find out the join key is dirty, or that "active customer" means three different things in three tables, only once you have looked.
 

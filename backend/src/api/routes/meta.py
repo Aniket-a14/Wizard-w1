@@ -51,7 +51,7 @@ from src.utils.logging import logger
 
 router = APIRouter(tags=["meta"])
 
-API_VERSION = "3.1.0"
+API_VERSION = "4.0.0"
 
 
 @router.get("/health", response_model=HealthResponse)

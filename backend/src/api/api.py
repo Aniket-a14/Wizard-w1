@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Wizard w1",
+    title="Wizard w2",
     description="Local-first autonomous data analysis agent.",
     version=meta.API_VERSION,
     lifespan=lifespan,

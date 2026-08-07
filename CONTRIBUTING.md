@@ -1,4 +1,4 @@
-# Contributing to Wizard w1 🧙‍♂️
+# Contributing to Wizard w2 🧙‍♂️
 
 Thanks for considering a contribution. This guide covers what you need to know to get productive quickly and to get a PR merged without surprises.
 

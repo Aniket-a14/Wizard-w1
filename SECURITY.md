@@ -13,13 +13,12 @@ If you discover a security vulnerability in **Wizard-w1**, please report it resp
 
 ## Supported Versions
 
-We operate on a rapid-iteration cycle. We actively maintain and supply security patches exclusively for the latest major version branch.
+We operate on a rapid-iteration cycle. We actively maintain and supply security patches exclusively for the latest generation, **Wizard w2**.
 
-| Ecosystem Version | Supported | Architecture Scope |
-| ----------------- | --------- | -------------------|
-| **v2.3.x (Latest)**| ✅ Yes     | Pure Ollama, Docker Sandbox |
-| v2.2.x (Legacy)   | ❌ No      | Local Transformers |
-| < v2.1.x          | ❌ No      | Manual ML Pipelines |
+| Generation | Supported | Architecture Scope |
+| ---------- | --------- | ------------------- |
+| **w2 (current, v4.x)** | ✅ Yes | Host-primary execution with OS-native sandboxing (Landlock/seccomp on Linux, `sandbox-exec` on macOS, a restricted job object on Windows) by default; Docker opt-in via `EXECUTION_BACKEND=docker`. Local providers (Ollama, LM Studio) and cloud providers (Anthropic, OpenAI, gateways), gated by an explicit `local-only`/`cloud-only`/`hybrid` data mode. |
+| w1 (legacy, v3.x and earlier) | ❌ No | Docker-only execution (no OS-native sandbox, no host-subprocess path); Ollama/LM Studio only, no cloud providers. |
 
 ## Security Best Practices Built-in
 
