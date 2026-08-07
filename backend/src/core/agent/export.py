@@ -62,8 +62,10 @@ def dataset_loader_lines(session: Session, *, file_template: str, reader: str) -
             lines.append("if _spec is None:")
             lines.append(f'    raise RuntimeError("No saved connection named {handle.origin!r} on this machine.")')
             lines.append("_conn = build_connector(_spec, connection_store.secret_for(_spec))")
-            lines.append(f"tables[{key!r}] = _conn.sample({target!r}, limit={settings.CONNECTOR_MAX_ROWS})")
-            lines.append("_conn.close()")
+            lines.append("try:")
+            lines.append(f"    tables[{key!r}] = _conn.sample({target!r}, limit={settings.CONNECTOR_MAX_ROWS})")
+            lines.append("finally:")
+            lines.append("    _conn.close()")
         else:
             path = file_template.format(key=key)
             lines.append(f'tables[{key!r}] = {reader}("{path}")')
