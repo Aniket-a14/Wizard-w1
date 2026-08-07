@@ -123,11 +123,14 @@ locates the checkout root by walking up looking for `backend/main.py` +
 - **Cross-platform process control** lives in `process_unix.go`/
   `process_windows.go` (Go's build-tag-by-filename convention, matching the
   split `backend/src/core/security/sandbox/` already uses for the same
-  reason). POSIX: process groups, `SIGTERM` then `SIGKILL`. Windows: a
-  process group plus `CTRL_BREAK_EVENT` for a graceful stop (the same
-  technique `backend/src/core/tools/host_runtime.py` already uses to
-  interrupt one execution), falling back to `taskkill /T /F` to reap the
-  whole tree if that doesn't land in time.
+  reason). POSIX: process groups, `SIGTERM` then `SIGKILL`. Windows attempts
+  `CTRL_BREAK_EVENT` first (the same technique
+  `backend/src/core/tools/host_runtime.py` uses to interrupt one execution),
+  but `GenerateConsoleCtrlEvent` only reaches a process sharing a console
+  with the caller, and the detached, consoleless `__supervise` process this
+  package actually runs as never does — so in the shipped binary the real
+  stop path is `taskkill /T /F` once the grace period elapses, every time,
+  not "usually graceful."
 - **Version compatibility**: no new backend field — `internal/compat`
   compares only the *major* component of the existing `API_VERSION`
   (`backend/src/api/routes/meta.py`, reported by both `/health` and
