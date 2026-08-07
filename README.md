@@ -6,6 +6,10 @@
 
 Upgrading from w1? See [the migration notes](docs/wizard-w1-to-w2-migration.md) — most installs need to change nothing.
 
+Full documentation, including task guides (EDA, model training) and an
+[edge-cases & gotchas reference](https://wizard-aia.github.io/docs/troubleshooting/edge-cases/),
+lives at **[wizard-aia.github.io/docs](https://wizard-aia.github.io/docs/)**.
+
 ## What it is
 
 Wizard runs entirely on your machine. Your data never leaves it, and no API key is required by default — cloud providers are supported too, gated behind an explicit data mode (see below).
