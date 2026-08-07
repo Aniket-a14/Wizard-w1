@@ -31,7 +31,7 @@ Two rules that are easy to violate by accident:
 ```bash
 git clone https://github.com/YOUR_USERNAME/Wizard-w1.git
 cd Wizard-w1
-git remote add upstream https://github.com/Aniket-a14/Wizard-w1.git
+git remote add upstream https://github.com/Wizard-AIA/Wizard-w1.git
 
 # Any two models. Nothing in the app is tied to a particular one — an empty
 # MODEL_NAME means "use whatever this provider has installed".
