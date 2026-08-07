@@ -61,6 +61,18 @@ SANDBOX_TIER=full docker compose up --build -d   # adds survival analysis and ge
 
 ### Running without Docker
 
+The `wizard` CLI ([cli/](cli/)) is a single static binary that automates the steps below — check prerequisites, install dependencies, and manage the backend/frontend as a background service, the same on Linux, macOS and Windows:
+
+```bash
+cd cli && go build -o wizard ./cmd/wizard   # or download a prebuilt binary once one exists
+cd .. && ./cli/wizard init                  # checks Python 3.11+/Node 20+, installs dependencies
+./cli/wizard start                          # launches both in the background, opens a browser
+./cli/wizard status                         # what's running, host sizing, sandbox capability
+./cli/wizard stop
+```
+
+See [cli/README.md](cli/README.md) for the full subcommand reference. Or do it by hand:
+
 ```bash
 pip install -r requirements.txt -r requirements-local.txt
 cd backend && uvicorn src.api.api:app --port 8000
