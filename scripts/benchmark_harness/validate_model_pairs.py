@@ -21,10 +21,12 @@ import json
 import sys
 from pathlib import Path
 
+
 BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from src.core.llm.resources import DEFAULT_MEMORY_FRACTION, estimate_footprint  # noqa: E402
+
 
 GB = 1024**3
 

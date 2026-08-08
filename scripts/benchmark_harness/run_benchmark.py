@@ -43,18 +43,19 @@ import time
 import uuid
 from pathlib import Path
 
+
 BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 import pandas as pd  # noqa: E402
+from grading import grade  # noqa: E402
+from reference_answers import REFERENCE_CASES  # noqa: E402
 
 from src.core.agent.events import EventCollector, EventType  # noqa: E402
 from src.core.agent.orchestrator import orchestrator  # noqa: E402
 from src.core.session import Session  # noqa: E402
 from src.utils.hostinfo import host_info  # noqa: E402
 
-from grading import grade  # noqa: E402
-from reference_answers import REFERENCE_CASES  # noqa: E402
 
 RETRY_PATTERN = re.compile(r"Fixing an execution error \(attempt (\d+) of (\d+)\)")
 

@@ -28,6 +28,7 @@ import time
 import uuid
 from pathlib import Path
 
+
 BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
 
 # --- environment must be pinned before any `src` import: Settings is built at

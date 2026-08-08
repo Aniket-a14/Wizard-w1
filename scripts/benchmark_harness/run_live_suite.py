@@ -21,6 +21,7 @@ import sys
 import time
 from pathlib import Path
 
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = REPO_ROOT / "backend"
 
@@ -41,10 +42,12 @@ os.environ.setdefault("EXECUTION_BACKEND", "host")
 sys.path.insert(0, str(BACKEND_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from run_benchmark import host_preconditions, run_one_turn  # noqa: E402
 from grading import grade  # noqa: E402
 from reference_answers import REFERENCE_CASES  # noqa: E402
+from run_benchmark import host_preconditions, run_one_turn  # noqa: E402
+
 from src.core.semantic_cache import semantic_cache  # noqa: E402
+
 
 DATASET = REPO_ROOT / "workspace" / "dataset.csv"
 HOUSING = REPO_ROOT / "workspace" / "housing.csv"

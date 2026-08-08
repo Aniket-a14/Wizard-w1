@@ -16,10 +16,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+
 BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from src.config import settings  # noqa: E402
+
 
 # (field name, recommended value or "default", applies-to note). The field name
 # is validated against the live Settings object below -- this list only curates
