@@ -7,6 +7,7 @@ import { PageHeader, Section } from "@/components/page-header"
 import { api, clearStoredSessionId, getStoredSessionId } from "@/lib/api"
 import type {
   DataModeInfo,
+  ModelListResponse,
   PermissionProfile,
   PermissionRuling,
   PermissionsInfo,
@@ -34,22 +35,42 @@ export function SettingsWorkbench() {
   const [dataMode, setDataMode] = useState<DataModeInfo | null>(null)
   const [permissions, setPermissions] = useState<PermissionsInfo | null>(null)
   const [usage, setUsage] = useState<UsageTotals | null>(null)
+  const [models, setModels] = useState<ModelListResponse | null>(null)
   const { soundOn, toggleSound } = useSound()
 
   const refresh = useCallback(async () => {
-    const [nextConfig, nextSession, nextMode, nextPermissions, nextUsage] = await Promise.allSettled([
+    const [nextConfig, nextSession, nextMode, nextPermissions, nextUsage, nextModels] = await Promise.allSettled([
       api.config(),
       api.session(),
       api.dataMode(),
       api.permissions(),
       api.usage(),
+      api.models(),
     ])
     if (nextConfig.status === "fulfilled") setConfig(nextConfig.value)
     if (nextSession.status === "fulfilled") setSession(nextSession.value)
     if (nextMode.status === "fulfilled") setDataMode(nextMode.value)
     if (nextPermissions.status === "fulfilled") setPermissions(nextPermissions.value)
     if (nextUsage.status === "fulfilled") setUsage(nextUsage.value)
+    if (nextModels.status === "fulfilled") setModels(nextModels.value)
     setSessionId(getStoredSessionId())
+  }, [])
+
+  const unifyModels = useCallback(async (model: string, provider: string) => {
+    setBusy(`unify:${model}`)
+    try {
+      await api.selectModels({
+        manager: model,
+        manager_provider: provider,
+        worker: model,
+        worker_provider: provider,
+      })
+      const [nextModels, nextConfig] = await Promise.allSettled([api.models(), api.config()])
+      if (nextModels.status === "fulfilled") setModels(nextModels.value)
+      if (nextConfig.status === "fulfilled") setConfig(nextConfig.value)
+    } finally {
+      setBusy(null)
+    }
   }, [])
 
   const setSchemaOnly = useCallback(async (schemaOnly: boolean) => {
@@ -350,7 +371,7 @@ export function SettingsWorkbench() {
         title="Inference"
         description="What local inference actually runs with. Derived from the machine above unless you pin them in backend/.env — and a pinned value that does not fit the machine is the usual reason a question is slow."
       >
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
           <Fact
             label="Inference threads"
             value={config?.llm_num_thread ? String(config.llm_num_thread) : "—"}
@@ -372,6 +393,16 @@ export function SettingsWorkbench() {
               config ? (config.agent_turn_timeout > 0 ? `${Math.round(config.agent_turn_timeout)}s` : "None") : "—"
             }
           />
+          <Fact
+            label="Memory"
+            value={
+              config?.memory_plan
+                ? `${config.memory_plan.required_gb.toFixed(1)} / ${config.memory_plan.budget_gb.toFixed(1)} GB`
+                : "—"
+            }
+            tone={config?.memory_plan ? (config.memory_plan.fits ? undefined : "warn") : undefined}
+            mono
+          />
         </dl>
 
         {config?.memory_plan && config.memory_plan.models.length > 0 ? (
@@ -389,6 +420,41 @@ export function SettingsWorkbench() {
                 </li>
               ))}
             </ul>
+
+            {!config.memory_plan.co_resident &&
+            models?.selected.manager &&
+            models?.selected.worker &&
+            (models.selected.manager !== models.selected.worker ||
+              models.selected.manager_provider !== models.selected.worker_provider) ? (
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void unifyModels(
+                      String(models.selected.manager),
+                      String(models.selected.manager_provider),
+                    )
+                  }
+                  disabled={busy === `unify:${models.selected.manager}`}
+                  className="rounded-lg border border-brand/30 bg-brand-soft px-2.5 py-1.5 text-[12px] font-medium text-brand transition-colors duration-[var(--duration-fast)] hover:brightness-105 disabled:opacity-50"
+                >
+                  Use {String(models.selected.manager)} for both roles
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void unifyModels(
+                      String(models.selected.worker),
+                      String(models.selected.worker_provider),
+                    )
+                  }
+                  disabled={busy === `unify:${models.selected.worker}`}
+                  className="rounded-lg border border-brand/30 bg-brand-soft px-2.5 py-1.5 text-[12px] font-medium text-brand transition-colors duration-[var(--duration-fast)] hover:brightness-105 disabled:opacity-50"
+                >
+                  Use {String(models.selected.worker)} for both roles
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

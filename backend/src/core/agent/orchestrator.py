@@ -574,6 +574,19 @@ class AnalysisOrchestrator:
                 if not should_continue:
                     return self._result(state, "awaiting_approval")
 
+            if not budget.allow_decisions:
+                # `_decide_deterministically` never returns REFLECT/CONSULT/
+                # PARALLEL and never calls the manager -- see its own
+                # docstring -- so on this budget the manager is provably idle
+                # from here until `_answer` (or a rare Statistician
+                # escalation inside `_review`; both reload it naturally).
+                llm_provider.release(
+                    LLMRole.MANAGER,
+                    session.models.manager,
+                    session.models.manager_provider,
+                    keep_if_shared_with=(LLMRole.WORKER, session.models.worker),
+                )
+
             await self._investigate(state, session, emitter, previous_code, budget)
 
             if state.blocked:
@@ -582,6 +595,17 @@ class AnalysisOrchestrator:
 
             await self._verify(state, session, emitter, budget)
             await self._review(state, session, emitter)
+            if settings.VISION_ENABLED and state.image:
+                # `_review` awaits vision and council together and returns
+                # only once both are done -- vision is one-shot per turn, so
+                # its slot is free the instant this returns, before `_answer`
+                # needs the manager again.
+                llm_provider.release(
+                    LLMRole.VISION,
+                    session.models.vision,
+                    session.models.vision_provider,
+                    keep_if_shared_with=(LLMRole.MANAGER, session.models.manager),
+                )
             await self._answer(state, session, emitter)
             await self._finalize(state, session, emitter)
             return self._result(state, "completed")

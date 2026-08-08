@@ -406,6 +406,22 @@ class Settings(BaseSettings):
     #: five minutes, which a slow turn can exceed while it is still running.
     LLM_KEEP_ALIVE: str = "30m"
 
+    #: Resolve the manager and worker clients now, on a background thread, so no
+    #: question pays for a cold model load. Measured live: two small Ollama models
+    #: (qwen2.5:3b, qwen2.5-coder:1.5b) each took ~44s to load from disk during the
+    #: first turn of a session -- the dominant cost of that turn, not reasoning
+    #: time or call count. Off restores lazy resolution, where whichever role a
+    #: question reaches first pays for the load. Cloud/gateway providers are never
+    #: warmed regardless of this setting -- see LOCAL_PROVIDERS.
+    LLM_WARM_ON_STARTUP: bool = True
+
+    #: Actively unload a role's model at a phase boundary where its idleness is
+    #: known in advance (e.g. the manager during a compact-tier investigation
+    #: loop -- see `orchestrator.run`), rather than waiting for keep_alive to
+    #: expire or Ollama's own LRU to guess. Ollama only -- see
+    #: `LLMProvider.release`. Off restores today's purely reactive behavior.
+    LLM_RELEASE_IDLE_MODELS: bool = True
+
     #: Output budget per kind of call. Generous enough that a reasoning model can
     #: finish a thought, small enough that it cannot spend a turn on one.
     LLM_MAX_TOKENS_PLAN: int = 1024

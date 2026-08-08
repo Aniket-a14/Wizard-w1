@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -30,7 +31,7 @@ from typing import Any
 
 from src.config import settings
 from src.core.data_mode import check_provider
-from src.core.llm.resources import ResidentPlan, plan_for_models
+from src.core.llm.resources import LOCAL_PROVIDERS, ResidentPlan, plan_for_models
 from src.core.llm.usage import extract_usage, usage_ledger
 from src.providers import describe
 from src.utils.logging import logger
@@ -101,6 +102,8 @@ class LLMProvider:
         self._clients: dict[tuple, Any] = {}
         self._plans: dict[tuple, ResidentPlan] = {}
         self._lock = threading.Lock()
+        self._warming = False
+        self._warmed = False  # becomes True after the attempt finishes, success or not
 
     # ------------------------------------------------------------------ #
     # Resolution
@@ -170,18 +173,31 @@ class LLMProvider:
         )
 
     def resident_plan(self, provider: str | None = None) -> ResidentPlan:
-        """Whether the manager and worker can be resident on this machine at once.
+        """Whether the models actually in play can be resident at once.
 
-        Planned for the *pair*, not the role being resolved: the cost being
-        avoided is one evicting the other, which is a property of both.
+        Planned for the whole set that competes for this provider's memory --
+        manager and worker always, vision when enabled, and the embedding
+        model when it shares this provider -- not just the pair being
+        resolved: the cost being avoided is one evicting another, which is a
+        property of the whole set, not any one role.
         """
         resolved = settings.resolve_provider(provider)
-        manager = self.default_model_for(LLMRole.MANAGER, resolved)
-        worker = self.default_model_for(LLMRole.WORKER, resolved)
-        key = (resolved, manager, worker, settings.LLM_NUM_CTX)
+        names = [
+            self.default_model_for(LLMRole.MANAGER, resolved),
+            self.default_model_for(LLMRole.WORKER, resolved),
+        ]
+        if settings.VISION_ENABLED:
+            vision = self.default_model_for(LLMRole.VISION, resolved)
+            if vision:
+                names.append(vision)
+        embedding_model = self._local_embedding_model(resolved)
+        if embedding_model:
+            names.append(embedding_model)
+
+        key = (resolved, tuple(names), settings.LLM_NUM_CTX)
         cached = self._plans.get(key)
         if cached is None:
-            cached = plan_for_models([manager, worker], resolved, settings.LLM_NUM_CTX)
+            cached = plan_for_models(names, resolved, settings.LLM_NUM_CTX)
             self._plans[key] = cached
             if not cached.co_resident:
                 logger.info(
@@ -190,6 +206,159 @@ class LLMProvider:
                     keep_alive=cached.keep_alive,
                 )
         return cached
+
+    @staticmethod
+    def _local_embedding_model(provider: str) -> str | None:
+        """The embedding model's name, when resolved and sharing this provider.
+
+        Lazily imported: `core.embeddings` reads this plan back for its own
+        keep-alive (see `embeddings.py`), so this direction (llm -> embeddings)
+        only happens inside the method body, never at module scope, to avoid
+        inverting that dependency. Returns None until the embedding encoder
+        has resolved at least once, or when it is on a different provider
+        than the one being planned for.
+        """
+        try:
+            from src.core.embeddings import embedding_service
+
+            resolved = embedding_service.resolved_remote()
+        except Exception:
+            return None
+        if resolved is None:
+            return None
+        embed_provider, embed_model = resolved
+        return embed_model if embed_provider == provider else None
+
+    def warm(self, *, block: bool = False, timeout: float | None = None) -> None:
+        """Loads the manager and worker weights into memory ahead of the first question.
+
+        Ollama and LM Studio do not load a model until something asks it a
+        question, so on a fresh boot the first real turn pays for that load in
+        the middle of answering. Warming pings each distinct model with a
+        throwaway prompt instead, on a background thread, so the wait happens
+        at boot.
+
+        Reuses ``resident_plan`` for the model names and dedup rather than
+        re-deriving them: it already resolves manager/worker per role and
+        already collapses them to one entry when both roles use the same
+        model, so a single-model setup -- the recommended one on a
+        memory-constrained machine -- is warmed exactly once, not twice.
+
+        Runs on a daemon thread so startup is never delayed. Never raises: a
+        slow or absent daemon at boot degrades to the old lazy-load behaviour
+        rather than failing startup.
+        """
+        if self._warmed or self._warming:
+            return
+        resolved = settings.resolve_provider(None)
+        if resolved not in LOCAL_PROVIDERS:
+            self._warmed = True
+            return
+        with self._lock:
+            if self._warming or self._warmed:
+                return
+            self._warming = True
+
+        def run() -> None:
+            started = time.monotonic()
+            warmed_names: list[str] = []
+            try:
+                warmed_names = asyncio.run(self._warm_models(resolved))
+            except Exception as exc:  # noqa: BLE001 - warming must never take the app down
+                logger.warning("LLM warm-up failed", provider=resolved, error=str(exc))
+            finally:
+                self._warming = False
+                self._warmed = True
+                logger.info(
+                    "LLM warm-up finished",
+                    provider=resolved,
+                    models=warmed_names,
+                    seconds=round(time.monotonic() - started, 1),
+                )
+
+        thread = threading.Thread(target=run, name="llm-warmup", daemon=True)
+        thread.start()
+        if block:
+            thread.join(timeout)
+
+    async def _warm_models(self, provider: str) -> list[str]:
+        """Pings the manager and worker models, concurrently.
+
+        Deliberately not derived from `resident_plan().footprints` -- that set
+        can now also include the embedding model (see `resident_plan`), which
+        must never be pinged with a chat completion. `embedding_service.warm()`
+        already warms it correctly. Vision is not warmed here either, keeping
+        `LLM_WARM_ON_STARTUP`'s scope exactly what it was before this method
+        started sharing logic with the residency planner.
+        """
+        names = list(
+            dict.fromkeys(
+                name
+                for name in (
+                    self.default_model_for(LLMRole.MANAGER, provider),
+                    self.default_model_for(LLMRole.WORKER, provider),
+                )
+                if name
+            )
+        )
+        if not names:
+            return []
+
+        async def ping(name: str) -> None:
+            try:
+                await self.acomplete("Reply with OK.", model=name, provider=provider, max_tokens=4)
+            except Exception as exc:  # noqa: BLE001 - one model's failure must not cancel the others
+                logger.warning("Could not warm model", model=name, provider=provider, error=str(exc))
+
+        await asyncio.gather(*(ping(name) for name in names))
+        return names
+
+    def release(
+        self,
+        role: LLMRole,
+        model: str | None = None,
+        provider: str | None = None,
+        *,
+        keep_if_shared_with: tuple[LLMRole, str | None] | None = None,
+    ) -> None:
+        """Best-effort, immediate unload of one role's model on Ollama.
+
+        Fires `POST {root}/api/generate {"model": name, "keep_alive": 0}` with
+        no prompt -- Ollama's documented immediate-unload technique -- on a
+        daemon thread, and returns without waiting. Never raises, matching
+        `warm()`. No-ops on every provider but Ollama: LM Studio manages its
+        own residency and exposes no unload verb.
+
+        `keep_if_shared_with` guards the one self-defeating case: when `role`
+        and the named other role resolve to the same model -- a single model
+        serving both roles -- releasing `role` would also evict the model the
+        other role needs on its very next call.
+        """
+        if not settings.LLM_RELEASE_IDLE_MODELS:
+            return
+        resolved = settings.resolve_provider(provider)
+        if resolved != "ollama":
+            return
+        name = (model or self.default_model_for(role, resolved)).strip()
+        if not name:
+            return
+        if keep_if_shared_with is not None:
+            other_role, other_model = keep_if_shared_with
+            other_name = (other_model or self.default_model_for(other_role, resolved)).strip()
+            if other_name and other_name == name:
+                return
+
+        def run() -> None:
+            try:
+                import httpx
+
+                root = settings.provider_root_url(resolved).rstrip("/")
+                httpx.post(f"{root}/api/generate", json={"model": name, "keep_alive": 0}, timeout=10.0)
+                logger.debug("Released model", model=name, provider=resolved, role=role.value)
+            except Exception as exc:  # noqa: BLE001 - release must never take the app down
+                logger.debug("Could not release model", model=name, provider=resolved, error=str(exc))
+
+        threading.Thread(target=run, name=f"llm-release-{role.value}", daemon=True).start()
 
     def keep_alive_for(self, provider: str) -> str:
         """How long this provider should hold a model after a call.

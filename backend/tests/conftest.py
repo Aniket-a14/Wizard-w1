@@ -108,6 +108,19 @@ os.environ.update(
         # Never download a transformer during a test run: it is slow and makes
         # the suite depend on network access.
         "EMBEDDINGS_FORCE_FALLBACK": "true",
+        # The suite instantiates the app through `with TestClient(app) as client`
+        # (see tests/integration/test_api.py and others), which does run FastAPI's
+        # lifespan -- so an unpinned default here would spawn an llm-warmup thread
+        # against OLLAMA_BASE_URL=http://127.0.0.1:1 on every such test. It fails
+        # fast (refused instantly, not a timeout) and never raises, but "tests
+        # never touch the network" should hold even for an attempt that fails on
+        # purpose -- same reasoning as the port-1 provider URLs above.
+        "LLM_WARM_ON_STARTUP": "false",
+        # Same reasoning as LLM_WARM_ON_STARTUP above: the real llm_provider is
+        # monkeypatched out in orchestrator tests, but any test exercising the
+        # actual singleton should still get a pure no-op here, not a dial to
+        # the port-1 provider URLs.
+        "LLM_RELEASE_IDLE_MODELS": "false",
     }
 )
 

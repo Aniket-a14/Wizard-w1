@@ -58,6 +58,10 @@ class ScriptedLLM:
                     await result
         return "".join(chunks)
 
+    def release(self, *args: object, **kwargs: object) -> None:
+        """No-op. Must never be recorded as a call -- see test_turn_cost.py."""
+        return None
+
 
 class RecordingLLM(ScriptedLLM):
     """Scripted, but also records which (role, model, provider) each call used."""

@@ -121,9 +121,33 @@ class _RemoteEncoder:
     def _endpoint_and_payload(self, texts: list[str]) -> tuple[str, dict[str, Any]]:
         if self.provider == "ollama":
             root = settings.provider_root_url(self.provider).rstrip("/")
-            return f"{root}/api/embed", {"model": self.model, "input": texts}
+            payload: dict[str, Any] = {"model": self.model, "input": texts}
+            keep_alive = self._keep_alive()
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+            return f"{root}/api/embed", payload
         base = settings.provider_openai_base_url(self.provider).rstrip("/")
         return f"{base}/embeddings", {"model": self.model, "input": texts}
+
+    def _keep_alive(self) -> str:
+        """How long Ollama should hold this model, sized from the shared residency plan.
+
+        Ollama's own server default is `-1` (forever) when nothing is sent at
+        all -- which is exactly what let an embedding model permanently
+        occupy a slot regardless of what the manager/worker were doing. Best
+        effort: a planning failure must not stop an embed call, so this falls
+        back to the app's own deliberate default rather than Ollama's silent
+        "forever".
+        """
+        if self.provider != "ollama":
+            return ""
+        try:
+            from src.core.llm import llm_provider
+
+            return llm_provider.resident_plan(self.provider).keep_alive
+        except Exception as exc:  # pragma: no cover - planning must never block an embed call
+            logger.debug("Could not size embedding keep-alive; using the default", error=str(exc))
+            return settings.LLM_KEEP_ALIVE
 
     @staticmethod
     def _vectors_from(payload: dict[str, Any]) -> list[list[float]]:
@@ -214,6 +238,15 @@ class EmbeddingService:
     def ready(self) -> bool:
         """Whether resolution has finished, so vectors are the ones we will keep using."""
         return self._warmed.is_set()
+
+    def resolved_remote(self) -> tuple[str, str] | None:
+        """The (provider, model) actually serving embeddings, or None off the remote path.
+
+        Used by `LLMProvider.resident_plan` to fold the embedding model into
+        the shared residency math without reaching into a private field.
+        """
+        remote = self._remote
+        return (remote.provider, remote.model) if remote is not None else None
 
     # ------------------------------------------------------------------ #
     def warm(self, *, block: bool = False, timeout: float | None = None) -> None:

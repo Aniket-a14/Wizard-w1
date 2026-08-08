@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -117,6 +118,11 @@ def performance_notes() -> list[str]:
             "which is far slower than a smaller model would be. Choose a smaller model or a heavier quantization."
         )
 
+    if settings.resolve_provider(None) == "ollama":
+        slots_note = _recommended_ollama_slots_note(plan)
+        if slots_note:
+            notes.append(slots_note)
+
     return notes
 
 
@@ -136,6 +142,38 @@ def _resident_plan():
 def _memory_plan_dict() -> dict | None:
     plan = _resident_plan()
     return None if plan is None else plan.to_dict()
+
+
+def _recommended_ollama_slots_note(plan) -> str | None:
+    """Names the OLLAMA_MAX_LOADED_MODELS this install could use. Informational only.
+
+    There is no API to read Ollama's actual configured ceiling off an
+    already-running external daemon -- it is a server-process env var, not a
+    client-reachable setting. This process's own environment is read as a
+    best-effort hint and explicitly caveated: Ollama is very often a
+    different process, container or machine, whose environment this backend
+    cannot see at all.
+    """
+    if plan is None or len(plan.footprints) < 2:
+        return None
+    needed = len(plan.footprints)
+    roles = ", ".join(fp.name for fp in plan.footprints)
+    configured = os.environ.get("OLLAMA_MAX_LOADED_MODELS", "").strip()
+    if configured.isdigit() and int(configured) < needed:
+        return (
+            f"This install can have {needed} distinct local models in play at once ({roles}), but "
+            f"OLLAMA_MAX_LOADED_MODELS is {configured} in this process's own environment — which may not "
+            f"be the Ollama server's, if it runs elsewhere. Models will be swapped between that many slots; "
+            f"consider raising it to at least {needed} on the machine actually running Ollama."
+        )
+    if not configured:
+        return (
+            f"This install can have {needed} distinct local models in play at once ({roles}). If the Ollama "
+            f"server's own OLLAMA_MAX_LOADED_MODELS is lower than that, expect swapping between them even "
+            f"when this app releases models proactively; setting OLLAMA_MAX_LOADED_MODELS={needed} on the "
+            f"machine running Ollama removes that."
+        )
+    return None
 
 
 @router.get("/api/config", response_model=ServerConfig)

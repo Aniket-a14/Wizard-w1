@@ -111,13 +111,18 @@ export function ModelsWorkbench() {
     void load()
   }, [load])
 
-  const assign = useCallback(
-    async (role: "manager" | "worker", model: string) => {
+  const assignRoles = useCallback(
+    async (roles: Array<"manager" | "worker">, model: string) => {
       if (!provider) return
-      setSaving(`${role}:${model}`)
+      setSaving(`${roles.join("+")}:${model}`)
       setAssignError(null)
       try {
-        await api.selectModels({ [role]: model, [`${role}_provider`]: provider })
+        const payload: Record<string, string | number | null> = {}
+        for (const role of roles) {
+          payload[role] = model
+          payload[`${role}_provider`] = provider
+        }
+        await api.selectModels(payload)
         await load(provider)
         playSound("click")
       } catch (caught) {
@@ -130,6 +135,12 @@ export function ModelsWorkbench() {
     },
     [load, playSound, provider],
   )
+
+  const assign = useCallback(
+    (role: "manager" | "worker", model: string) => assignRoles([role], model),
+    [assignRoles],
+  )
+  const assignBoth = useCallback((model: string) => assignRoles(["manager", "worker"], model), [assignRoles])
 
   const remove = useCallback(
     async (model: string) => {
@@ -357,6 +368,7 @@ export function ModelsWorkbench() {
               ).map((role) => role.label)}
               saving={saving}
               onAssign={assign}
+              onAssignBoth={assignBoth}
               onRemove={canDelete ? remove : undefined}
               removing={removing === model.name}
             />
@@ -372,6 +384,7 @@ function ModelCard({
   assignedTo,
   saving,
   onAssign,
+  onAssignBoth,
   onRemove,
   removing,
 }: {
@@ -379,6 +392,7 @@ function ModelCard({
   assignedTo: string[]
   saving: string | null
   onAssign: (role: "manager" | "worker", model: string) => void
+  onAssignBoth: (model: string) => void
   /** Undefined when the provider cannot delete — LM Studio's CLI has no verb for it. */
   onRemove?: (model: string) => void
   removing: boolean
@@ -423,55 +437,86 @@ function ModelCard({
         ))}
       </div>
 
-      <div className="mt-3.5 flex items-center gap-1.5 border-t border-border pt-3">
+      <div className="mt-3.5 border-t border-border pt-3">
         {model.capabilities.includes("embedding") ? (
           <p className="text-[11.5px] text-muted-foreground">
             Embedding model — not usable as a chat role.
           </p>
         ) : (
-          ROLES.map((role) => {
-            const isAssigned = assignedTo.includes(role.label)
-            const isSaving = saving === `${role.key}:${model.name}`
-            return (
-              <button
-                key={role.key}
-                type="button"
-                onClick={() => onAssign(role.key, model.name)}
-                disabled={isAssigned || isSaving}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] font-medium",
-                  "transition-colors duration-[var(--duration-fast)]",
-                  isAssigned
-                    ? "cursor-default bg-brand-soft text-brand"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                {isSaving ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : isAssigned ? (
-                  <Check className="h-3 w-3" />
-                ) : null}
-                {isAssigned ? role.label : `Use for ${role.label.toLowerCase()}`}
-              </button>
-            )
-          })
-        )}
+          <>
+            {(() => {
+              const bothAssigned = assignedTo.length === ROLES.length
+              const isSaving = saving === `manager+worker:${model.name}`
+              return (
+                <button
+                  type="button"
+                  onClick={() => onAssignBoth(model.name)}
+                  disabled={bothAssigned || isSaving}
+                  className={cn(
+                    "flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium",
+                    "transition-colors duration-[var(--duration-fast)]",
+                    bothAssigned
+                      ? "cursor-default bg-brand-soft text-brand"
+                      : "bg-[linear-gradient(120deg,var(--brand),var(--brand-2))] text-brand-foreground shadow-brand hover:brightness-105",
+                  )}
+                >
+                  {isSaving ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : bothAssigned ? (
+                    <Check className="h-3.5 w-3.5" />
+                  ) : null}
+                  {bothAssigned ? "Used for both roles" : "Use for both roles"}
+                </button>
+              )
+            })()}
 
-        {onRemove && (
-          <button
-            type="button"
-            onClick={() => onRemove(model.name)}
-            disabled={removing}
-            aria-label={`Delete ${model.name}`}
-            title={`Delete ${model.name} from disk`}
-            className="ml-auto rounded-md p-1 text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-warning/10 hover:text-warning disabled:opacity-40"
-          >
-            {removing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="h-3.5 w-3.5" />
-            )}
-          </button>
+            <div className="mt-2 flex items-center gap-1.5">
+              <span className="text-[10.5px] text-muted-foreground">Assign separately:</span>
+              {ROLES.map((role) => {
+                const isAssigned = assignedTo.includes(role.label)
+                const isSaving = saving === `${role.key}:${model.name}`
+                return (
+                  <button
+                    key={role.key}
+                    type="button"
+                    onClick={() => onAssign(role.key, model.name)}
+                    disabled={isAssigned || isSaving}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] font-medium",
+                      "transition-colors duration-[var(--duration-fast)]",
+                      isAssigned
+                        ? "cursor-default bg-brand-soft text-brand"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    {isSaving ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : isAssigned ? (
+                      <Check className="h-3 w-3" />
+                    ) : null}
+                    {isAssigned ? role.label : role.label}
+                  </button>
+                )
+              })}
+
+              {onRemove && (
+                <button
+                  type="button"
+                  onClick={() => onRemove(model.name)}
+                  disabled={removing}
+                  aria-label={`Delete ${model.name}`}
+                  title={`Delete ${model.name} from disk`}
+                  className="ml-auto rounded-md p-1 text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-warning/10 hover:text-warning disabled:opacity-40"
+                >
+                  {removing ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+            </div>
+          </>
         )}
       </div>
     </article>

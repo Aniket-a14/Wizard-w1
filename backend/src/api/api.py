@@ -17,6 +17,7 @@ from src.api.routes import chat, connections, datasets, export, meta, sandbox, s
 from src.config import settings
 from src.core.embeddings import embedding_service
 from src.core.infra.queue import get_queue
+from src.core.llm import llm_provider
 from src.core.session import session_manager
 from src.core.tools import runtime as runtime_backend
 from src.core.tools.host_runtime import host_runtime_pool
@@ -77,6 +78,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # resident was written off and retrieval silently degraded to lexical.
     if settings.EMBEDDINGS_WARM_ON_STARTUP:
         embedding_service.warm()
+
+    # Same reasoning, for the manager and worker: resolve them now so the
+    # first real question does not pay for a cold model load mid-answer.
+    if settings.LLM_WARM_ON_STARTUP:
+        llm_provider.warm()
 
     task = asyncio.ensure_future(_maintenance_loop())
     try:
