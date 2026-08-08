@@ -131,9 +131,7 @@ async def run_one_turn(mode: str, case_prompt: str, dataset_path: Path, models: 
     result = await orchestrator.run(session, case_prompt, mode="auto", emitter=collector, can_prompt=False)
     elapsed_sec = time.perf_counter() - t0
 
-    executed_output = "\n".join(
-        str(event.data.get("content", "")) for event in collector.of_type(EventType.STDOUT)
-    )
+    executed_output = "\n".join(str(event.data.get("content", "")) for event in collector.of_type(EventType.STDOUT))
 
     return {
         "answer": result.answer,
@@ -183,7 +181,9 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--cases", nargs="+", default=[c.id for c in REFERENCE_CASES])
     parser.add_argument("--n", type=int, default=3, help="Repeats per case, per 1.5 (n>=3)")
-    parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "results" / "full_turn_results.json")
+    parser.add_argument(
+        "--out", type=Path, default=Path(__file__).resolve().parent / "results" / "full_turn_results.json"
+    )
     args = parser.parse_args()
 
     models = {
@@ -207,7 +207,9 @@ def main() -> None:
     print(f"\nWritten to {args.out}")
 
     for r in results:
-        print(f"{r['case_id']}: median {r['median_latency_sec']}s (range {r['min_latency_sec']}-{r['max_latency_sec']}s), pass_rate={r['pass_rate']:.0%}")
+        print(
+            f"{r['case_id']}: median {r['median_latency_sec']}s (range {r['min_latency_sec']}-{r['max_latency_sec']}s), pass_rate={r['pass_rate']:.0%}"
+        )
 
 
 if __name__ == "__main__":

@@ -94,6 +94,7 @@ async def run_with_quota_retry(mode: str, prompt: str, dataset_path, models: dic
         attempts += 1
     return turn
 
+
 #: gemini-2.5-flash hit its 20/day free-tier cap. Quota turned out to be pooled
 #: across the whole "flash" model family, not strictly per exact model name --
 #: gemini-2.0-flash was exhausted on first use despite never being called

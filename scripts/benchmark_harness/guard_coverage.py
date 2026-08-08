@@ -147,7 +147,9 @@ if __name__ == "__main__":
     results = run()
     for r in results:
         marker = "\u2705" if r["status"] == "PASS" else "\u274c"
-        print(f"{marker} {r['id']} [{r['category']}] {r['name']} -> blocked={r['actual_blocked']} (expected {r['expect_blocked']})")
+        print(
+            f"{marker} {r['id']} [{r['category']}] {r['name']} -> blocked={r['actual_blocked']} (expected {r['expect_blocked']})"
+        )
         if r["violations"]:
             print(f"    {r['violations']}")
 

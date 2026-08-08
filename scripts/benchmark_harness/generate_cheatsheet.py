@@ -41,17 +41,33 @@ NOT_A_WIZARD_SETTING = [
 ]
 
 ROWS = [
-    ("LLM_NUM_THREAD", "leave unset (0) -- auto-derived from physical core count at boot", "All local inference setups"),
-    ("LLM_KEEP_ALIVE", "sent per-request; do not also set OLLAMA_KEEP_ALIVE server-side", "Resident-pair turns, see MODEL_MEMORY_FRACTION"),
+    (
+        "LLM_NUM_THREAD",
+        "leave unset (0) -- auto-derived from physical core count at boot",
+        "All local inference setups",
+    ),
+    (
+        "LLM_KEEP_ALIVE",
+        "sent per-request; do not also set OLLAMA_KEEP_ALIVE server-side",
+        "Resident-pair turns, see MODEL_MEMORY_FRACTION",
+    ),
     ("EXECUTION_BACKEND", "docker (preferred) or host", "All platforms with Docker available"),
     ("DATA_MODE", "local-only / hybrid / cloud-only", "Choose per privacy needs + hardware"),
-    ("SEMANTIC_CACHE_THRESHOLD", "default is already tuned; lower cautiously for more cache hits", "Repeated/similar queries"),
+    (
+        "SEMANTIC_CACHE_THRESHOLD",
+        "default is already tuned; lower cautiously for more cache hits",
+        "Repeated/similar queries",
+    ),
     ("SANDBOX_EXEC_TIMEOUT", "leave at default -- see §7 enterprise scenario durations", "Complex multi-step queries"),
     ("RATE_LIMIT_MAX_REQUESTS", "default is fine for single-user/dev", "Cloud API rate limiting"),
     ("RATE_LIMIT_WINDOW_SECONDS", "paired with RATE_LIMIT_MAX_REQUESTS", "Cloud API rate limiting"),
     ("SESSION_TTL_SECONDS", "default is fine for single-user/dev", "Session/workspace cleanup"),
     ("GATEWAY_API_URL", "required for hybrid/cloud modes via a gateway", "Cloud provider endpoint"),
-    ("MODEL_MEMORY_FRACTION", "0 = auto-derive (DEFAULT_MEMORY_FRACTION=0.60)", "Resident-pair planning, see llm/resources.py"),
+    (
+        "MODEL_MEMORY_FRACTION",
+        "0 = auto-derive (DEFAULT_MEMORY_FRACTION=0.60)",
+        "Resident-pair planning, see llm/resources.py",
+    ),
 ]
 
 

@@ -112,7 +112,9 @@ if __name__ == "__main__":
     if swaps:
         print(f"{len(swaps)}/{len(results)} recommended pairs land in SWAP at their own stated RAM figure:")
         for r in swaps:
-            print(f"  - {r['tier']}: {r['manager']} + {r['worker']} needs {r['required_gb']}GB, budget is {r['budget_gb']}GB")
+            print(
+                f"  - {r['tier']}: {r['manager']} + {r['worker']} needs {r['required_gb']}GB, budget is {r['budget_gb']}GB"
+            )
     else:
         print(f"All {len(results)} recommended pairs fit resident at their stated RAM figure.")
 
