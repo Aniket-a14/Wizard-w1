@@ -472,5 +472,5 @@ def cleanup_path(path: Path | None):
             shutil.rmtree(path, ignore_errors=True)
         else:
             path.unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Could not remove a temporary ingest path", path=str(path), error=str(exc))

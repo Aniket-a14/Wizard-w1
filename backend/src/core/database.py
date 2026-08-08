@@ -196,8 +196,8 @@ class DatabaseManager:
         if conn is not None:
             try:
                 conn.close()
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as exc:
+                logger.debug("Connection close failed during shutdown", error=str(exc))
             self._local.conn = None
 
     def _init_db(self):
@@ -653,8 +653,8 @@ class DatabaseManager:
         meta: dict[str, Any] = {}
         try:
             meta = json.loads(row["meta"]) if row["meta"] else {}
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            logger.debug("Could not parse a row's stored meta column", error=str(exc))
         keys = row.keys()
         return {
             "timestamp": row["timestamp"],

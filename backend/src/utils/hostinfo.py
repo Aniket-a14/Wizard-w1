@@ -60,7 +60,7 @@ def _physical_cores_windows() -> int | None:
     """
     try:
         import ctypes
-        from ctypes import wintypes
+        import ctypes.wintypes as wintypes
 
         relation_processor_core = 0
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]

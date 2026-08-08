@@ -21,9 +21,9 @@ where that goes wrong. Windows therefore reports network as unenforced, which
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes as wintypes
 import subprocess
 import sys
-from ctypes import wintypes
 from pathlib import Path
 
 from src.utils.logging import logger
@@ -135,8 +135,8 @@ def close_job(job) -> None:
         return
     try:
         ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(job)  # type: ignore[attr-defined]
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Could not close the sandbox job object handle", error=str(exc))
 
 
 def label_workspace_low(workspace: Path) -> bool:

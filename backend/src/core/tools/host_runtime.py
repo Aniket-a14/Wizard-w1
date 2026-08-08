@@ -212,8 +212,8 @@ class HostSession(DaemonClient):
             return ""
         try:
             self.process.stdout.flush()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not flush the dying child's stdout", session=self.session_id, error=str(exc))
         try:
             # The child is dead or about to be killed, so this cannot block for
             # long; it is only ever read on the failure path.
@@ -251,14 +251,16 @@ class HostSession(DaemonClient):
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.debug("Could not terminate the host runtime process", session=self.session_id, error=str(exc))
         for handle in (getattr(process, "stdout", None),):
             try:
                 if handle is not None:
                     handle.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Could not close the host runtime's stdout handle", session=self.session_id, error=str(exc)
+                )
         plan, self._plan = self._plan, None
         if plan is not None and plan.teardown is not None:
             plan.teardown()
@@ -267,8 +269,8 @@ class HostSession(DaemonClient):
             try:
                 if path is not None:
                     path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.debug("Could not remove a host runtime file", path=str(path), error=str(exc))
         logger.info("Host runtime stopped", session=self.session_id)
 
 

@@ -238,7 +238,8 @@ def test_unknown_route_is_404(client: TestClient) -> None:
 
 
 def test_wrong_method_is_405(client: TestClient) -> None:
-    assert client.delete("/health").status_code == 405
+    response = client.delete("/health")
+    assert response.status_code == 405
 
 
 def test_model_selection_rejects_out_of_range_temperature(client: TestClient) -> None:
@@ -388,7 +389,8 @@ def test_documents_can_be_switched_off(client: TestClient, monkeypatch) -> None:
 
 
 def test_deleting_an_unknown_document_is_a_404(client: TestClient) -> None:
-    assert client.delete("/api/documents/nope.md").status_code == 404
+    response = client.delete("/api/documents/nope.md")
+    assert response.status_code == 404
 
 
 def test_a_path_traversing_document_name_is_neutralised(client: TestClient) -> None:

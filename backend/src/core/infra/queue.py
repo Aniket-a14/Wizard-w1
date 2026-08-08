@@ -136,7 +136,7 @@ class JobQueue:
             try:
                 await task
             except asyncio.CancelledError:
-                pass
+                logger.debug("Job cancelled while awaited by run_now", job=job.id)
         return job
 
     def get(self, job_id: str) -> Job | None:

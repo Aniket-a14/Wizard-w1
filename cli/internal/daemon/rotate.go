@@ -46,7 +46,7 @@ func (w *RotatingWriter) open() error {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close() // already returning the stat error; a close error here adds nothing
 		return err
 	}
 	w.file = f

@@ -234,8 +234,8 @@ class SandboxSession(DaemonClient):
             return
         try:
             self.container.remove(force=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not remove the sandbox container", session=self.session_id, error=str(exc))
         finally:
             self.container = None
             logger.info("Sandbox session stopped", session=self.session_id)
@@ -333,8 +333,10 @@ class SandboxPool:
                     continue
                 try:
                     container.remove(force=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "Could not remove an orphaned sandbox container", container=container.id, error=str(exc)
+                    )
         except Exception as exc:
             logger.warning("Failed to prune orphaned sandboxes", error=str(exc))
 

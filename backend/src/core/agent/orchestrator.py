@@ -1750,7 +1750,7 @@ class AnalysisOrchestrator:
             )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, "")
-            await drainer
+            _ = await drainer
 
         if settings.PLOT_FORMAT == "html" and plot_path.exists():
             state.artifacts.append({"kind": "plot_html", "name": "plot.html", "session_scoped": True})

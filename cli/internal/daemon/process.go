@@ -73,7 +73,10 @@ func StartDetached(name string, args []string, dir string, env []string, logPath
 	if err != nil {
 		return 0, err
 	}
-	defer log.Close()
+	// The child inherits its own reference to this handle for its stdout/stderr,
+	// so a close error on the parent's copy at return has nothing left to do
+	// about it.
+	defer func() { _ = log.Close() }()
 
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir

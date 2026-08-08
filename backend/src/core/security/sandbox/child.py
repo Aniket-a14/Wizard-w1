@@ -22,6 +22,7 @@ is a policy decision, and policy does not belong in the mechanism.
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import sys
 
@@ -366,8 +367,12 @@ def apply_policy(policy: dict) -> dict:
     if cache_dir:
         try:
             os.makedirs(cache_dir, exist_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            # Best-effort only, and not part of the report -- a missing cache
+            # directory means a slower first import, not an unenforced
+            # restriction. stdlib logging only: this module imports nothing
+            # from `src`.
+            logging.getLogger(__name__).debug("Could not create the sandbox cache directory: %s", exc)
 
     if sys.platform.startswith("linux"):
         report["filesystem"] = _feature(*_apply_landlock(policy))

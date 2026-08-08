@@ -23,16 +23,20 @@ from src.utils.logging import logger
 
 class CacheBackend(ABC):
     @abstractmethod
-    def get(self, key: str) -> Any | None: ...
+    def get(self, key: str) -> Any | None:
+        raise NotImplementedError
 
     @abstractmethod
-    def set(self, key: str, value: Any, ttl: int | None = None) -> None: ...
+    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        raise NotImplementedError
 
     @abstractmethod
-    def delete(self, key: str) -> None: ...
+    def delete(self, key: str) -> None:
+        raise NotImplementedError
 
     @abstractmethod
-    def clear(self) -> None: ...
+    def clear(self) -> None:
+        raise NotImplementedError
 
     @property
     def name(self) -> str:

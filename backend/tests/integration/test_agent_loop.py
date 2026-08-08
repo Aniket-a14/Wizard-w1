@@ -680,10 +680,12 @@ async def test_generated_code_can_join_across_tables(session: Session, stub_llm)
     stub_llm(
         [
             "1. Join them",
-            "```python\n"
-            "joined = tables['orders'].merge(tables['customers'], on='customer_id')\n"
-            "print(joined['amount'].sum())\n"
-            "```",
+            (
+                "```python\n"
+                + "joined = tables['orders'].merge(tables['customers'], on='customer_id')\n"
+                + "print(joined['amount'].sum())\n"
+                + "```"
+            ),
             "The total is 12.",
         ]
     )

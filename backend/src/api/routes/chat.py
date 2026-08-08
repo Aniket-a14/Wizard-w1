@@ -291,8 +291,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         logger.error("WebSocket handler crashed", error=str(exc))
         try:
             await websocket.send_json({"type": EventType.ERROR.value, "content": f"Server error: {exc}"})
-        except Exception:
-            pass
+        except Exception as send_exc:
+            logger.debug("Could not deliver the error frame; the socket is already gone", error=str(send_exc))
     finally:
         # Release before cancelling: a turn parked on a consent question would
         # otherwise sit until the timeout expired before noticing it was dead.

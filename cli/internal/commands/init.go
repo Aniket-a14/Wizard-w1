@@ -172,7 +172,7 @@ func ensureEnvFile(env *Env, applied bool, manager, worker string) error {
 		return err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
+		_ = dst.Close() // already returning the copy error; a close error here adds nothing
 		return err
 	}
 	if err := dst.Close(); err != nil {

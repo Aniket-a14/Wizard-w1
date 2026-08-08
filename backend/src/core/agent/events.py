@@ -118,7 +118,7 @@ async def emit(emitter: Emitter | None, event_type: EventType, **data: Any) -> N
 
     result = emitter(Event(type=event_type, data=data))
     if asyncio.iscoroutine(result):
-        await result
+        _ = await result
 
 
 class BranchEmitter:

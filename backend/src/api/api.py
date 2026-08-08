@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await task
+            _ = await task
         await get_queue().shutdown()
         await asyncio.to_thread(session_manager.shutdown)
         await asyncio.to_thread(sandbox_pool.shutdown)

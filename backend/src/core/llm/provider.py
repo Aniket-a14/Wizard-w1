@@ -637,7 +637,7 @@ class LLMProvider:
             if on_delta is not None:
                 result = on_delta(delta)
                 if asyncio.iscoroutine(result):
-                    await result
+                    _ = await result
         return "".join(buffer)
 
     async def describe_image(

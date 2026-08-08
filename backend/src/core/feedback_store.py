@@ -47,8 +47,8 @@ class FeedbackStore:
         embedding = None
         try:
             embedding = embedding_service.encode(task.strip().lower())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not embed a feedback example; saving without one", error=str(exc))
         db_mgr.save_feedback(task, code, embedding)
 
     def get_similar_examples(self, query: str, limit: int = 2) -> list[dict]:

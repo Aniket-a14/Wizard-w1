@@ -59,9 +59,11 @@ def test_no_key_means_no_hint(store: CredentialStore) -> None:
 
 def test_a_key_can_be_removed(store: CredentialStore) -> None:
     store.set("openai", "sk-1234")
-    assert store.delete("openai")
+    deleted = store.delete("openai")
+    assert deleted
     assert not store.has("openai")
-    assert not store.delete("openai")
+    deleted_again = store.delete("openai")
+    assert not deleted_again
 
 
 def test_an_empty_key_is_not_stored(store: CredentialStore) -> None:
