@@ -20,9 +20,9 @@ jobs:
   lychee:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Link Checker
-        uses: lycheeverse/lychee-action@v2.0.2
+        uses: lycheeverse/lychee-action@7cd0af4c74a61395d455af97419279d86aafaede  # v2.0.2
         with:
           args: --verbose --no-progress "**/*.md"
         env:

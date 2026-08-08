@@ -1,0 +1,14 @@
+# CI-only tooling for the `ci.yml` lint+test job, installed into the same
+# environment as requirements.lock.txt -- constrained against it (see the
+# compile command below) so pytest-cov cannot drag pytest to a version the
+# rest of the suite was never run against.
+#   uv pip compile requirements-ci-tools.in --constraints requirements.lock.txt \
+#     --universal --generate-hashes --emit-index-url --python-version 3.11 \
+#     --output-file requirements-ci-tools.lock.txt
+-i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
+
+# Pinned deliberately -- unpinned, a release that adds or promotes a rule
+# fails master with no code change, which is what happened when UP042
+# (str+Enum -> StrEnum) started being reported.
+ruff==0.14.14
+pytest-cov==7.1.0

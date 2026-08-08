@@ -1,5 +1,12 @@
 -i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
 #
+# CI and the Docker builds install `requirements.lock.txt`, not this file
+# directly -- this is the source `uv` compiles from:
+#   uv pip compile requirements.txt --universal --generate-hashes \
+#     --emit-index-url --python-version 3.11 --output-file requirements.lock.txt
+# Regenerate the lock whenever a version here changes; `pip install
+# --require-hashes` fails loudly if the two drift apart.
+#
 # What the API server itself needs. Nothing here exists to serve *generated*
 # code -- that runs in a sandbox container or a local runtime, and its libraries
 # are declared in `requirements-local.txt` and `backend/docker/Dockerfile`.

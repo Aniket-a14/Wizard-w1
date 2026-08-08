@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: '15 2 * * 5'
 
+# Restrictive default so a future job added to this workflow starts read-only
+# unless it declares otherwise -- `analyze` already grants itself what it
+# actually needs below.
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
@@ -31,10 +37,10 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v4
+      uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3  # v4
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
@@ -42,6 +48,6 @@ jobs:
         queries: security-extended,security-and-quality
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v4
+      uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3  # v4
       with:
         category: "/language:${{matrix.language}}"

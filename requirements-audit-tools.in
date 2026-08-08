@@ -1,0 +1,14 @@
+# The `dependency-audit.yml` Python job's own tool. Deliberately its own lock
+# file, not merged into requirements-ci-tools.in: this job never installs the
+# app's requirements.lock.txt (it scans requirements.txt as a manifest, not an
+# installed environment), so constraining safety against the app's resolved
+# versions would only produce a spurious conflict -- safety and the app disagree
+# on typer's version range, and they never share a Python environment to disagree in.
+#   uv pip compile requirements-audit-tools.in --universal --generate-hashes \
+#     --emit-index-url --python-version 3.11 --output-file requirements-audit-tools.lock.txt
+-i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
+
+# Safety's own vulnerability database is fetched at scan time, not baked into
+# the package, so pinning the CLI version does not stop it finding new CVEs --
+# it only stops the *tool* from changing shape under CI without a review.
+safety==3.8.1
