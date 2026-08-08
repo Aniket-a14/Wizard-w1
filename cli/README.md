@@ -74,7 +74,7 @@ locates the checkout root by walking up looking for `backend/main.py` +
 
 | Command | What it does |
 |---|---|
-| `wizard init` | Checks Python 3.11+/Node 20+ (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory and installs backend requirements; runs `npm ci && npm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama themselves. |
+| `wizard init` | Checks Python 3.11+/Node 20+ (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory and installs backend requirements; runs `npm ci && npm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama themselves. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. |
 | `wizard start` | Re-execs itself into a detached background supervisor (backend + frontend), waits here in the foreground until the backend answers healthy, checks the backend's reported API version against this binary's compat marker, then opens a browser. `--backend-port`/`--frontend-port` override the 8000/3000 defaults; `--no-browser` skips opening one. |
 | `wizard stop` | Idempotent. Asks the supervisor to stop and waits for it to clean up; falls back to a forced kill of the recorded pids if it doesn't. |
 | `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
@@ -112,6 +112,15 @@ locates the checkout root by walking up looking for `backend/main.py` +
   stop sentinel, the crash marker), `logs/` and `venv/` under it, beside the
   `credentials.json`/`connections.json`/`skills/` earlier milestones
   already put there.
+- **RAM-aware model default**: `internal/hostinfo` is a Go port of the RAM
+  figure `backend/src/utils/hostinfo.py` reads (not its core-count detection
+  or laptop/server/hpc classification — those feed `LLM_NUM_THREAD` sizing,
+  an axis `wizard init` never touches). `internal/commands/modelfit.go`
+  mirrors `resources.py`'s `estimate_footprint` fallback branch and
+  `DEFAULT_MEMORY_FRACTION` closely enough to reach the same fits/doesn't-fit
+  call on a given host, without a real Ollama registry lookup to size
+  against — `wizard init` runs before one is reachable. It only overrides a
+  model the user didn't already name; see the `wizard init` row above.
 - **Process supervision** (`internal/daemon`): `wizard start` re-execs
   itself into a detached, hidden `__supervise` subcommand so the
   supervision loop survives the `start` command returning. The supervisor

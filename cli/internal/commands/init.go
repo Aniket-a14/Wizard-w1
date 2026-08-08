@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"wizard/internal/hostinfo"
 )
 
 const (
@@ -26,6 +28,9 @@ func RunInit(env *Env, args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	modelsExplicit := explicit["manager-model"] || explicit["worker-model"]
 
 	fmt.Fprintln(env.Out, "Checking prerequisites...")
 	python := CheckPython(minPythonMajor, minPythonMinor)
@@ -41,7 +46,27 @@ func RunInit(env *Env, args []string) int {
 		return 1
 	}
 
-	if err := ensureEnvFile(env); err != nil {
+	// Decide the manager/worker pair before touching backend/.env, so a
+	// freshly created file can be pre-filled with whatever was decided.
+	// modelsExplicit means the user named at least one model themselves --
+	// their choice is respected either way, just accompanied by a fit note
+	// rather than silently swapped, matching how a Docker-unreachable
+	// fallback is announced elsewhere in this codebase rather than silent.
+	ramBytes, ramErr := hostinfo.TotalRAMBytes()
+	recManager, recWorker, overridden, reason := recommendModels(ramBytes, ramErr == nil, *managerModel, *workerModel)
+	resolvedManager, resolvedWorker := *managerModel, *workerModel
+	applied := overridden && !modelsExplicit
+	switch {
+	case overridden && modelsExplicit:
+		fmt.Fprintf(env.Out, "\n[HOST] %s (kept: --manager-model/--worker-model given explicitly)\n", reason)
+	case applied:
+		resolvedManager, resolvedWorker = recManager, recWorker
+		fmt.Fprintf(env.Out, "\n[HOST] %s\n", reason)
+	default:
+		fmt.Fprintf(env.Out, "\n[HOST] %s\n", reason)
+	}
+
+	if err := ensureEnvFile(env, applied, resolvedManager, resolvedWorker); err != nil {
 		fmt.Fprintf(env.Err, "Could not set up backend/.env: %v\n", err)
 		return 1
 	}
@@ -57,7 +82,7 @@ func RunInit(env *Env, args []string) int {
 			return 1
 		}
 		fmt.Fprintln(env.Out, "\nPulling default models via Ollama...")
-		if !pullDefaultModels(env, *managerModel, *workerModel) {
+		if !pullDefaultModels(env, resolvedManager, resolvedWorker) {
 			return 1
 		}
 	} else if ollama.Found {
@@ -125,7 +150,13 @@ func printCheck(out io.Writer, c ToolCheck) {
 // does not exist yet. The app already runs with none of those values set
 // (see backend/.env.example's own header), so this is a convenience starting
 // point to edit, not a required step.
-func ensureEnvFile(env *Env) error {
+//
+// applied means the RAM-aware smart default (see modelfit.go) chose manager
+// and worker for the caller -- in that case the fresh file is pre-filled
+// with MODEL_NAME/WORKER_MODEL_NAME rather than left at .env.example's empty
+// "auto-select" defaults. An existing .env is never touched either way,
+// matching the "leaving it as is" guarantee below.
+func ensureEnvFile(env *Env, applied bool, manager, worker string) error {
 	if _, err := os.Stat(env.BackendEnvPath()); err == nil {
 		fmt.Fprintln(env.Out, "\nbackend/.env already exists, leaving it as is.")
 		return nil
@@ -140,12 +171,25 @@ func ensureEnvFile(env *Env) error {
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
-
 	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
 		return err
 	}
-	fmt.Fprintln(env.Out, "\nCreated backend/.env from backend/.env.example. Edit it to pin a provider/model if you want one.")
+	if err := dst.Close(); err != nil {
+		return err
+	}
+
+	if !applied {
+		fmt.Fprintln(env.Out, "\nCreated backend/.env from backend/.env.example. Edit it to pin a provider/model if you want one.")
+		return nil
+	}
+	if err := setEnvValue(env.BackendEnvPath(), "MODEL_NAME", manager); err != nil {
+		return err
+	}
+	if err := setEnvValue(env.BackendEnvPath(), "WORKER_MODEL_NAME", worker); err != nil {
+		return err
+	}
+	fmt.Fprintf(env.Out, "\nCreated backend/.env from backend/.env.example, with MODEL_NAME/WORKER_MODEL_NAME pinned to %s.\n", manager)
 	return nil
 }
 

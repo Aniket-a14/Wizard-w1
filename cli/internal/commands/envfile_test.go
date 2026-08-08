@@ -46,6 +46,34 @@ func TestReadEnvValueLastAssignmentWins(t *testing.T) {
 	}
 }
 
+func TestReadEnvValueStripsInlineComment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	// The exact shape backend/.env.example ships MODEL_NAME/WORKER_MODEL_NAME
+	// in -- an empty quoted default followed by an inline comment on the same
+	// line. Regression: this used to read back as the comment text, not "".
+	content := `MODEL_NAME=""                   # plans and reasons; empty = auto-select` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	value, found, err := readEnvValue(path, "MODEL_NAME")
+	if err != nil || !found || value != "" {
+		t.Fatalf("got (%q, %v, %v), want (\"\", true, nil)", value, found, err)
+	}
+}
+
+func TestReadEnvValueStripsInlineCommentUnquoted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, []byte("EXECUTION_BACKEND=docker  # container isolation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	value, found, err := readEnvValue(path, "EXECUTION_BACKEND")
+	if err != nil || !found || value != "docker" {
+		t.Fatalf("got (%q, %v, %v), want (\"docker\", true, nil)", value, found, err)
+	}
+}
+
 func TestReadEnvValueMissingFile(t *testing.T) {
 	_, found, err := readEnvValue(filepath.Join(t.TempDir(), "nope.env"), "ANY")
 	if err != nil {

@@ -37,13 +37,67 @@ func readEnvValue(path, key string) (string, bool, error) {
 		if len(parts) != 2 || strings.TrimSpace(parts[0]) != key {
 			continue
 		}
-		value = strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+		value = parseEnvValue(parts[1])
 		found = true
 	}
 	if err := scanner.Err(); err != nil {
 		return "", false, err
 	}
 	return value, found, nil
+}
+
+// parseEnvValue extracts the right-hand side of a KEY=<raw> assignment.
+// backend/.env.example documents most of its keys with a trailing inline
+// `# comment` on the same line (see MODEL_NAME's own entry) -- an unquoted
+// value ends at the first whitespace+#, and a quoted one ends at its
+// matching closing quote, so the comment after it is never folded into the
+// value. Without this, a freshly created backend/.env's still-empty
+// MODEL_NAME="" reads back as the comment text instead of "", which made
+// pullDefaultModels think a fresh install already had a model pinned.
+func parseEnvValue(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw != "" && (raw[0] == '"' || raw[0] == '\'') {
+		quote := raw[0]
+		if end := strings.IndexByte(raw[1:], quote); end >= 0 {
+			return raw[1 : end+1]
+		}
+		return strings.Trim(raw, `"'`)
+	}
+	if idx := strings.Index(raw, " #"); idx >= 0 {
+		raw = raw[:idx]
+	}
+	return strings.TrimSpace(raw)
+}
+
+// setEnvValue rewrites the first `KEY=...` assignment in a .env-style file to
+// `KEY="value"`, or appends one if the key is not present. Used only right
+// after ensureEnvFile creates a fresh backend/.env from .env.example -- an
+// existing .env is never passed through here, matching ensureEnvFile's own
+// "leaving it as is" guarantee for a file the user may have already edited.
+func setEnvValue(path, key, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	assignment := fmt.Sprintf("%s=%q", key, value)
+	replaced := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) == key {
+			lines[i] = assignment
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		lines = append(lines, assignment)
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
 var apiVersionPattern = regexp.MustCompile(`API_VERSION\s*=\s*"([^"]+)"`)
