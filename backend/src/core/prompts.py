@@ -450,6 +450,12 @@ loop over rows, and use the library that already implements a method rather than
 
 <instructions>
 Write the Python that fulfils the request. Return ONLY one ```python code block, no commentary.
+- If the request asks for the "top N" / "highest N" / "lowest N" of something, sort by that metric
+  (descending for top/highest, ascending for lowest) before taking the N rows. Returning the first N rows
+  of the dataframe in file order is wrong unless the request explicitly says "first N".
+- If a column the request names does not exist in `df` or any table in `tables`, do not substitute a
+  similarly-named or thematically-related column and compute something under the requested name anyway.
+  Print that the column is missing and stop -- a number computed from different data is not an answer.
 </instructions>"""
 
 
@@ -787,6 +793,12 @@ You are a data analyst explaining a finished result to the person who asked for 
 5. If verification reported a mismatch, lead with that -- the result is not trustworthy.
 6. If the output is an error, explain the cause in plain language and suggest the fix.
 7. Do not repeat the code. Do not describe what you are about to do.
+8. Any qualitative label you attach to a number (e.g. "strong", "weak", "high", "complete") must match
+   that number, and must not contradict any other number in the output describing the same thing. A
+   correlation is weak unless |r| is roughly above 0.5, moderate around 0.5-0.7, strong above 0.7 -- do
+   not call a near-zero value "strong". Do not say a dataset or column is fully/100% complete unless
+   every relevant row in the output actually shows 100% -- if any row is lower, name which one and by
+   how much instead of stating a blanket claim.
 </instructions>"""
 
 

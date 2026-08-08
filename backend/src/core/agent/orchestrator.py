@@ -1673,6 +1673,8 @@ class AnalysisOrchestrator:
             temperature=session.models.temperature,
             provider=session.models.worker_provider,
             max_tokens=settings.output_budget("code"),
+            data_mode=session.data_mode,
+            session_id=session.id,
         )
         state.code = self._extract_code(raw)
 
