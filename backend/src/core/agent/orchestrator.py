@@ -657,7 +657,7 @@ class AnalysisOrchestrator:
         # 1. Exact/semantic cache: a verified solution for this exact question.
         cached = semantic_cache.lookup(state.instruction, columns)
         if cached:
-            state.code = cached
+            state.code = runtime_backend.rebind_workspace_paths(cached, session.id)
             state.from_cache = True
             state.plan = "Reused a previously verified solution for this question."
             await emit(emitter, EventType.STATUS, content="Reusing a verified solution", phase=Phase.GENERATING.value)
@@ -1651,6 +1651,17 @@ class AnalysisOrchestrator:
 
         columns = [str(c) for c in session.df.columns]
         negative = context_retriever.retrieve_trajectories(state.instruction, columns)
+        negative_example = runtime_backend.rebind_workspace_paths(negative.text, session.id) if negative else None
+
+        # Stored examples can carry another session's workspace path the same
+        # way a cached solution can (see rebind_workspace_paths) -- spliced
+        # in as an <avoid_this>/few-shot block, a small model can imitate the
+        # literal path into otherwise-fresh code rather than treat it as
+        # illustrative.
+        few_shot_examples = self.feedback.get_similar_examples(state.instruction)
+        for example in few_shot_examples:
+            if example.get("code"):
+                example["code"] = runtime_backend.rebind_workspace_paths(example["code"], session.id)
 
         prompt = create_prompt(
             instruction,
@@ -1658,10 +1669,10 @@ class AnalysisOrchestrator:
             plan=state.plan,
             previous_error=state.error,
             catalog=session.catalog,
-            few_shot_examples=self.feedback.get_similar_examples(state.instruction),
+            few_shot_examples=few_shot_examples,
             previous_code=previous_code if self.is_visual_revision(state.instruction, previous_code) else None,
             session_id=session.id,
-            negative_example=negative.text if negative else None,
+            negative_example=negative_example,
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "worker"),
         )

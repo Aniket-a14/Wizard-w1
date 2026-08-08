@@ -22,6 +22,7 @@ to stay true rather than reflect what was true at boot.
 
 from __future__ import annotations
 
+import re
 import sys
 from functools import lru_cache
 
@@ -180,6 +181,28 @@ def workspace_path(session_id: str | None, filename: str = "") -> str:
     if active_backend() != "docker" and session_id:
         root = workspace_for(session_id).as_posix()
     return f"{root}/{filename}" if filename else f"{root}/"
+
+
+def rebind_workspace_paths(text: str, session_id: str) -> str:
+    """Rewrites another session's workspace path baked into ``text`` to this session's own.
+
+    Cached code and retrieved trajectory/few-shot text can carry a literal
+    absolute path resolved by ``workspace_path`` at the moment they were first
+    generated -- that is exactly what the worker prompt hands the model to
+    write to, and the model reproduces it literally. Replayed or imitated
+    later by a *different* session, that path names a directory the new
+    session does not own: best case the guard rejects it as out-of-root, worst
+    case (if the original directory still exists) code writes into a workspace
+    it has no claim to. Only the host backend embeds a session id in the path
+    at all -- docker's ``/workspace`` root is the same string for every
+    session, so there is nothing to rebind there.
+    """
+    if not text or active_backend() == "docker":
+        return text
+    root = settings.WORKSPACE_DIR.as_posix().rstrip("/")
+    pattern = re.compile(re.escape(root) + r"/sessions/[^\s'\"/)]+(?:/subagents/[^\s'\"/)]+)?")
+    replacement = workspace_path(session_id).rstrip("/")
+    return pattern.sub(replacement, text)
 
 
 def active_runtime_count() -> int:
