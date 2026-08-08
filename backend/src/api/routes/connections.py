@@ -70,7 +70,7 @@ def _split_options(options: dict, secret: str | None) -> tuple[dict, str | None]
     if not embedded:
         return options, secret
     options["dsn"] = cleaned
-    return options, secret or embedded
+    return options, secret if secret is not None else embedded
 
 
 def _require_spec(connection_id: str) -> ConnectionSpec:
@@ -154,7 +154,7 @@ async def create_connection(request: ConnectionRequest, session: Session = Depen
     if connection_store.by_name(name) is not None:
         raise HTTPException(status_code=409, detail=f"A connection named {name!r} already exists.")
 
-    options, secret = _split_options(dict(request.options), request.secret or "")
+    options, secret = _split_options(dict(request.options), request.secret)
     spec = ConnectionSpec(name=name, kind=request.kind, options=options)
     if not connection_store.save(spec, secret=secret):
         raise HTTPException(status_code=500, detail="Could not save the connection.")
@@ -198,6 +198,20 @@ async def update_connection(
     )
     if not connection_store.save(updated, secret=secret):
         raise HTTPException(status_code=500, detail="Could not save the connection.")
+
+    if name != spec.name:
+        # `DatasetHandle.origin` and `DataPolicy.per_dataset` are both keyed by
+        # name, not id -- a table imported before the rename, and any policy
+        # override set on the connection, would otherwise keep pointing at a
+        # name nothing is stored under any more. `delete_connection` matches by
+        # the *current* name, so without this an already-imported table
+        # survives deleting the very connection it says it came from.
+        for handle in session.datasets.values():
+            if handle.origin == spec.name:
+                handle.origin = name
+        overridden = session.data_policy.per_dataset.pop(spec.name, None)
+        if overridden is not None:
+            session.data_policy.per_dataset[name] = overridden
     return _summary(updated)
 
 

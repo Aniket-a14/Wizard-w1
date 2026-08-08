@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.config import settings
+from src.core.security.code_guard import CodeGuard
 from src.core.session import Session
 
 
@@ -79,6 +80,25 @@ def dataset_loader_lines(session: Session, *, file_template: str, reader: str) -
     return lines, needs_connector
 
 
+def _guard_warning(code: str) -> list[str]:
+    """Flags a step whose code would not pass the guard outside its session.
+
+    `CodeExecutor.execute` already guarded this code once, when it actually ran
+    -- but that scan widened the allowed roots with the session's own
+    `extra_roots` (`workspace_write` grants), which do not travel with an
+    exported file. Re-scanning without them surfaces the same warning a human
+    running the export standalone would want, rather than presenting
+    already-executed code as unconditionally safe to re-run anywhere.
+    """
+    verdict = CodeGuard.scan(code)
+    if verdict.ok:
+        return []
+    return [
+        f"# WARNING: this step did not pass the execution guard outside its original session ({verdict.reason}).",
+        "# Review before running.",
+    ]
+
+
 def build_script(instruction: str, steps: list[dict[str, str]], session: Session, *, bundle: bool = False) -> str:
     """Assembles the runnable ``.py`` from the steps that actually executed.
 
@@ -117,6 +137,7 @@ def build_script(instruction: str, steps: list[dict[str, str]], session: Session
     body: list[str] = []
     for index, step in enumerate(steps, start=1):
         body.append(f"# --- Step {index}: {step.get('goal') or 'analysis'} " + "-" * 20)
+        body.extend(_guard_warning(step["code"]))
         body.append(step["code"])
         body.append("")
 
@@ -156,7 +177,7 @@ def build_notebook(
     cells = [_markdown_cell(intro), _code_cell(import_lines)]
     for index, step in enumerate(steps, start=1):
         cells.append(_markdown_cell([f"### Step {index}: {step.get('goal') or 'analysis'}"]))
-        cells.append(_code_cell(step["code"].splitlines()))
+        cells.append(_code_cell([*_guard_warning(step["code"]), *step["code"].splitlines()]))
 
     return {
         "cells": cells,

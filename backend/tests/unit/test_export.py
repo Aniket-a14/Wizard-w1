@@ -26,6 +26,12 @@ def session() -> Session:
     created = session_manager.create()
     yield created
     session_manager.drop(created.id)
+    # `_connector_backed_session` saves a real "Shop" connection (+ credential)
+    # to the store, which outlives the session it was attached to unless
+    # cleaned up here.
+    shop = connection_store.by_name("Shop")
+    if shop is not None:
+        connection_store.delete(shop.id)
 
 
 STEPS = [

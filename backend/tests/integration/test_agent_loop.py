@@ -605,28 +605,31 @@ async def test_the_reproducible_script_looks_up_a_connector_table_by_name(sessio
     from src.core.connectors.spec import ConnectionSpec
     from src.core.connectors.store import connection_store
 
-    connection_store.save(
-        ConnectionSpec(name="Shop", kind="relational", options={"driver": "sqlite", "database": "x.db"}),
-        secret="s3cr3t-password",
-    )
-    handle = session.add_dataset("orders", pd.DataFrame({"id": [1]}))
-    handle.origin = "Shop"
-    handle.profile["target"] = "orders"
-    stub_llm(
-        [
-            "1. Count",
-            "```python\nprint(len(df))\n```",
-            "ACTION: answer\nGOAL: report",
-            "```python\nprint('VERIFIED: ok')\n```",
-            "Done.",
-        ]
-    )
+    spec = ConnectionSpec(name="Shop", kind="relational", options={"driver": "sqlite", "database": "x.db"})
+    connection_store.save(spec, secret="s3cr3t-password")
+    try:
+        handle = session.add_dataset("orders", pd.DataFrame({"id": [1]}))
+        handle.origin = "Shop"
+        handle.profile["target"] = "orders"
+        stub_llm(
+            [
+                "1. Count",
+                "```python\nprint(len(df))\n```",
+                "ACTION: answer\nGOAL: report",
+                "```python\nprint('VERIFIED: ok')\n```",
+                "Done.",
+            ]
+        )
 
-    await orchestrator.run(session=session, instruction="count", mode="auto", emitter=EventCollector())
+        await orchestrator.run(session=session, instruction="count", mode="auto", emitter=EventCollector())
 
-    body = (session.workspace / "analysis.py").read_text(encoding="utf-8")
-    assert "connection_store.by_name('Shop')" in body
-    assert "s3cr3t-password" not in body
+        body = (session.workspace / "analysis.py").read_text(encoding="utf-8")
+        assert "connection_store.by_name('Shop')" in body
+        assert "s3cr3t-password" not in body
+    finally:
+        # Otherwise the saved spec and its credential outlive this test and
+        # leak into whatever runs next.
+        connection_store.delete(spec.id)
 
 
 # --------------------------------------------------------------------------- #

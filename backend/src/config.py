@@ -624,7 +624,12 @@ class Settings(BaseSettings):
     LOG_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs")
     WORKSPACE_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "workspace")
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # A blank env var (`CONNECTOR_MAX_OBJECT_BYTES=`, the shape docker-compose's
+    # `${VAR:-}` produces for an unset optional knob) must fall back to the
+    # field default rather than fail int/float parsing at import time -- the
+    # same "blank counts as unset" rule the host-sizing validator already
+    # applies, just enforced before validation instead of inside one field.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
 
     @field_validator("CORS_ALLOW_ORIGINS")
     @classmethod

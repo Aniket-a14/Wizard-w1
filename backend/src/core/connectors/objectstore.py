@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 from typing import Any
+from urllib.parse import urlsplit
 
 import pandas as pd
 
@@ -76,8 +77,18 @@ class ObjectStoreConnector:
         lowered = endpoint.lower()
         if not lowered.startswith("http://"):
             return
-        host = lowered[len("http://") :].split("/", 1)[0].split(":", 1)[0]
-        if host not in LOOPBACK_HOSTS:
+        # A manual split on "/" then ":" reads userinfo as the host --
+        # "http://localhost:9000@attacker.example" would split to "localhost",
+        # while the authority botocore actually connects to is
+        # "attacker.example". `urlsplit` parses the authority correctly and
+        # `.hostname` never includes userinfo, so this compares the real host.
+        parsed = urlsplit(lowered)
+        if parsed.username or parsed.password:
+            raise ConnectorError(
+                f"Refusing an endpoint with embedded credentials in the URL: {endpoint}",
+                detail="Put the access key and secret in this connection's own fields, not in the endpoint URL.",
+            )
+        if (parsed.hostname or "") not in LOOPBACK_HOSTS:
             raise ConnectorError(
                 f"Refusing a cleartext endpoint for a remote host: {endpoint}",
                 detail=(

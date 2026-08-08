@@ -99,10 +99,10 @@ def split_secret_from_dsn(dsn: str) -> tuple[str, str]:
     if not parsed.password:
         return raw, ""
 
+    host = _host_and_port(parsed)
+    if host is None:
+        return raw, ""
     userinfo = quote(unquote(parsed.username or ""), safe="")
-    host = parsed.hostname or ""
-    if parsed.port:
-        host = f"{host}:{parsed.port}"
     netloc = f"{userinfo}@{host}" if userinfo else host
     stripped = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
     return stripped, unquote(parsed.password)
@@ -122,11 +122,32 @@ def inject_secret_into_dsn(dsn: str, secret: str) -> str:
         # rewriting would be guessing at what the user meant.
         return raw
 
-    host = parsed.hostname or ""
-    if parsed.port:
-        host = f"{host}:{parsed.port}"
+    host = _host_and_port(parsed)
+    if host is None:
+        return raw
     userinfo = f"{quote(unquote(parsed.username), safe='')}:{quote(secret, safe='')}"
     return urlunsplit((parsed.scheme, f"{userinfo}@{host}", parsed.path, parsed.query, parsed.fragment))
+
+
+def _host_and_port(parsed) -> str | None:
+    """The authority's ``host[:port]``, IPv6-bracketed, or ``None`` on a port ``urlsplit`` won't parse.
+
+    ``parsed.hostname`` already strips IPv6 brackets, so ``::1`` rebuilt with a
+    port reads as ``::1:5432`` -- not a valid authority -- unless the brackets
+    go back on. ``parsed.port`` separately raises ``ValueError`` for a port a
+    driver would accept but the standard library won't parse as an int, and
+    that access happens outside the caller's own ``try/except`` around
+    ``urlsplit`` itself, so it needs its own handling here rather than
+    crashing the caller on a DSN nobody asked this module to validate.
+    """
+    hostname = parsed.hostname or ""
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    return f"{hostname}:{port}" if port else hostname
 
 
 def _hostname_of(url: str) -> str:
